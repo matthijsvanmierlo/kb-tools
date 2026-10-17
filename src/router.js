@@ -62,6 +62,11 @@ export class Router {
    * Handle the current route change
    */
   async handleRoute() {
+    if (typeof window !== 'undefined' && !window.location.hash) {
+      window.location.hash = '#/flashcards';
+      return;
+    }
+
     const { path, params } = this.parseHash();
     this.currentPath = path;
     this.currentParams = params;

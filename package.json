@@ -4,6 +4,7 @@
   "description": "",
   "type": "module",
   "scripts": {
+    "start": "node server.js",
     "test": "vitest run",
     "test:watch": "vitest"
   },

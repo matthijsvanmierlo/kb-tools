@@ -2,6 +2,7 @@ import { storage } from '../../core/storage.js';
 import { store } from '../../state/store.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { toast } from '../../utils/toast.js';
+import { Sanitizer } from '../../core/sanitizer.js';
 import { CryptoShareEngine } from '../../core/crypto-share.js';
 import { Exporter, parseCSVWithValidation, FlashcardItemSchema, showImportErrorsDialog } from '../../core/validator.js';
 import { FlashcardEditor } from './editor.js';
@@ -148,9 +149,10 @@ async function renderLibrary(container, router) {
             <sl-icon name="collection"></sl-icon>
           </div>
           <h3 class="font-bold text-slate-800 text-lg">Your Library is Empty</h3>
-          <p class="text-sm text-slate-500 max-w-sm mx-auto">Create a new deck with KaTeX/Mhchem notation, or import an existing CSV flashcard set.</p>
+          <p class="text-sm text-slate-500 max-w-sm mx-auto">Create a new deck with KaTeX/Mhchem notation, load a sample STEM deck, or import a CSV flashcard set.</p>
           <div class="flex justify-center gap-3 pt-2">
             <sl-button variant="primary" id="btn-empty-create">Create First Deck</sl-button>
+            <sl-button variant="default" id="btn-load-sample">Load Sample STEM Deck</sl-button>
           </div>
         </div>
       ` : `
@@ -213,6 +215,53 @@ async function renderLibrary(container, router) {
 
   container.querySelector('#btn-empty-create')?.addEventListener('click', () => {
     router.navigate('#/flashcards/edit');
+  });
+
+  container.querySelector('#btn-load-sample')?.addEventListener('click', async () => {
+    const sampleDeck = {
+      version: 1,
+      id: generateUUID(),
+      title: 'STEM Fundamentals: Chemistry & Physics',
+      updated_at: new Date().toISOString(),
+      gamification_stats: { high_score: 0, longest_streak: 0 },
+      cards: [
+        {
+          id: generateUUID(),
+          front: 'What is the Henderson-Hasselbalch equation for buffer pH?',
+          back: '$$pH = pK_a + \\log\\left(\\frac{[A^-]}{[HA]}\\right)$$\nRelates the pH of a chemical solution to the acid dissociation constant ($K_a$).',
+          sketch_data: null,
+          tts_lang: 'en-US',
+          fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
+        },
+        {
+          id: generateUUID(),
+          front: 'What is the balanced equation for cellular respiration?',
+          back: '$$\\ce{C6H12O6 + 6O2 -> 6CO2 + 6H2O + 36ATP}$$\nGlucose oxidized in the presence of oxygen yielding carbon dioxide, water, and ATP energy.',
+          sketch_data: null,
+          tts_lang: 'en-US',
+          fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
+        },
+        {
+          id: generateUUID(),
+          front: "What is Newton's Second Law of Motion?",
+          back: '$$\\vec{F} = m\\vec{a}$$\nThe net force acting on an object is equal to the product of its inertial mass and acceleration vector.',
+          sketch_data: null,
+          tts_lang: 'en-US',
+          fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
+        },
+        {
+          id: generateUUID(),
+          front: "What is Euler's Identity?",
+          back: '$$e^{i\\pi} + 1 = 0$$\nConnects the five fundamental mathematical constants: $e$, $i$, $\\pi$, $1$, and $0$.',
+          sketch_data: null,
+          tts_lang: 'en-US',
+          fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
+        }
+      ]
+    };
+    await storage.table('flashcards').put(sampleDeck);
+    toast.success('Sample STEM deck loaded!');
+    await renderLibrary(container, router);
   });
 
   const fileInput = container.querySelector('#input-flashcard-csv');

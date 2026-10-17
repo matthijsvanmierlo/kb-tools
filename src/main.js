@@ -61,6 +61,17 @@ async function bootstrapApp() {
   } catch (err) {
     console.error('Fatal initialization error:', err);
     toast.danger(`Application boot failed: ${err.message}`);
+    const container = document.getElementById('app-view-container');
+    if (container) {
+      container.innerHTML = `
+        <div class="p-8 max-w-xl mx-auto text-center space-y-4 bg-white rounded-2xl border border-red-200 shadow-sm mt-8">
+          <sl-icon name="exclamation-octagon" class="text-4xl text-red-500"></sl-icon>
+          <h2 class="text-xl font-bold text-slate-800">Application Boot Failed</h2>
+          <p class="text-sm text-slate-600">${err.message}</p>
+          <sl-button variant="primary" onclick="window.location.reload()">Reload Application</sl-button>
+        </div>
+      `;
+    }
   }
 }
 

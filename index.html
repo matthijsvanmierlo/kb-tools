@@ -12,6 +12,10 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/themes/light.css" />
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/themes/dark.css" />
   <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js"></script>
+  <script type="module">
+    import { setBasePath } from 'https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/utilities/base-path.js';
+    setBasePath('https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/');
+  </script>
 
   <!-- KaTeX + Mhchem for STEM Notation -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" />
@@ -61,7 +65,7 @@
       </div>
 
       <!-- Navigation Tabs -->
-      <nav class="hidden md:flex items-center gap-1" role="navigation" aria-label="Main Navigation">
+      <nav class="flex items-center gap-1 overflow-x-auto" role="navigation" aria-label="Main Navigation">
         <a href="#/flashcards" data-route-link="#/flashcards" class="px-3 py-2 text-sm font-medium text-slate-600 hover:text-blue-600 rounded-md transition-colors flex items-center gap-1.5">
           <sl-icon name="collection"></sl-icon>
           <span>Flashcards</span>
@@ -139,6 +143,38 @@
       </div>
     </div>
   </footer>
+
+  <!-- Direct File Protocol Guard (Friendly instructions if opened directly via file://) -->
+  <script>
+    if (window.location.protocol === 'file:') {
+      document.addEventListener('DOMContentLoaded', function() {
+        var container = document.getElementById('app-view-container');
+        if (container) {
+          container.innerHTML = `
+            <div style="max-width: 640px; margin: 40px auto; padding: 32px 24px; background: #ffffff; border: 2px solid #3b82f6; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); font-family: system-ui, -apple-system, sans-serif; text-align: center;">
+              <div style="width: 56px; height: 56px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; font-size: 28px;">
+                🚀
+              </div>
+              <h2 style="font-size: 22px; font-weight: bold; color: #0f172a; margin: 0 0 8px 0;">Local Web Server Required</h2>
+              <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px 0;">
+                You opened KennisBoost Tools directly from the filesystem (<code>file://</code>). Web browsers strictly block native ES modules and IndexedDB storage on direct file paths for security.
+              </p>
+              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: left; margin-bottom: 24px; font-family: monospace; font-size: 13px;">
+                <p style="margin: 0 0 6px 0; color: #64748b;"># Run this command in your project terminal:</p>
+                <p style="margin: 0; color: #0f172a; font-weight: bold;">npm start</p>
+              </div>
+              <p style="font-size: 14px; color: #475569; margin: 0 0 16px 0;">
+                Once the server is running, open:
+              </p>
+              <a href="http://localhost:8000" style="display: inline-block; padding: 12px 28px; background: #2563eb; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 8px; font-size: 15px; box-shadow: 0 2px 4px rgba(37,99,235,0.3);">
+                Open http://localhost:8000
+              </a>
+            </div>
+          `;
+        }
+      });
+    }
+  </script>
 
   <!-- Application Bootloader -->
   <script type="module" src="src/main.js"></script>

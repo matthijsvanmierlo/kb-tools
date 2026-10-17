@@ -246,3 +246,30 @@ body { margin: 0; line-height: inherit; background-color: #f8fafc; color: #0f172
 .hover\:bg-blue-700:hover { background-color: #1d4ed8; }
 .hover\:bg-indigo-50:hover { background-color: #eef2ff; }
 .hover\:text-blue-600:hover { color: #2563eb; }
+
+/* Responsive Breakpoints */
+@media (min-width: 640px) {
+  .sm\:flex { display: flex !important; }
+  .sm\:inline { display: inline !important; }
+  .sm\:inline-block { display: inline-block !important; }
+  .sm\:hidden { display: none !important; }
+  .sm\:flex-row { flex-direction: row !important; }
+  .sm\:items-center { align-items: center !important; }
+  .sm\:p-6 { padding: 1.5rem !important; }
+}
+
+@media (min-width: 768px) {
+  .md\:flex { display: flex !important; }
+  .md\:hidden { display: none !important; }
+  .md\:flex-row { flex-direction: row !important; }
+  .md\:items-center { align-items: center !important; }
+  .md\:grid-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .md\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+}
+
+@media (min-width: 1024px) {
+  .lg\:flex { display: flex !important; }
+  .lg\:hidden { display: none !important; }
+  .lg\:grid-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+  .lg\:grid-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)) !important; }
+}
