@@ -28,7 +28,7 @@ export class ToastNotifier {
     alert.appendChild(iconEl);
 
     const messageSpan = document.createElement('span');
-    messageSpan.innerHTML = message;
+    messageSpan.textContent = message;
     alert.appendChild(messageSpan);
 
     document.body.appendChild(alert);

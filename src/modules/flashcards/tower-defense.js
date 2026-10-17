@@ -1,5 +1,6 @@
 import { storage } from '../../core/storage.js';
 import { toast } from '../../utils/toast.js';
+import { Sanitizer } from '../../core/sanitizer.js';
 
 /**
  * TowerDefenseEngine - KB-CARD-003
@@ -246,12 +247,12 @@ export class TowerDefenseEngine {
           <span class="text-xs font-semibold uppercase tracking-wider text-blue-600">Flashcard Energy Question</span>
           <span class="text-xs text-slate-500 font-mono">Streak: ${this.streak} (Longest: ${this.longestStreak})</span>
         </div>
-        <p class="font-medium text-slate-900 text-sm">${prompt}</p>
+        <p class="font-medium text-slate-900 text-sm">${Sanitizer.escapeHtml(prompt)}</p>
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-2" id="td-answers-grid">
           ${options.map((opt, i) => `
             <button data-opt-idx="${i}" class="text-left px-3 py-2 border rounded text-xs hover:bg-blue-50 hover:border-blue-300 transition-colors flex items-center gap-2">
               <span class="w-5 h-5 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-600 text-xs">${i + 1}</span>
-              <span class="truncate">${opt}</span>
+              <span class="truncate">${Sanitizer.escapeHtml(opt)}</span>
             </button>
           `).join('')}
         </div>

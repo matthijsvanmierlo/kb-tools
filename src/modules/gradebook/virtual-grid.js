@@ -1,3 +1,5 @@
+import { Sanitizer } from '../../core/sanitizer.js';
+
 /**
  * 2D Virtualized Gradebook Grid (Defensive Engineering)
  * Renders 150 students x 80 assignments (12,000 cells) at 60 FPS using 2D windowing,
@@ -87,7 +89,7 @@ export class VirtualGradebookGrid {
       headerHtml += `
         <div class="absolute top-0 flex flex-col justify-center px-2 border-r border-slate-200 overflow-hidden"
              style="left: ${colIdx * this.CELL_WIDTH}px; width: ${this.CELL_WIDTH}px; height: ${this.HEADER_HEIGHT}px;">
-          <span class="truncate font-semibold text-slate-800" title="${a.title}">${a.title}</span>
+          <span class="truncate font-semibold text-slate-800" title="${Sanitizer.escapeHtml(a.title)}">${Sanitizer.escapeHtml(a.title)}</span>
           <span class="text-[10px] text-slate-400 font-mono">Max: ${a.max_score}pt</span>
         </div>
       `;
@@ -119,8 +121,8 @@ export class VirtualGradebookGrid {
         <div class="absolute left-0 flex items-center justify-between px-3 bg-white border-b border-r border-slate-200 text-xs hover:bg-slate-50 transition-colors"
              style="top: ${this.HEADER_HEIGHT + r * this.ROW_HEIGHT}px; width: ${this.STUDENT_COL_WIDTH}px; height: ${this.ROW_HEIGHT}px;">
           <div class="truncate mr-2">
-            <span class="font-medium text-slate-800 block truncate" title="${student.full_name}">${student.full_name}</span>
-            <span class="text-[10px] text-slate-400 font-mono">${student.student_id}</span>
+            <span class="font-medium text-slate-800 block truncate" title="${Sanitizer.escapeHtml(student.full_name)}">${Sanitizer.escapeHtml(student.full_name)}</span>
+            <span class="text-[10px] text-slate-400 font-mono">${Sanitizer.escapeHtml(student.student_id)}</span>
           </div>
           <span class="font-bold text-xs ${agg.score !== null ? 'text-blue-600' : 'text-slate-400'} font-mono">
             ${agg.score !== null ? `${agg.score}%` : '-'}

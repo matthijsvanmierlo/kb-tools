@@ -162,7 +162,7 @@ async function renderLibrary(container, router) {
               <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
                 <div>
                   <div class="flex items-start justify-between gap-2">
-                    <h3 class="font-bold text-slate-900 text-base leading-snug line-clamp-1">${deck.title}</h3>
+                    <h3 class="font-bold text-slate-900 text-base leading-snug line-clamp-1">${Sanitizer.escapeHtml(deck.title)}</h3>
                     <sl-dropdown placement="bottom-end">
                       <button slot="trigger" class="text-slate-400 hover:text-slate-600 p-1" title="Options">
                         <sl-icon name="three-dots-vertical"></sl-icon>
