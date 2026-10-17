@@ -26,6 +26,16 @@ const server = http.createServer((req, res) => {
   let safePath = path.normalize(decodeURI(req.url.split('?')[0])).replace(/^(\.\.[\/\\])+/, '');
   if (safePath === '/' || safePath === '\\') safePath = '/index.html';
 
+  if (safePath === '/favicon.ico') {
+    res.writeHead(200, {
+      'Content-Type': 'image/svg+xml',
+      'Cache-Control': 'public, max-age=86400',
+      'Access-Control-Allow-Origin': '*'
+    });
+    res.end('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><rect width="32" height="32" rx="8" fill="#2563eb"/><text x="16" y="22" font-family="sans-serif" font-size="16" font-weight="bold" fill="#ffffff" text-anchor="middle">KB</text></svg>');
+    return;
+  }
+
   const filePath = path.join(__dirname, safePath);
   const ext = path.extname(filePath).toLowerCase();
   const contentType = MIME_TYPES[ext] || 'application/octet-stream';

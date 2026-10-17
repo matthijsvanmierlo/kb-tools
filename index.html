@@ -7,6 +7,24 @@
   <meta name="description" content="Local-first, zero-backend educational technology suite with Flashcards, Timeline Maker, Interactive Video, and Gradebook.">
   <link rel="manifest" href="manifest.json">
   <meta name="theme-color" content="#2563eb">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='16' font-weight='bold' fill='%23ffffff' text-anchor='middle'%3EKB%3C/text%3E%3C/svg%3E">
+
+  <!-- Native ESM Import Map (MUST precede any module script per HTML spec) -->
+  <script type="importmap">
+  {
+    "imports": {
+      "dexie": "https://cdn.jsdelivr.net/npm/dexie@4.0.4/dist/dexie.mjs",
+      "zod": "https://cdn.jsdelivr.net/npm/zod@3.23.8/+esm",
+      "lz-string": "https://cdn.jsdelivr.net/npm/lz-string@1.5.0/+esm",
+      "papaparse": "https://cdn.jsdelivr.net/npm/papaparse@5.4.1/+esm",
+      "marked": "https://cdn.jsdelivr.net/npm/marked@12.0.2/+esm",
+      "dompurify": "https://cdn.jsdelivr.net/npm/dompurify@3.1.5/+esm",
+      "jspdf": "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/+esm",
+      "jspdf-autotable": "https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/+esm",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm"
+    }
+  }
+  </script>
 
   <!-- Shoelace Web Components (WCAG 2.1 AA) -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/themes/light.css" />
@@ -26,23 +44,6 @@
   <!-- Tailwind & App Custom CSS -->
   <link rel="stylesheet" href="css/tailwind.output.css">
   <link rel="stylesheet" href="css/app.css">
-
-  <!-- Native ESM Import Map -->
-  <script type="importmap">
-  {
-    "imports": {
-      "dexie": "https://cdn.jsdelivr.net/npm/dexie@4.0.4/dist/dexie.mjs",
-      "zod": "https://cdn.jsdelivr.net/npm/zod@3.23.8/+esm",
-      "lz-string": "https://cdn.jsdelivr.net/npm/lz-string@1.5.0/+esm",
-      "papaparse": "https://cdn.jsdelivr.net/npm/papaparse@5.4.1/+esm",
-      "marked": "https://cdn.jsdelivr.net/npm/marked@12.0.2/+esm",
-      "dompurify": "https://cdn.jsdelivr.net/npm/dompurify@3.1.5/+esm",
-      "jspdf": "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/+esm",
-      "jspdf-autotable": "https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/+esm",
-      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm"
-    }
-  }
-  </script>
 </head>
 <body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col antialiased">
   <!-- ARIA Live Announcer for Screen Readers -->
