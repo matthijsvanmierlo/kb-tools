@@ -4,7 +4,7 @@ import * as autotableLib from 'jspdf-autotable';
 
 const LZString = lzLib.compressToEncodedURIComponent ? lzLib : (lzLib.default || lzLib);
 const jsPDFClass = jspdfLib.jsPDF || jspdfLib.default;
-const applyPlugin = autotableLib.applyPlugin || autotableLib.default;
+const autoTable = autotableLib.autoTable || autotableLib.default;
 
 /**
  * Kiosk Performance Report & Cryptographic Receipt (.kbr) (KB-VID-002)
@@ -109,7 +109,6 @@ export class KioskReportEngine {
    */
   static generatePDFReport(receipt) {
     const doc = new jsPDFClass({ orientation: 'portrait', unit: 'pt', format: 'letter' });
-    if (applyPlugin) applyPlugin(doc);
 
     // Header block
     doc.setFillColor(30, 41, 59); // Slate 800
@@ -140,6 +139,15 @@ export class KioskReportEngine {
 
     if (typeof doc.autoTable === 'function') {
       doc.autoTable({
+        startY: 180,
+        head: [['Question', 'Student Answer', 'Result', 'Score', 'Response Time']],
+        body: rows,
+        theme: 'grid',
+        headStyles: { fillColor: [37, 99, 235] },
+        styles: { fontSize: 9 }
+      });
+    } else if (typeof autoTable === 'function') {
+      autoTable(doc, {
         startY: 180,
         head: [['Question', 'Student Answer', 'Result', 'Score', 'Response Time']],
         body: rows,
