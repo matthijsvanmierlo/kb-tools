@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en" class="sl-theme-light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KennisBoost Tools | 100% Client-Side Educational Suite</title>
+  <meta name="description" content="Local-first, zero-backend educational technology suite with Flashcards, Timeline Maker, Interactive Video, and Gradebook.">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#2563eb">
+
+  <!-- Shoelace Web Components (WCAG 2.1 AA) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/themes/light.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/themes/dark.css" />
+  <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js"></script>
+
+  <!-- KaTeX + Mhchem for STEM Notation -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" />
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/mhchem.min.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"></script>
+
+  <!-- Tailwind & App Custom CSS -->
+  <link rel="stylesheet" href="css/tailwind.output.css">
+  <link rel="stylesheet" href="css/app.css">
+
+  <!-- Native ESM Import Map -->
+  <script type="importmap">
+  {
+    "imports": {
+      "dexie": "https://cdn.jsdelivr.net/npm/dexie@4.0.4/dist/dexie.mjs",
+      "zod": "https://cdn.jsdelivr.net/npm/zod@3.23.8/+esm",
+      "lz-string": "https://cdn.jsdelivr.net/npm/lz-string@1.5.0/+esm",
+      "papaparse": "https://cdn.jsdelivr.net/npm/papaparse@5.4.1/+esm",
+      "marked": "https://cdn.jsdelivr.net/npm/marked@12.0.2/+esm",
+      "dompurify": "https://cdn.jsdelivr.net/npm/dompurify@3.1.5/+esm",
+      "jspdf": "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/+esm",
+      "jspdf-autotable": "https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/+esm",
+      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm"
+    }
+  }
+  </script>
+</head>
+<body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col antialiased">
+  <!-- ARIA Live Announcer for Screen Readers -->
+  <div id="kb-aria-announcer" class="sr-only" aria-live="polite"></div>
+
+  <!-- App Header / Navigation Bar -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm" role="banner">
+    <div class="max-w-7xl mx-auto px-4 flex items-center justify-between h-16">
+      <!-- Brand & Title -->
+      <div class="flex items-center gap-3">
+        <a href="#/flashcards" class="flex items-center gap-2 text-blue-600 focus:outline-none" aria-label="KennisBoost Home">
+          <div class="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
+            KB
+          </div>
+          <div>
+            <span class="font-bold text-slate-900 text-lg tracking-tight">KennisBoost</span>
+            <span class="hidden sm:inline-block text-xs font-semibold px-2 py-0.5 ml-1.5 bg-blue-100 text-blue-700 rounded-full">Tools</span>
+          </div>
+        </a>
+      </div>
+
+      <!-- Navigation Tabs -->
+      <nav class="hidden md:flex items-center gap-1" role="navigation" aria-label="Main Navigation">
+        <a href="#/flashcards" data-route-link="#/flashcards" class="px-3 py-2 text-sm font-medium text-slate-600 hover:text-blue-600 rounded-md transition-colors flex items-center gap-1.5">
+          <sl-icon name="collection"></sl-icon>
+          <span>Flashcards</span>
+        </a>
+        <a href="#/timeline" data-route-link="#/timeline" class="px-3 py-2 text-sm font-medium text-slate-600 hover:text-blue-600 rounded-md transition-colors flex items-center gap-1.5">
+          <sl-icon name="clock-history"></sl-icon>
+          <span>Timeline</span>
+        </a>
+        <a href="#/video" data-route-link="#/video" class="px-3 py-2 text-sm font-medium text-slate-600 hover:text-blue-600 rounded-md transition-colors flex items-center gap-1.5">
+          <sl-icon name="play-btn"></sl-icon>
+          <span>Video Assessment</span>
+        </a>
+        <a href="#/gradebook" data-route-link="#/gradebook" class="px-3 py-2 text-sm font-medium text-slate-600 hover:text-blue-600 rounded-md transition-colors flex items-center gap-1.5">
+          <sl-icon name="calculator"></sl-icon>
+          <span>Gradebook</span>
+        </a>
+      </nav>
+
+      <!-- Storage & Utilities Action Dock -->
+      <div class="flex items-center gap-2">
+        <!-- Auto-sync Status -->
+        <div id="sync-status-indicator" class="hidden sm:flex items-center px-2 py-1 bg-slate-100 rounded text-xs text-slate-600" title="Auto-Sync status">
+          <span class="text-xs text-slate-400">● Local Only</span>
+        </div>
+
+        <!-- Sync / Backup Dropdown -->
+        <sl-dropdown placement="bottom-end">
+          <sl-button slot="trigger" size="small" caret aria-label="Backup and Storage Options">
+            <sl-icon slot="prefix" name="shield-check"></sl-icon>
+            <span class="hidden sm:inline">Storage</span>
+          </sl-button>
+          <sl-menu>
+            <sl-menu-item id="menu-btn-configure-sync">
+              <sl-icon slot="prefix" name="folder2-open"></sl-icon>
+              Set Auto-Sync File...
+            </sl-menu-item>
+            <sl-menu-item id="menu-btn-export-backup">
+              <sl-icon slot="prefix" name="download"></sl-icon>
+              Export JSON Backup
+            </sl-menu-item>
+            <sl-menu-item id="menu-btn-import-backup">
+              <sl-icon slot="prefix" name="upload"></sl-icon>
+              Restore JSON Backup...
+            </sl-menu-item>
+            <sl-divider></sl-divider>
+            <sl-menu-item id="menu-btn-storage-info">
+              <sl-icon slot="prefix" name="info-circle"></sl-icon>
+              Storage Quota & Info
+            </sl-menu-item>
+          </sl-menu>
+        </sl-dropdown>
+
+        <input type="file" id="input-backup-file" accept=".json" class="hidden" aria-hidden="true" />
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Dynamic SPA View Container -->
+  <main id="app-view-container" class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6" role="main">
+    <!-- Rendered dynamically by Router -->
+  </main>
+
+  <!-- Global Application Footer -->
+  <footer class="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500 no-print" role="contentinfo">
+    <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-2">
+      <div>
+        <strong>KennisBoost Tools</strong> &mdash; 100% Client-Side Educational Suite. Zero cloud dependency.
+      </div>
+      <div class="flex items-center gap-4 text-slate-400">
+        <span>WCAG 2.1 AA Compliant</span>
+        <span>•</span>
+        <span>AES-256 / PBKDF2</span>
+        <span>•</span>
+        <span>FSRS v4</span>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Application Bootloader -->
+  <script type="module" src="src/main.js"></script>
+</body>
+</html>
