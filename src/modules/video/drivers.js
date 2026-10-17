@@ -3,6 +3,25 @@
  * Supports HTML5 <video>, YouTube IFrame API, and Vimeo Player SDK.
  */
 
+/**
+ * Replace the player area with an accessible, readable error panel.
+ */
+export function renderVideoError(containerEl, title, detail) {
+  if (!containerEl) return;
+  const esc = (t) => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  containerEl.innerHTML = `
+    <div class="w-full h-full flex flex-col items-center justify-center gap-3 p-6 text-center bg-slate-900" role="alert">
+      <span class="w-12 h-12 rounded-full bg-white/10 flex items-center justify-center text-2xl" style="color:#fda4af">
+        <sl-icon name="camera-video-off"></sl-icon>
+      </span>
+      <div class="space-y-1 max-w-sm">
+        <p class="text-sm font-semibold" style="color:#f8fafc">${esc(title)}</p>
+        <p class="text-xs leading-relaxed" style="color:#94a3b8">${esc(detail)}</p>
+      </div>
+    </div>
+  `;
+}
+
 export class VideoProviderDriver {
   constructor() {
     this.container = null;
@@ -62,6 +81,15 @@ export class HTML5VideoDriver extends VideoProviderDriver {
 
     return new Promise((resolve) => {
       this.videoEl.onloadedmetadata = () => resolve();
+      this.videoEl.onerror = () => {
+        this.failed = true;
+        renderVideoError(
+          this.container,
+          'This video could not be loaded',
+          'Check that the link points directly to an .mp4 or .webm file and that it is publicly accessible. Try one of the sample videos to confirm playback works.'
+        );
+        resolve();
+      };
       // Fallback timeout in case event doesn't fire immediately
       setTimeout(resolve, 800);
     });
@@ -178,7 +206,17 @@ export class YouTubeDriver extends VideoProviderDriver {
         },
         events: {
           onReady: () => resolve(),
-          onError: () => resolve()
+          onError: (e) => {
+            const notEmbeddable = e?.data === 101 || e?.data === 150;
+            renderVideoError(
+              this.container,
+              notEmbeddable ? 'The owner of this YouTube video does not allow embedding' : 'This YouTube video is unavailable',
+              notEmbeddable
+                ? 'Choose a different video, or ask the creator to enable embedding.'
+                : 'Double-check the link or video ID. Private and removed videos cannot be played.'
+            );
+            resolve();
+          }
         }
       });
     });
@@ -247,13 +285,16 @@ export class VimeoDriver extends VideoProviderDriver {
     return new Promise((resolve) => {
       const existing = document.getElementById('vimeo-sdk-api');
       if (existing) {
-        resolve();
+        // Script tag already requested: wait for it to finish loading
+        existing.addEventListener('load', () => resolve(), { once: true });
+        existing.addEventListener('error', () => resolve(), { once: true });
         return;
       }
       const tag = document.createElement('script');
       tag.id = 'vimeo-sdk-api';
       tag.src = 'https://player.vimeo.com/api/player.js';
       tag.onload = () => resolve();
+      tag.onerror = () => resolve();
       document.head.appendChild(tag);
     });
   }
@@ -270,7 +311,12 @@ export class VimeoDriver extends VideoProviderDriver {
     this.container.innerHTML = '';
     this.container.appendChild(targetDiv);
 
-    if (window.Vimeo && window.Vimeo.Player) {
+    if (!window.Vimeo || !window.Vimeo.Player) {
+      renderVideoError(this.container, 'Vimeo player could not be loaded', 'Check your internet connection and try reloading the preview.');
+      return;
+    }
+
+    try {
       this.player = new window.Vimeo.Player(this.elementId, {
         id: videoId,
         controls: false,
@@ -278,6 +324,10 @@ export class VimeoDriver extends VideoProviderDriver {
         responsive: true
       });
       await this.player.ready();
+    } catch (err) {
+      console.debug('Vimeo player failed:', err);
+      this.player = null;
+      renderVideoError(this.container, 'This Vimeo video is unavailable', 'Double-check the link. Private videos and videos with embedding disabled cannot be played.');
     }
   }
 

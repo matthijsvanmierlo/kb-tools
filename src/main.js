@@ -5,6 +5,11 @@ import { store } from './state/store.js';
 import { toast } from './utils/toast.js';
 
 // Lazy-loaded or modular controller bindings
+async function loadHomeModule(...args) {
+  const mod = await import('./modules/home/index.js');
+  return mod.renderHomeView(...args);
+}
+
 async function loadFlashcardsModule(...args) {
   const mod = await import('./modules/flashcards/index.js');
   return mod.renderFlashcardsView(...args);
@@ -18,6 +23,21 @@ async function loadTimelineModule(...args) {
 async function loadVideoModule(...args) {
   const mod = await import('./modules/video/index.js');
   return mod.renderVideoView(...args);
+}
+
+async function loadAssignmentsModule(...args) {
+  const mod = await import('./modules/assignments/index.js');
+  return mod.renderAssignmentsView(...args);
+}
+
+async function loadStudentReportModule(...args) {
+  const mod = await import('./modules/gradebook/student-report.js');
+  return mod.renderStudentReportView(...args);
+}
+
+async function loadGuideModule(...args) {
+  const mod = await import('./modules/guide/index.js');
+  return mod.renderGuideView(...args);
 }
 
 async function loadGradebookModule(...args) {
@@ -37,25 +57,51 @@ async function bootstrapApp() {
     await sync.init();
 
     // 3. Register module routes
+    router.register('#/', loadHomeModule);
+    router.register('#/home', loadHomeModule);
     router.register('#/flashcards', loadFlashcardsModule);
     router.register('#/flashcards/edit', loadFlashcardsModule);
     router.register('#/flashcards/study', loadFlashcardsModule);
     router.register('#/flashcards/game', loadFlashcardsModule);
     router.register('#/timeline', loadTimelineModule);
+    router.register('#/timeline/view', loadTimelineModule);
     router.register('#/video', loadVideoModule);
+    router.register('#/video/edit', loadVideoModule);
+    router.register('#/video/kiosk', loadVideoModule);
     router.register('#/gradebook', loadGradebookModule);
+    router.register('#/assignments', loadAssignmentsModule);
+    router.register('#/assignments/edit', loadAssignmentsModule);
+    router.register('#/assignments/take', loadAssignmentsModule);
+    router.register('#/assignments/submissions', loadAssignmentsModule);
+    router.register('#/report', loadStudentReportModule);
+    router.register('#/guide', loadGuideModule);
 
-    // 4. Bind Storage / Backup Toolbar Actions
+    // 4. Bind Storage / Backup Toolbar Actions & Global Customizations
     bindStorageControls();
+    initThemeSwitcher();
 
-    // 5. Register PWA Service Worker (if available)
+    // 5. Initialize Class Selector in Navigation
+    const { ClassManager } = await import('./components/class-manager.js');
+    const classContainer = document.getElementById('kb-nav-class-selector');
+    if (classContainer) {
+      await ClassManager.renderGlobalNavSelector(classContainer);
+      window.addEventListener('kb-class-filter-changed', () => {
+        router.handleRoute();
+      });
+    }
+
+    // 6. Initialize Command Palette (Ctrl+K & ?)
+    const { CommandPalette } = await import('./components/command-palette.js');
+    CommandPalette.init();
+
+    // 7. Register PWA Service Worker (if available)
     if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
       navigator.serviceWorker.register('./sw.js').catch(err => {
         console.debug('ServiceWorker registration skipped/failed:', err);
       });
     }
 
-    // 6. Execute initial route
+    // 8. Execute initial route
     await router.handleRoute();
 
   } catch (err) {
@@ -135,6 +181,53 @@ function bindStorageControls() {
     dialog.show();
 
     dialog.querySelector('#btn-close-storage-info')?.addEventListener('click', () => dialog.remove());
+  });
+}
+
+const THEME_ICONS = { light: 'sun', dark: 'moon-stars', system: 'circle-half', projector: 'projector' };
+const THEME_LABELS = { light: 'Light', dark: 'Dark', system: 'System', projector: 'Projector' };
+
+function initThemeSwitcher() {
+  const themeMenu = document.getElementById('kb-theme-menu');
+  const themeIcon = document.getElementById('icon-active-theme');
+  const html = document.documentElement;
+  const systemDark = window.matchMedia?.('(prefers-color-scheme: dark)');
+  let current = 'system';
+
+  const applyTheme = (theme) => {
+    current = THEME_ICONS[theme] ? theme : 'system';
+    const isDark = current === 'dark' || (current === 'system' && !!systemDark?.matches);
+    html.classList.remove('sl-theme-light', 'sl-theme-dark', 'kb-theme-projector');
+    html.classList.add(isDark ? 'sl-theme-dark' : 'sl-theme-light');
+    if (current === 'projector') html.classList.add('kb-theme-projector');
+
+    if (themeIcon) themeIcon.name = THEME_ICONS[current];
+    themeMenu?.querySelectorAll('sl-menu-item').forEach(item => {
+      item.checked = item.value === current;
+    });
+    window.dispatchEvent(new CustomEvent('kb-theme-changed', { detail: { theme: current, isDark } }));
+
+    try {
+      localStorage.setItem('kb_theme_mode', current);
+    } catch (e) {}
+  };
+
+  let savedTheme = 'system';
+  try {
+    savedTheme = localStorage.getItem('kb_theme_mode') || 'system';
+  } catch (e) {}
+  applyTheme(savedTheme);
+
+  systemDark?.addEventListener?.('change', () => {
+    if (current === 'system') applyTheme('system');
+  });
+
+  themeMenu?.addEventListener('sl-select', (e) => {
+    const selected = e.detail.item.value;
+    if (selected) {
+      applyTheme(selected);
+      toast.info(`Theme: ${THEME_LABELS[selected]}`);
+    }
   });
 }
 

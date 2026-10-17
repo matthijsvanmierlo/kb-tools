@@ -45,6 +45,9 @@ export const FlashcardSetSchema = z.object({
   version: z.literal(1).default(1),
   id: z.string().uuid(),
   title: z.string().min(1).max(120),
+  description: z.string().optional(),
+  class_id: z.string().uuid().nullable().optional(),
+  tags: z.array(z.string()).default([]),
   updated_at: z.string().optional(),
   gamification_stats: z.object({
     high_score: z.number().default(0),
@@ -70,6 +73,10 @@ export const TimelineDatasetSchema = z.object({
   version: z.literal(1).default(1),
   id: z.string().uuid(),
   title: z.string().min(1),
+  description: z.string().optional(),
+  class_id: z.string().uuid().nullable().optional(),
+  tags: z.array(z.string()).default([]),
+  updated_at: z.string().optional(),
   view_state: z.object({
     zoom_level: z.number().default(1),
     focal_epoch_ms: z.number().default(0),
@@ -97,6 +104,10 @@ export const VideoAssessmentSchema = z.object({
   version: z.literal(1).default(1),
   id: z.string().uuid(),
   title: z.string().min(1),
+  description: z.string().optional(),
+  class_id: z.string().uuid().nullable().optional(),
+  tags: z.array(z.string()).default([]),
+  updated_at: z.string().optional(),
   provider: z.enum(['html5', 'youtube', 'vimeo']),
   video_source: z.string().min(1),
   checkpoints: z.array(VideoCheckpointSchema).default([])
@@ -105,6 +116,9 @@ export const VideoAssessmentSchema = z.object({
 export const GradebookCourseSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
+  section: z.string().optional(),
+  color: z.string().default('#2563eb'),
+  updated_at: z.string().optional(),
   academic_year: z.string().default('2026-2027'),
   grading_scale: z.enum(['traditional', 'sbg']).default('traditional'),
   terms: z.array(z.object({

@@ -2,7 +2,10 @@ import * as jspdfLib from 'jspdf';
 import * as autotableLib from 'jspdf-autotable';
 import jszipLib from 'jszip';
 import { CryptoShareEngine } from '../../core/crypto-share.js';
-import { GradebookMathEngine } from './engine-calc.js';
+import { computeStudentSummary } from './aggregates.js';
+import { getStandards, getSbgConfig, getLetterScale, levelInfo } from './grading-scales.js';
+import { RubricScorer } from './rubric-builder.js';
+import { AccessCodes } from '../../core/access-codes.js';
 import { toast } from '../../utils/toast.js';
 
 const jsPDFClass = jspdfLib.jsPDF || jspdfLib.default;
@@ -49,8 +52,10 @@ export class GradebookReportGenerator {
       if (rec) studentRecords.set(a.id, rec);
     });
 
-    const overallPct = GradebookMathEngine.computeTraditionalWeighted(studentRecords, assignments, course.categories || []);
-    const letter = GradebookMathEngine.percentageToLetter(overallPct);
+    const summaryMap = gradesMap.get ? gradesMap : new Map(Object.entries(gradesMap));
+    const summary = computeStudentSummary(student, course, assignments, summaryMap);
+    const overallPct = summary.score;
+    const letter = summary.letter;
 
     // Grade Badge box
     doc.setFillColor(239, 246, 255); // Blue 50
@@ -184,40 +189,97 @@ export class GradebookReportGenerator {
    * @param {Map<string, object>} gradesMap
    * @returns {Promise<{ url: string, exceedsUrlLimit: boolean }>}
    */
-  static async createStudentShareLink(student, course, assignments, gradesMap) {
-    // Isolate student data
-    const isolatedGrades = {};
-    assignments.forEach(a => {
-      const key = `${student.student_id}+${a.id}`;
-      const rec = gradesMap.get ? gradesMap.get(key) : gradesMap[key];
-      if (rec) isolatedGrades[a.id] = rec;
+  static async createStudentShareLink(student, course, assignments, gradesMap, rubrics = []) {
+    const payload = this.buildStudentReportPayload(student, course, assignments, gradesMap, rubrics);
+    const result = await CryptoShareEngine.createSharePayload('student_grade_report', payload, AccessCodes.reportPassphrase(student));
+    return { ...result, usesAccessCode: !AccessCodes.isWeak(student) };
+  }
+
+  /**
+   * Build the isolated, read-only report a student receives. Contains only this student's data:
+   * scores, statuses, feedback, rubric results and comments, and standards mastery.
+   */
+  static buildStudentReportPayload(student, course, assignments, gradesMap, rubrics = []) {
+    const map = gradesMap.get ? gradesMap : new Map(Object.entries(gradesMap));
+    const summary = computeStudentSummary(student, course, assignments, map);
+    const standards = getStandards(course);
+    const codeOf = (id) => standards.find(s => s.id === id)?.code || id;
+
+    const ordered = [...assignments].sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
+    const items = ordered.map(a => {
+      const rec = map.get(`${student.student_id}+${a.id}`) || null;
+      const category = (course.categories || []).find(c => c.id === a.category_id);
+      const rubric = a.rubric_id ? rubrics.find(r => r.id === a.rubric_id) : null;
+      let rubricResult = null;
+      if (rubric && rec?.rubric_eval && Object.keys(rec.rubric_eval).length) {
+        const score = RubricScorer.calculateScore(rubric, rec.rubric_eval);
+        rubricResult = {
+          title: rubric.title,
+          earned: score.totalEarned,
+          possible: score.totalPossible,
+          criteria: (rubric.criteria || []).map(c => {
+            const tier = (rubric.tiers || []).find(t => t.id === rec.rubric_eval[c.id]);
+            const cell = tier ? c.cells?.[tier.id] : null;
+            return {
+              name: c.name,
+              level: tier?.label || null,
+              points: cell ? (cell.points ?? tier?.default_points ?? 0) : null,
+              descriptor: cell?.descriptor || '',
+              comment: rec.rubric_comments?.[c.id] || ''
+            };
+          })
+        };
+      }
+      return {
+        title: a.title,
+        category: category?.name || '',
+        due_date: a.due_date || '',
+        scoring: a.scoring || 'points',
+        max_score: a.max_score,
+        standards: (a.standard_ids || []).map(codeOf),
+        grade: rec ? {
+          raw_score: rec.raw_score ?? null,
+          status: rec.status || 'submitted',
+          days_late: rec.days_late || null,
+          feedback: rec.feedback || '',
+          standard_scores: Object.fromEntries(Object.entries(rec.standard_scores || {}).map(([id, v]) => [codeOf(id), v])),
+          standard_comments: Object.fromEntries(Object.entries(rec.standard_comments || {}).map(([id, v]) => [codeOf(id), v]))
+        } : null,
+        rubric: rubricResult
+      };
     });
 
-    const isolatedPayload = {
-      student: {
-        student_id: student.student_id,
-        full_name: student.full_name,
-        email: student.email
-      },
+    const sbg = getSbgConfig(course);
+    return {
+      version: 2,
+      generated_at: new Date().toISOString(),
+      student: { student_id: student.student_id, full_name: student.full_name },
       course: {
-        id: course.id,
         name: course.name,
-        academic_year: course.academic_year,
-        categories: course.categories,
-        terms: course.terms
+        section: course.section || '',
+        academic_year: course.academic_year || '',
+        mode: summary.mode,
+        letter_bands: getLetterScale(course).bands,
+        levels: sbg.levels
       },
-      assignments: assignments.map(a => ({
-        id: a.id,
-        title: a.title,
-        max_score: a.max_score,
-        category_id: a.category_id,
-        due_date: a.due_date
-      })),
-      grades: isolatedGrades
+      summary: { score: summary.score, letter: summary.letter, mastery: summary.mastery },
+      standards: summary.standards
+        ? standards
+          .map(s => {
+            const b = summary.standards.get(s.id);
+            const lvl = b?.mastery != null ? levelInfo(course, b.mastery) : null;
+            return {
+              code: s.code,
+              description: s.description,
+              mastery: b?.mastery ?? null,
+              level_label: lvl?.label || null,
+              color: lvl?.color || null,
+              evidence: (b?.evidence || []).map(e => ({ title: e.title, level: e.level, date: e.date }))
+            };
+          })
+        : [],
+      assignments: items
     };
-
-    // Encrypted with the student's own Student ID
-    return await CryptoShareEngine.createSharePayload('student_grade_report', isolatedPayload, student.student_id);
   }
 }
 

@@ -37,6 +37,10 @@ export class Sanitizer {
       .replace(/'/g, '&#039;');
   }
 
+  static escapeHTML(str) {
+    return this.escapeHtml(str);
+  }
+
   /**
    * Render KaTeX expression safely
    * @param {string} expr

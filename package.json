@@ -6,12 +6,15 @@
   "scripts": {
     "start": "node server.js",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "build:css": "tailwindcss -c tailwind.config.js -i css/tailwind.src.css -o css/tailwind.output.css --minify",
+    "watch:css": "tailwindcss -c tailwind.config.js -i css/tailwind.src.css -o css/tailwind.output.css --watch"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@fontsource-variable/inter": "^5.3.0",
     "dexie": "^4.4.6",
     "dompurify": "^3.4.17",
     "fake-indexeddb": "^6.2.6",
@@ -22,6 +25,7 @@
     "lz-string": "^1.5.0",
     "marked": "^18.1.1",
     "papaparse": "^5.7.0",
+    "tailwindcss": "^3.4.19",
     "vitest": "^5.0.5",
     "zod": "^4.6.7"
   }

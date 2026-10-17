@@ -1,0 +1,299 @@
+import { storage } from '../core/storage.js';
+import { router } from '../router.js';
+import { Sanitizer } from '../core/sanitizer.js';
+import { ClassManager } from './class-manager.js';
+import { sync } from '../core/sync.js';
+
+/**
+ * Universal Command Palette (Ctrl/Cmd + K) and Keyboard Shortcuts Help Modal (?)
+ */
+export class CommandPalette {
+  static init() {
+    if (typeof window === 'undefined') return;
+
+    window.addEventListener('keydown', (e) => {
+      // Ctrl+K or Cmd+K
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        this.open();
+      }
+
+      // '?' key (when not focused in an input/textarea)
+      if (e.key === '?' && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+        e.preventDefault();
+        this.openShortcutsModal();
+      }
+    });
+
+    ['btn-open-cmd-palette', 'btn-open-cmd-palette-mobile'].forEach(id => {
+      document.getElementById(id)?.addEventListener('click', () => this.open());
+    });
+
+    document.getElementById('menu-btn-keyboard-shortcuts')?.addEventListener('click', () => {
+      this.openShortcutsModal();
+    });
+  }
+
+  static async open() {
+    const existing = document.getElementById('kb-command-palette-dialog');
+    if (existing) existing.remove();
+
+    const [courses, decks, timelines, videos, assignmentSets] = await Promise.all([
+      storage.table('gradebook_courses').toArray().catch(() => []),
+      storage.table('flashcards').toArray().catch(() => []),
+      storage.table('timelines').toArray().catch(() => []),
+      storage.table('video_assessments').toArray().catch(() => []),
+      storage.table('assignments').toArray().catch(() => [])
+    ]);
+
+    const dialog = document.createElement('sl-dialog');
+    dialog.id = 'kb-command-palette-dialog';
+    dialog.label = 'Command & Quick Navigation';
+    dialog.className = 'kb-cmd-palette-dialog';
+    dialog.setAttribute('no-header', '');
+
+    dialog.innerHTML = `
+      <div class="space-y-3 p-1">
+        <div class="relative">
+          <sl-input id="input-cmd-search" placeholder="Type a command or search decks, timelines, videos, classes..." autofocus>
+            <sl-icon name="search" slot="prefix" class="text-blue-600"></sl-icon>
+          </sl-input>
+        </div>
+
+        <div id="kb-cmd-results" class="max-h-80 overflow-y-auto space-y-1 text-xs pr-1">
+          <!-- Populated dynamically -->
+        </div>
+
+        <div class="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px] text-slate-400">
+          <div class="flex items-center gap-3">
+            <span><kbd class="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200">↑↓</kbd> Navigate</span>
+            <span><kbd class="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200">↵</kbd> Select</span>
+            <span><kbd class="px-1.5 py-0.5 bg-slate-100 rounded border border-slate-200">ESC</kbd> Close</span>
+          </div>
+          <span>KennisBoost Command Hub</span>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+    dialog.show();
+
+    const searchInput = dialog.querySelector('#input-cmd-search');
+    const resultsContainer = dialog.querySelector('#kb-cmd-results');
+
+    // Build searchable catalog
+    const staticActions = [
+      { category: 'Navigation', title: 'Go to Home Hub', icon: 'house-door', run: () => router.navigate('#/') },
+      { category: 'Navigation', title: 'Open Flashcards Library', icon: 'stack', run: () => router.navigate('#/flashcards') },
+      { category: 'Navigation', title: 'Open Timeline Maker', icon: 'bar-chart-steps', run: () => router.navigate('#/timeline') },
+      { category: 'Navigation', title: 'Open Video Assessments', icon: 'play-circle', run: () => router.navigate('#/video') },
+      { category: 'Navigation', title: 'Open Assignments', icon: 'ui-checks', run: () => router.navigate('#/assignments') },
+      { category: 'Navigation', title: 'Teacher Guide: Recommended Workflows', icon: 'signpost-split', run: () => router.navigate('#/guide') },
+      { category: 'Navigation', title: 'New Auto-graded Assignment', icon: 'plus-lg', run: () => router.navigate('#/assignments/edit') },
+      { category: 'Navigation', title: 'Open Gradebook Spreadsheet', icon: 'journal-check', run: () => router.navigate('#/gradebook') },
+      { category: 'Actions', title: 'Create New Flashcard Deck', icon: 'plus-circle', run: () => router.navigate('#/flashcards/edit') },
+      { category: 'Actions', title: 'Manage Classes & Rosters', icon: 'mortarboard', run: () => ClassManager.openClassManagerModal() },
+      { category: 'Actions', title: 'Export JSON Backup File', icon: 'download', run: () => sync.exportManualBackup() },
+      { category: 'Actions', title: 'Keyboard Shortcuts Cheat Sheet', icon: 'question-circle', run: () => this.openShortcutsModal() }
+    ];
+
+    const projectItems = [
+      ...courses.map(c => ({ category: 'Classes', title: c.name, subtitle: c.section || 'Class Roster', icon: 'mortarboard', color: c.color || '#2563eb', run: () => { ClassManager.setActiveFilter(c.id); router.navigate('#/gradebook'); } })),
+      ...decks.map(d => ({ category: 'Flashcards', title: d.title, subtitle: `${d.cards?.length || 0} cards`, icon: 'stack', run: () => router.navigate(`#/flashcards/study?id=${d.id}`) })),
+      ...timelines.map(t => ({ category: 'Timelines', title: t.title, subtitle: `${t.events?.length || 0} events`, icon: 'bar-chart-steps', run: () => router.navigate(`#/timeline/view?id=${t.id}`) })),
+      ...videos.map(v => ({ category: 'Videos', title: v.title, subtitle: `${v.checkpoints?.length || 0} checkpoints`, icon: 'play-circle', run: () => router.navigate(`#/video/kiosk?id=${v.id}`) })),
+      ...assignmentSets.map(a => ({ category: 'Assignments', title: a.title, subtitle: `${a.questions?.length || 0} questions`, icon: 'ui-checks', run: () => router.navigate(`#/assignments/edit?id=${a.id}`) }))
+    ];
+
+    const allCommands = [...staticActions, ...projectItems];
+
+    const renderList = (filterText = '') => {
+      const q = filterText.toLowerCase().trim();
+      const matched = allCommands.filter(c =>
+        !q || c.title.toLowerCase().includes(q) || (c.subtitle && c.subtitle.toLowerCase().includes(q)) || c.category.toLowerCase().includes(q)
+      );
+
+      if (matched.length === 0) {
+        resultsContainer.innerHTML = `
+          <div class="py-6 text-center text-slate-400">
+            <p>No matching commands or projects found.</p>
+          </div>
+        `;
+        return;
+      }
+
+      resultsContainer.innerHTML = matched.map((item, idx) => {
+        const safeTitle = Sanitizer.escapeHTML(item.title);
+        const safeSubtitle = item.subtitle ? Sanitizer.escapeHTML(item.subtitle) : '';
+        const safeCategory = Sanitizer.escapeHTML(item.category);
+        return `
+          <div class="kb-cmd-item flex items-center justify-between p-2 rounded-lg hover:bg-blue-50 cursor-pointer transition-colors ${idx === 0 ? 'bg-blue-50/70' : ''}" data-index="${idx}">
+            <div class="flex items-center gap-2.5">
+              <span class="w-6 h-6 rounded flex items-center justify-center bg-slate-100 text-slate-600 text-xs">
+                <sl-icon name="${item.icon}"></sl-icon>
+              </span>
+              <div>
+                <span class="font-medium text-slate-900">${safeTitle}</span>
+                ${safeSubtitle ? `<span class="text-slate-400 ml-1.5 text-[11px]">${safeSubtitle}</span>` : ''}
+              </div>
+            </div>
+            <span class="text-[10px] uppercase font-semibold text-slate-400 tracking-wider">${safeCategory}</span>
+          </div>
+        `;
+      }).join('');
+
+      let selectedIndex = 0;
+
+      const items = resultsContainer.querySelectorAll('.kb-cmd-item');
+      items.forEach((elem, i) => {
+        elem.addEventListener('click', () => {
+          dialog.hide();
+          matched[i].run();
+        });
+      });
+    };
+
+    renderList();
+
+    searchInput?.addEventListener('input', () => {
+      renderList(searchInput.value);
+    });
+
+    searchInput?.addEventListener('keydown', (e) => {
+      const items = Array.from(resultsContainer.querySelectorAll('.kb-cmd-item'));
+      if (items.length === 0) return;
+
+      let currentActiveIdx = items.findIndex(el => el.classList.contains('bg-blue-50/70') || el.classList.contains('bg-blue-100'));
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        items[currentActiveIdx]?.classList.remove('bg-blue-50/70', 'bg-blue-100');
+        currentActiveIdx = (currentActiveIdx + 1) % items.length;
+        items[currentActiveIdx]?.classList.add('bg-blue-100');
+        items[currentActiveIdx]?.scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        items[currentActiveIdx]?.classList.remove('bg-blue-50/70', 'bg-blue-100');
+        currentActiveIdx = (currentActiveIdx - 1 + items.length) % items.length;
+        items[currentActiveIdx]?.classList.add('bg-blue-100');
+        items[currentActiveIdx]?.scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        items[currentActiveIdx]?.click();
+      }
+    });
+
+    dialog.addEventListener('sl-after-hide', (e) => { if (e.target === dialog) dialog.remove(); });
+  }
+
+  static openShortcutsModal() {
+    const existing = document.getElementById('kb-shortcuts-modal');
+    if (existing) existing.remove();
+
+    const dialog = document.createElement('sl-dialog');
+    dialog.id = 'kb-shortcuts-modal';
+    dialog.label = 'Keyboard Shortcuts Cheat Sheet';
+    dialog.style.setProperty('--width', '600px');
+
+    dialog.innerHTML = `
+      <div class="space-y-4 py-1 text-xs text-slate-700">
+        <!-- Global -->
+        <div>
+          <h4 class="font-bold text-slate-900 text-sm mb-2 pb-1 border-b">Global Platform</h4>
+          <div class="grid grid-cols-2 gap-2">
+            <div class="flex justify-between items-center py-1">
+              <span>Command Palette</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">Ctrl/Cmd + K</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Shortcuts Help</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">?</kbd>
+            </div>
+          </div>
+        </div>
+
+        <!-- Flashcards Study -->
+        <div>
+          <h4 class="font-bold text-slate-900 text-sm mb-2 pb-1 border-b">Flashcards Study Mode</h4>
+          <div class="grid grid-cols-2 gap-2">
+            <div class="flex justify-between items-center py-1">
+              <span>Flip Card Front / Back</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">Space</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Grade Again</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">1</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Grade Hard</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">2</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Grade Good</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">3</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Grade Easy</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">4</kbd>
+            </div>
+          </div>
+        </div>
+
+        <!-- Gradebook Spreadsheet -->
+        <div>
+          <h4 class="font-bold text-slate-900 text-sm mb-2 pb-1 border-b">Gradebook Virtual Grid</h4>
+          <div class="grid grid-cols-2 gap-2">
+            <div class="flex justify-between items-center py-1">
+              <span>Commit &amp; Move Down</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">Enter / ↓</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Commit &amp; Move Right</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">Tab / →</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Mark Missing</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">M</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Mark Exempt</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">E</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Toggle Late</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">L</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Undo Score Edit</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">Ctrl/Cmd + Z</kbd>
+            </div>
+          </div>
+        </div>
+
+        <!-- Timeline -->
+        <div>
+          <h4 class="font-bold text-slate-900 text-sm mb-2 pb-1 border-b">Timeline Navigation</h4>
+          <div class="grid grid-cols-2 gap-2">
+            <div class="flex justify-between items-center py-1">
+              <span>Pan Left / Right</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">← / → or Drag</kbd>
+            </div>
+            <div class="flex justify-between items-center py-1">
+              <span>Zoom In / Out</span>
+              <kbd class="px-2 py-0.5 bg-slate-100 rounded border font-mono">Wheel / + / -</kbd>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div slot="footer">
+        <sl-button variant="primary" id="btn-close-shortcuts-modal">Close</sl-button>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+    dialog.show();
+
+    dialog.querySelector('#btn-close-shortcuts-modal')?.addEventListener('click', () => dialog.hide());
+    dialog.addEventListener('sl-after-hide', (e) => { if (e.target === dialog) dialog.remove(); });
+  }
+}

@@ -3,11 +3,17 @@ import { store } from '../../state/store.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { toast } from '../../utils/toast.js';
 import { Sanitizer } from '../../core/sanitizer.js';
-import { CryptoShareEngine } from '../../core/crypto-share.js';
 import { Exporter, parseCSVWithValidation, FlashcardItemSchema, showImportErrorsDialog } from '../../core/validator.js';
 import { FlashcardEditor } from './editor.js';
 import { StudyPlayer } from './study-player.js';
 import { TowerDefenseEngine } from './tower-defense.js';
+import { ProjectLibraryView } from '../../components/project-library.js';
+import { ClassManager } from '../../components/class-manager.js';
+import * as jspdfLib from 'jspdf';
+import * as autotableLib from 'jspdf-autotable';
+
+const jsPDFClass = jspdfLib.jsPDF || jspdfLib.default;
+const autoTable = autotableLib.autoTable || autotableLib.default;
 
 /**
  * Flashcards Module Controller & Deck Library View
@@ -46,14 +52,16 @@ export async function renderFlashcardsView(params, router, container) {
       return;
     }
 
+    const safeTitle = Sanitizer.escapeHTML(deck.title);
+
     container.innerHTML = `
       <div class="space-y-4 max-w-5xl mx-auto">
-        <div class="flex items-center justify-between bg-white p-3 rounded-xl border shadow-sm">
+        <div class="flex items-center justify-between bg-white p-3 rounded-xl border border-slate-200 shadow-sm">
           <div class="flex items-center gap-2">
             <button id="btn-td-back" class="text-slate-500 hover:text-slate-800 p-1">
               <sl-icon name="arrow-left" class="text-lg"></sl-icon>
             </button>
-            <h2 class="font-bold text-slate-800">${deck.title} — Tower Defense Study</h2>
+            <h2 class="font-bold text-slate-800">${safeTitle} — Tower Defense Study</h2>
           </div>
           <div class="flex items-center gap-2">
             <span class="text-xs text-slate-500">Click pads to build:</span>
@@ -65,7 +73,7 @@ export async function renderFlashcardsView(params, router, container) {
           </div>
         </div>
 
-        <div class="bg-slate-900 rounded-xl overflow-hidden shadow-lg border border-slate-700 flex justify-center">
+        <div class="bg-slate-900 rounded-2xl overflow-hidden shadow-lg border border-slate-700 flex justify-center">
           <canvas id="td-canvas" style="width: 100%; max-width: 960px; height: auto;" class="block"></canvas>
         </div>
 
@@ -106,6 +114,7 @@ export async function renderFlashcardsView(params, router, container) {
         version: 1,
         id: generateUUID(),
         title: 'Untitled Flashcard Deck',
+        class_id: ClassManager.getActiveFilter(),
         cards: []
       };
     }
@@ -116,304 +125,187 @@ export async function renderFlashcardsView(params, router, container) {
     return editor.mount(container);
   }
 
-  // Default Route: Deck Library UI
+  // Default Route: Deck Library UI using ProjectLibraryView
   await renderLibrary(container, router);
 }
 
 async function renderLibrary(container, router) {
-  const decks = await storage.table('flashcards').toArray();
+  // Ensure sample deck exists if empty
+  const count = await storage.table('flashcards').count();
+  if (count === 0) {
+    await seedSampleDeck();
+  }
 
-  container.innerHTML = `
-    <div class="space-y-6">
-      <!-- Library Top Dock -->
-      <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-        <div>
-          <h1 class="text-2xl font-bold text-slate-900 tracking-tight">Flashcard Library</h1>
-          <p class="text-xs text-slate-500 mt-1">Master knowledge via FSRS v4 spaced repetition or play Tower Defense.</p>
-        </div>
-        <div class="flex items-center gap-2">
-          <sl-button variant="default" id="btn-import-csv">
-            <sl-icon slot="prefix" name="file-earmark-arrow-up"></sl-icon> Import CSV
-          </sl-button>
-          <sl-button variant="primary" id="btn-create-deck">
-            <sl-icon slot="prefix" name="plus-lg"></sl-icon> New Deck
-          </sl-button>
-          <input type="file" id="input-flashcard-csv" accept=".csv" class="hidden" />
-        </div>
-      </div>
+  const library = new ProjectLibraryView({
+    moduleType: 'flashcards',
+    title: 'Flashcard Decks',
+    itemTypeName: 'Deck',
+    tableName: 'flashcards',
+    createRoute: '#/flashcards/edit',
+    accentColor: '#2563eb',
+    iconName: 'stack',
+    getOpenUrl: (item) => `#/flashcards/study?id=${item.id}`,
+    getEditUrl: (item) => `#/flashcards/edit?id=${item.id}`,
+    getMetadataSummary: (item) => {
+      const cards = item.cards || [];
+      const now = new Date();
+      const due = cards.filter(c => c.fsrs?.due && new Date(c.fsrs.due) <= now).length;
+      return `${cards.length} Cards • ${due} Due`;
+    },
+    onImport: () => {
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.csv,.json';
+      input.onchange = async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
 
-      <!-- Decks Grid -->
-      ${decks.length === 0 ? `
-        <div class="p-12 bg-white border border-dashed border-slate-300 rounded-2xl text-center space-y-4">
-          <div class="w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mx-auto text-3xl">
-            <sl-icon name="collection"></sl-icon>
-          </div>
-          <h3 class="font-bold text-slate-800 text-lg">Your Library is Empty</h3>
-          <p class="text-sm text-slate-500 max-w-sm mx-auto">Create a new deck with KaTeX/Mhchem notation, load a sample STEM deck, or import a CSV flashcard set.</p>
-          <div class="flex justify-center gap-3 pt-2">
-            <sl-button variant="primary" id="btn-empty-create">Create First Deck</sl-button>
-            <sl-button variant="default" id="btn-load-sample">Load Sample STEM Deck</sl-button>
-          </div>
-        </div>
-      ` : `
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4" id="decks-grid">
-          ${decks.map(deck => {
-            const cardCount = deck.cards ? deck.cards.length : 0;
-            const stats = deck.gamification_stats || { high_score: 0, longest_streak: 0 };
-            return `
-              <div class="bg-white border border-slate-200 rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow flex flex-col justify-between space-y-4">
-                <div>
-                  <div class="flex items-start justify-between gap-2">
-                    <h3 class="font-bold text-slate-900 text-base leading-snug line-clamp-1">${Sanitizer.escapeHtml(deck.title)}</h3>
-                    <sl-dropdown placement="bottom-end">
-                      <button slot="trigger" class="text-slate-400 hover:text-slate-600 p-1" title="Options">
-                        <sl-icon name="three-dots-vertical"></sl-icon>
-                      </button>
-                      <sl-menu>
-                        <sl-menu-item data-action="edit" data-deck-id="${deck.id}">
-                          <sl-icon slot="prefix" name="pencil"></sl-icon> Edit Deck
-                        </sl-menu-item>
-                        <sl-menu-item data-action="share" data-deck-id="${deck.id}">
-                          <sl-icon slot="prefix" name="share"></sl-icon> Share Lesson...
-                        </sl-menu-item>
-                        <sl-menu-item data-action="export-csv" data-deck-id="${deck.id}">
-                          <sl-icon slot="prefix" name="filetype-csv"></sl-icon> Export CSV
-                        </sl-menu-item>
-                        <sl-menu-item data-action="export-md" data-deck-id="${deck.id}">
-                          <sl-icon slot="prefix" name="markdown"></sl-icon> Export Markdown
-                        </sl-menu-item>
-                        <sl-divider></sl-divider>
-                        <sl-menu-item data-action="delete" data-deck-id="${deck.id}" class="text-red-600">
-                          <sl-icon slot="prefix" name="trash"></sl-icon> Delete Deck
-                        </sl-menu-item>
-                      </sl-menu>
-                    </sl-dropdown>
-                  </div>
-                  <p class="text-xs text-slate-500 mt-1">${cardCount} card(s) ${stats.high_score > 0 ? `• High Score: ${stats.high_score}` : ''}</p>
-                </div>
-
-                <div class="flex items-center gap-2 pt-2 border-t">
-                  <sl-button variant="primary" size="small" class="flex-1" data-action="study" data-deck-id="${deck.id}">
-                    <sl-icon slot="prefix" name="book"></sl-icon> Study FSRS
-                  </sl-button>
-                  <sl-button variant="default" size="small" data-action="game" data-deck-id="${deck.id}" title="Play Tower Defense">
-                    <sl-icon name="controller"></sl-icon>
-                  </sl-button>
-                </div>
-              </div>
-            `;
-          }).join('')}
-        </div>
-      `}
-    </div>
-  `;
-
-  // Bind Buttons
-  container.querySelector('#btn-create-deck')?.addEventListener('click', () => {
-    router.navigate('#/flashcards/edit');
-  });
-
-  container.querySelector('#btn-empty-create')?.addEventListener('click', () => {
-    router.navigate('#/flashcards/edit');
-  });
-
-  container.querySelector('#btn-load-sample')?.addEventListener('click', async () => {
-    const sampleDeck = {
-      version: 1,
-      id: generateUUID(),
-      title: 'STEM Fundamentals: Chemistry & Physics',
-      updated_at: new Date().toISOString(),
-      gamification_stats: { high_score: 0, longest_streak: 0 },
-      cards: [
-        {
-          id: generateUUID(),
-          front: 'What is the Henderson-Hasselbalch equation for buffer pH?',
-          back: '$$pH = pK_a + \\log\\left(\\frac{[A^-]}{[HA]}\\right)$$\nRelates the pH of a chemical solution to the acid dissociation constant ($K_a$).',
-          sketch_data: null,
-          tts_lang: 'en-US',
-          fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
-        },
-        {
-          id: generateUUID(),
-          front: 'What is the balanced equation for cellular respiration?',
-          back: '$$\\ce{C6H12O6 + 6O2 -> 6CO2 + 6H2O + 36ATP}$$\nGlucose oxidized in the presence of oxygen yielding carbon dioxide, water, and ATP energy.',
-          sketch_data: null,
-          tts_lang: 'en-US',
-          fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
-        },
-        {
-          id: generateUUID(),
-          front: "What is Newton's Second Law of Motion?",
-          back: '$$\\vec{F} = m\\vec{a}$$\nThe net force acting on an object is equal to the product of its inertial mass and acceleration vector.',
-          sketch_data: null,
-          tts_lang: 'en-US',
-          fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
-        },
-        {
-          id: generateUUID(),
-          front: "What is Euler's Identity?",
-          back: '$$e^{i\\pi} + 1 = 0$$\nConnects the five fundamental mathematical constants: $e$, $i$, $\\pi$, $1$, and $0$.',
-          sketch_data: null,
-          tts_lang: 'en-US',
-          fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
+        try {
+          const text = await file.text();
+          if (file.name.endsWith('.json')) {
+            const parsed = JSON.parse(text);
+            const newDeck = {
+              version: 1,
+              id: generateUUID(),
+              title: parsed.title || file.name.replace(/\.[^/.]+$/, ''),
+              cards: Array.isArray(parsed.cards) ? parsed.cards.map(c => ({
+                id: generateUUID(),
+                type: 'text',
+                front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : c.front,
+                back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : c.back,
+                fsrs: { state: 0, stability: 0, difficulty: 0, due: new Date().toISOString() }
+              })) : [],
+              updated_at: new Date().toISOString()
+            };
+            await storage.table('flashcards').put(newDeck);
+            toast.success('Deck imported from JSON!');
+          } else {
+            const res = parseCSVWithValidation(text, FlashcardItemSchema);
+            if (!res.success) {
+              showImportErrorsDialog(res.errors);
+              return;
+            }
+            const newDeck = {
+              version: 1,
+              id: generateUUID(),
+              title: file.name.replace(/\.[^/.]+$/, ''),
+              cards: res.data.map(c => ({
+                id: generateUUID(),
+                type: 'text',
+                front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : c.front,
+                back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : c.back,
+                fsrs: { state: 0, stability: 0, difficulty: 0, due: new Date().toISOString() }
+              })),
+              updated_at: new Date().toISOString()
+            };
+            await storage.table('flashcards').put(newDeck);
+            toast.success(`Imported deck with ${res.data.length} cards!`);
+          }
+          library.render(container);
+        } catch (err) {
+          toast.danger('Import failed: ' + err.message);
         }
-      ]
-    };
-    await storage.table('flashcards').put(sampleDeck);
-    toast.success('Sample STEM deck loaded!');
-    await renderLibrary(container, router);
-  });
-
-  const fileInput = container.querySelector('#input-flashcard-csv');
-  container.querySelector('#btn-import-csv')?.addEventListener('click', () => {
-    fileInput?.click();
-  });
-
-  fileInput?.addEventListener('change', async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const text = await file.text();
-      const res = parseCSVWithValidation(text, FlashcardItemSchema);
-      if (!res.success) {
-        showImportErrorsDialog(res.errors);
-        return;
-      }
-
-      const newDeck = {
-        version: 1,
-        id: generateUUID(),
-        title: file.name.replace(/\.csv$/i, ''),
-        updated_at: new Date().toISOString(),
-        cards: res.data
       };
-
-      await storage.table('flashcards').put(newDeck);
-      toast.success(`Imported "${newDeck.title}" with ${res.data.length} cards!`);
-      await renderLibrary(container, router);
-    } catch (err) {
-      console.error('CSV import error:', err);
-      toast.danger('Import failed.');
-    } finally {
-      fileInput.value = '';
+      input.click();
     }
   });
 
-  // Action Menu Bindings
-  container.querySelectorAll('[data-action]').forEach(el => {
-    el.addEventListener('click', async (e) => {
-      const action = el.getAttribute('data-action');
-      const deckId = el.getAttribute('data-deck-id');
-      const deck = decks.find(d => d.id === deckId);
-      if (!deck) return;
-
-      if (action === 'study') {
-        store.setState('activeDeck', deck);
-        router.navigate(`#/flashcards/study?id=${deckId}`);
-      } else if (action === 'game') {
-        store.setState('activeDeck', deck);
-        router.navigate(`#/flashcards/game?id=${deckId}`);
-      } else if (action === 'edit') {
-        router.navigate(`#/flashcards/edit?id=${deckId}`);
-      } else if (action === 'delete') {
-        if (confirm(`Are you sure you want to delete "${deck.title}"?`)) {
-          await storage.table('flashcards').delete(deckId);
-          toast.info('Deck deleted.');
-          await renderLibrary(container, router);
-        }
-      } else if (action === 'export-csv') {
-        const csvStr = Exporter.toCSV(deck.cards);
-        downloadFile(csvStr, `${deck.title.replace(/\s+/g, '_')}.csv`, 'text/csv');
-      } else if (action === 'export-md') {
-        const mdStr = Exporter.toMarkdown(deck.cards, 'flashcards');
-        downloadFile(mdStr, `${deck.title.replace(/\s+/g, '_')}.md`, 'text/markdown');
-      } else if (action === 'share') {
-        openShareDialog(deck, 'flashcards');
-      }
-    });
-  });
+  await library.render(container);
 }
 
-function openShareDialog(dataObject, moduleType) {
-  const dialog = document.createElement('sl-dialog');
-  dialog.label = `Share ${dataObject.title || 'Lesson'}`;
-  dialog.innerHTML = `
-    <div class="space-y-4">
-      <p class="text-xs text-slate-500">
-        Generate a zero-server encrypted URL that unpacks directly in any browser.
-      </p>
-      <sl-input id="input-share-password" type="password" password-toggle placeholder="Optional Passphrase to encrypt"></sl-input>
-      <sl-button variant="primary" id="btn-gen-share" class="w-full">
-        <sl-icon slot="prefix" name="link-45deg"></sl-icon> Generate Share Link
-      </sl-button>
-      <div id="share-result-box" class="hidden space-y-2 pt-2">
-        <sl-input id="input-share-url" readonly></sl-input>
-        <div class="flex justify-end gap-2">
-          <sl-button size="small" id="btn-copy-url">Copy Link</sl-button>
-          <sl-button size="small" id="btn-dl-kbshare" variant="neutral">Download .kbshare</sl-button>
-        </div>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(dialog);
-  dialog.show();
+export function exportPrintableStudyGuidePDF(deck) {
+  if (typeof jsPDFClass === 'undefined') {
+    toast.danger('PDF generator is not available.');
+    return;
+  }
 
-  const pwInput = dialog.querySelector('#input-share-password');
-  const genBtn = dialog.querySelector('#btn-gen-share');
-  const resBox = dialog.querySelector('#share-result-box');
-  const urlInput = dialog.querySelector('#input-share-url');
-  const copyBtn = dialog.querySelector('#btn-copy-url');
-  const dlBtn = dialog.querySelector('#btn-dl-kbshare');
+  const doc = new jsPDFClass({ orientation: 'portrait', unit: 'pt', format: 'letter' });
 
-  let lastPayload = null;
+  // Header Banner
+  doc.setFillColor(37, 99, 235); // Blue 600
+  doc.rect(0, 0, 612, 65, 'F');
 
-  genBtn?.addEventListener('click', async () => {
-    genBtn.setAttribute('loading', '');
-    try {
-      const pass = pwInput.value;
-      lastPayload = await CryptoShareEngine.createSharePayload(moduleType, dataObject, pass);
-      urlInput.value = lastPayload.url;
-      resBox.classList.remove('hidden');
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(16);
+  doc.text(deck.title || 'Flashcards Study Guide', 40, 38);
 
-      if (lastPayload.exceedsUrlLimit) {
-        toast.warning('Payload exceeds 2,048 chars! .kbshare file download is recommended for LMS embeds.');
-      }
-    } catch (err) {
-      console.error('Share generation error:', err);
-      toast.danger('Could not generate share link.');
-    } finally {
-      genBtn.removeAttribute('loading');
+  doc.setFontSize(10);
+  doc.text(`Printable Study Sheet & Folding Cards • ${deck.cards?.length || 0} Terms`, 40, 52);
+
+  const tableData = (deck.cards || []).map((c, i) => {
+    const fText = typeof c.front === 'string' ? c.front : (c.front?.text || '');
+    const bText = typeof c.back === 'string' ? c.back : (c.back?.text || '');
+    return [`#${i + 1}`, fText, bText];
+  });
+
+  autoTable(doc, {
+    startY: 85,
+    margin: { left: 40, right: 40 },
+    head: [['#', 'Front (Question / Prompt)', 'Back (Answer / Explanation)']],
+    body: tableData,
+    headStyles: {
+      fillColor: [241, 245, 249],
+      textColor: [30, 41, 59],
+      fontStyle: 'bold'
+    },
+    styles: {
+      fontSize: 9,
+      cellPadding: 8,
+      overflow: 'linebreak'
+    },
+    columnStyles: {
+      0: { cellWidth: 30, halign: 'center' },
+      1: { cellWidth: 240 },
+      2: { cellWidth: 260 }
     }
   });
 
-  copyBtn?.addEventListener('click', () => {
-    navigator.clipboard.writeText(urlInput.value).then(() => {
-      toast.success('Share link copied to clipboard!');
-    });
-  });
-
-  dlBtn?.addEventListener('click', () => {
-    if (lastPayload) {
-      CryptoShareEngine.downloadKbShareFile(lastPayload.rawFileContent, `${(dataObject.title || 'lesson').replace(/\s+/g, '_')}.kbshare`);
-    }
-  });
-
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  const filename = `${(deck.title || 'study_guide').replace(/[^a-zA-Z0-9_-]/g, '_')}_study_sheet.pdf`;
+  doc.save(filename);
+  toast.success('Study Guide PDF downloaded!');
 }
 
-function downloadFile(content, filename, mimeType) {
-  const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    a.remove();
-    URL.revokeObjectURL(url);
-  }, 100);
+async function seedSampleDeck() {
+  const sampleDeck = {
+    version: 1,
+    id: generateUUID(),
+    title: 'STEM Fundamentals: Chemistry & Physics',
+    description: 'Core equations and laws across physical chemistry and classical mechanics.',
+    updated_at: new Date().toISOString(),
+    gamification_stats: { high_score: 0, longest_streak: 0 },
+    cards: [
+      {
+        id: generateUUID(),
+        type: 'text',
+        front: { text: 'What is the Henderson-Hasselbalch equation for buffer pH?', ttsLang: 'en-US' },
+        back: { text: '$$pH = pK_a + \\log\\left(\\frac{[A^-]}{[HA]}\\right)$$\nRelates the pH of a chemical solution to the acid dissociation constant ($K_a$).', ttsLang: 'en-US' },
+        fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
+      },
+      {
+        id: generateUUID(),
+        type: 'text',
+        front: 'What is the balanced equation for cellular respiration?',
+        back: '$$\\ce{C6H12O6 + 6O2 -> 6CO2 + 6H2O + 36ATP}$$\nGlucose oxidized in the presence of oxygen yielding carbon dioxide, water, and ATP energy.',
+        fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
+      },
+      {
+        id: generateUUID(),
+        type: 'text',
+        front: "What is Newton's Second Law of Motion?",
+        back: '$$\\vec{F} = m\\vec{a}$$\nThe net force acting on an object is equal to the product of its inertial mass and acceleration vector.',
+        fsrs: { state: 0, difficulty: 0, stability: 0, due: new Date().toISOString(), reps: 0, lapses: 0 }
+      }
+    ]
+  };
+
+  // Check if legacy plain string cards need normalization
+  sampleDeck.cards = sampleDeck.cards.map(c => ({
+    ...c,
+    front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : c.front,
+    back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : c.back
+  }));
+
+  await storage.table('flashcards').put(sampleDeck);
 }
 
 export default renderFlashcardsView;

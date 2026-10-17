@@ -206,6 +206,46 @@ export class SketchCanvas {
   toDataURL() {
     return this.canvas.toDataURL('image/png');
   }
+
+  /**
+   * Static helper to render strokes to any read-only canvas element
+   */
+  static renderStrokesToCanvas(canvas, strokes) {
+    if (!canvas || !Array.isArray(strokes) || strokes.length === 0) return;
+    const ctx = canvas.getContext ? canvas.getContext('2d') : null;
+    if (!ctx) return;
+
+    const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1;
+    const rect = canvas.getBoundingClientRect();
+    const width = rect.width || canvas.width || 300;
+    const height = rect.height || canvas.height || 180;
+
+    canvas.width = width * dpr;
+    canvas.height = height * dpr;
+
+    ctx.save();
+    if (ctx.resetTransform) ctx.resetTransform();
+    ctx.scale((width * dpr) / 1000, (height * dpr) / 600);
+    ctx.clearRect(0, 0, 1000, 600);
+
+    for (const stroke of strokes) {
+      if (!stroke.points || stroke.points.length === 0) continue;
+      ctx.save();
+      ctx.strokeStyle = stroke.mode === 'eraser' ? '#ffffff' : (stroke.color || '#2563eb');
+      ctx.lineWidth = stroke.size || 4;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0][0], stroke.points[0][1]);
+      for (let i = 1; i < stroke.points.length; i++) {
+        ctx.lineTo(stroke.points[i][0], stroke.points[i][1]);
+      }
+      ctx.stroke();
+      ctx.restore();
+    }
+    ctx.restore();
+  }
 }
 
 export default SketchCanvas;

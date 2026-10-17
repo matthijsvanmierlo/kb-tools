@@ -1,4 +1,5 @@
 import { Sanitizer } from '../../core/sanitizer.js';
+import { checkChoiceAnswer, checkKeywords } from './secure.js';
 
 /**
  * 250ms Playhead Gatekeeper & Anti-Scrub Enforcement (KB-VID-001)
@@ -124,6 +125,7 @@ export class VideoGatekeeper {
             maxPoints: 1,
             studentAnswer: 'Viewed Note',
             isCorrect: true,
+            ...(this.secure ? { earnedPoints: 0, maxPoints: 0 } : {}),
             latencyMs: Math.round(performance.now() - startTime)
           });
         }
@@ -174,7 +176,7 @@ export class VideoGatekeeper {
       const continueBtn = dialog.querySelector('#btn-continue-after-feedback');
       const feedbackBox = dialog.querySelector('#checkpoint-feedback');
 
-      submitBtn?.addEventListener('click', () => {
+      submitBtn?.addEventListener('click', async () => {
         const checkedInputs = Array.from(dialog.querySelectorAll('input[name="cp-option"]:checked'));
         if (checkedInputs.length === 0) {
           return;
@@ -183,7 +185,12 @@ export class VideoGatekeeper {
         const selectedIds = checkedInputs.map(i => i.value);
         let isCorrect = false;
 
-        if (isMulti) {
+        if (this.secure) {
+          // Student-safe payload: compare salted hashes (null when instant feedback is off)
+          submitBtn.loading = true;
+          isCorrect = await checkChoiceAnswer(checkpoint, selectedIds, this.secure.salt);
+          submitBtn.loading = false;
+        } else if (isMulti) {
           const correctIds = options.filter(o => o.is_correct).map(o => o.id);
           isCorrect = correctIds.length === selectedIds.length && correctIds.every(id => selectedIds.includes(id));
         } else {
@@ -196,7 +203,10 @@ export class VideoGatekeeper {
         continueBtn.classList.remove('hidden');
 
         feedbackBox.classList.remove('hidden');
-        if (isCorrect) {
+        if (isCorrect === null) {
+          feedbackBox.className = 'p-3 rounded-lg text-xs bg-slate-50 border border-slate-200 text-slate-700';
+          feedbackBox.innerHTML = '<strong>Answer saved.</strong> Your teacher will check it.';
+        } else if (isCorrect) {
           feedbackBox.className = 'p-3 rounded-lg text-xs bg-emerald-50 border border-emerald-200 text-emerald-800';
           feedbackBox.innerHTML = `<strong>Correct!</strong> Good job.`;
         } else {
@@ -245,14 +255,19 @@ export class VideoGatekeeper {
 
       dialog.addEventListener('sl-request-close', (e) => e.preventDefault());
 
-      dialog.querySelector('#btn-submit-open-response')?.addEventListener('click', () => {
+      dialog.querySelector('#btn-submit-open-response')?.addEventListener('click', async () => {
         const text = dialog.querySelector('#textarea-open-answer').value.trim();
         if (!text) return;
 
         // Keyword auto-score check
         let isCorrect = true;
         let earned = checkpoint.points || 1;
-        if (checkpoint.keywords && checkpoint.keywords.length > 0) {
+        if (this.secure) {
+          const check = await checkKeywords(checkpoint, text, this.secure.salt);
+          // No keywords at all = completion credit; feedback off = unknown until the teacher grades
+          isCorrect = check !== null ? check : (checkpoint.auto_graded === false ? true : null);
+          earned = isCorrect ? (checkpoint.points || 1) : 0;
+        } else if (checkpoint.keywords && checkpoint.keywords.length > 0) {
           const lower = text.toLowerCase();
           const matchCount = checkpoint.keywords.filter(kw => lower.includes(kw.toLowerCase())).length;
           isCorrect = matchCount > 0;

@@ -26,11 +26,60 @@ export class StorageManager {
       binary_blobs: 'id, mime_type, size_bytes'
     });
 
+    this.db.version(2).stores({
+      flashcards: 'id, title, class_id, updated_at',
+      timelines: 'id, title, class_id, updated_at',
+      video_assessments: 'id, title, class_id, updated_at',
+      gradebook_courses: 'id, name, section, academic_year, updated_at',
+      gradebook_students: 'id, course_id, student_id, full_name',
+      gradebook_assignments: 'id, course_id, term_id, category_id, due_date',
+      gradebook_grades: '[student_id+assignment_id], course_id, student_id, assignment_id, status',
+      gradebook_rubrics: 'id, course_id, title',
+      app_metadata: 'key',
+      binary_blobs: 'id, mime_type, size_bytes'
+    }).upgrade(async tx => {
+      // Normalize legacy flashcard items where front/back were plain strings
+      await tx.table('flashcards').toCollection().modify(deck => {
+        deck.class_id = deck.class_id || null;
+        if (Array.isArray(deck.cards)) {
+          deck.cards = deck.cards.map(c => ({
+            ...c,
+            front: typeof c.front === 'string'
+              ? { text: c.front, ttsLang: c.tts_lang || 'en-US', sketchData: c.sketch_data || undefined }
+              : c.front,
+            back: typeof c.back === 'string'
+              ? { text: c.back, ttsLang: c.tts_lang || 'en-US', sketchData: undefined }
+              : c.back
+          }));
+        }
+      });
+      await tx.table('timelines').toCollection().modify(t => {
+        t.class_id = t.class_id || null;
+        t.updated_at = t.updated_at || new Date().toISOString();
+      });
+      await tx.table('video_assessments').toCollection().modify(v => {
+        v.class_id = v.class_id || null;
+        v.updated_at = v.updated_at || new Date().toISOString();
+      });
+      await tx.table('gradebook_courses').toCollection().modify(c => {
+        c.color = c.color || '#2563eb';
+        c.section = c.section || 'Section 1';
+        c.updated_at = c.updated_at || new Date().toISOString();
+      });
+    });
+
+    // v3: Assignments module (auto-graded question sets) and encrypted student submissions
+    this.db.version(3).stores({
+      assignments: 'id, title, class_id, updated_at',
+      assignment_submissions: 'id, assignment_id, student_id, submitted_at'
+    });
+
     // Initialize in-memory tables for ephemeral mode
     const tables = [
       'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
       'gradebook_students', 'gradebook_assignments', 'gradebook_grades',
-      'gradebook_rubrics', 'app_metadata', 'binary_blobs'
+      'gradebook_rubrics', 'assignments', 'assignment_submissions',
+      'app_metadata', 'binary_blobs'
     ];
     for (const t of tables) {
       this.memoryStore.set(t, new Map());
@@ -353,7 +402,7 @@ export class StorageManager {
     const tables = [
       'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
       'gradebook_students', 'gradebook_assignments', 'gradebook_grades',
-      'gradebook_rubrics', 'app_metadata'
+      'gradebook_rubrics', 'assignments', 'assignment_submissions', 'app_metadata'
     ];
 
     const snapshot = {

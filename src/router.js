@@ -2,6 +2,8 @@ import { store } from './state/store.js';
 import { CryptoShareEngine } from './core/crypto-share.js';
 import { storage } from './core/storage.js';
 import { toast } from './utils/toast.js';
+import { Sanitizer } from './core/sanitizer.js';
+import { normalizeAccessCode } from './core/access-codes.js';
 
 /**
  * Hash-based Single Page App Router
@@ -13,6 +15,8 @@ export class Router {
     this.currentPath = '';
     this.currentParams = {};
     this.activeCleanup = null;
+    this._navToken = 0;
+    this._lastViewKey = null;
 
     if (typeof window !== 'undefined') {
       window.addEventListener('hashchange', () => this.handleRoute());
@@ -43,9 +47,9 @@ export class Router {
    * Parse the current hash and query parameters
    */
   parseHash() {
-    const rawHash = (typeof window !== 'undefined' ? window.location.hash : '') || '#/flashcards';
+    const rawHash = (typeof window !== 'undefined' ? window.location.hash : '') || '#/';
     const [pathPart, queryPart] = rawHash.split('?');
-    const path = pathPart.toLowerCase() || '#/flashcards';
+    const path = pathPart.toLowerCase() || '#/';
 
     const params = {};
     if (queryPart) {
@@ -62,8 +66,8 @@ export class Router {
    * Handle the current route change
    */
   async handleRoute() {
-    if (typeof window !== 'undefined' && !window.location.hash) {
-      window.location.hash = '#/flashcards';
+    if (typeof window !== 'undefined' && (!window.location.hash || window.location.hash === '#')) {
+      window.location.hash = '#/';
       return;
     }
 
@@ -85,6 +89,25 @@ export class Router {
       return;
     }
 
+    const container = typeof document !== 'undefined' ? document.getElementById('app-view-container') : null;
+    const navToken = ++this._navToken;
+    const isNewView = this._lastViewKey !== this._viewKey(path, params);
+    const reduceMotion = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+    // Fade out the outgoing view before swapping content
+    if (container && isNewView && container.childElementCount > 0 && !reduceMotion) {
+      container.classList.remove('kb-view-enter');
+      container.classList.add('kb-view-exit');
+      await new Promise(resolve => setTimeout(resolve, 110));
+      if (navToken !== this._navToken) return;
+    }
+    this._setProgress(true);
+
+    // Dialogs and drawers live on <body>, outside the view; close them when leaving the view
+    if (isNewView && typeof document !== 'undefined') {
+      document.querySelectorAll('body > sl-dialog, body > sl-drawer').forEach(el => el.remove());
+    }
+
     // Call active view cleanup if registered
     if (typeof this.activeCleanup === 'function') {
       try {
@@ -96,27 +119,61 @@ export class Router {
     }
 
     // Match route handler
-    const handler = this.routes[path] || this.routes['#/flashcards'];
-    if (handler) {
-      const container = document.getElementById('app-view-container');
-      if (container) {
-        try {
-          const cleanup = await handler(params, this, container);
-          if (typeof cleanup === 'function') {
-            this.activeCleanup = cleanup;
-          }
-        } catch (err) {
-          console.error(`Route error in ${path}:`, err);
-          container.innerHTML = `
-            <div class="p-8 max-w-xl mx-auto text-center space-y-4">
-              <sl-icon name="exclamation-octagon" class="text-4xl text-red-500"></sl-icon>
-              <h2 class="text-xl font-bold text-slate-800">Error Loading View</h2>
-              <p class="text-sm text-slate-600">${err.message}</p>
-              <sl-button variant="primary" onclick="window.location.hash='#/flashcards'">Return Home</sl-button>
-            </div>
-          `;
+    const handler = this.routes[path] || (path === '#/home' ? this.routes['#/'] : null) || this.routes['#/'] || this.routes['#/flashcards'];
+    if (handler && container) {
+      try {
+        const cleanup = await handler(params, this, container);
+        if (typeof cleanup === 'function') {
+          this.activeCleanup = cleanup;
+        }
+      } catch (err) {
+        console.error(`Route error in ${path}:`, err);
+        container.innerHTML = `
+          <div class="p-8 max-w-xl mx-auto text-center space-y-4 bg-white rounded-2xl border border-slate-200 shadow-sm mt-8">
+            <sl-icon name="exclamation-octagon" class="text-4xl text-red-500"></sl-icon>
+            <h2 class="text-xl font-bold text-slate-800">Error Loading View</h2>
+            <p class="text-sm text-slate-600">${Sanitizer.escapeHTML(err.message)}</p>
+            <sl-button variant="primary" onclick="window.location.hash='#/'">Return Home</sl-button>
+          </div>
+        `;
+      }
+    }
+
+    if (navToken !== this._navToken) return;
+    this._setProgress(false);
+
+    if (container) {
+      container.classList.remove('kb-view-exit');
+      if (isNewView) {
+        this._lastViewKey = this._viewKey(path, params);
+        if (!reduceMotion) {
+          container.classList.remove('kb-view-enter');
+          void container.offsetWidth; // restart animation
+          container.classList.add('kb-view-enter');
+          container.addEventListener('animationend', () => container.classList.remove('kb-view-enter'), { once: true });
+        }
+        if (typeof window.scrollTo === 'function') {
+          try { window.scrollTo({ top: 0, behavior: 'instant' }); } catch (e) { window.scrollTo(0, 0); }
         }
       }
+    }
+  }
+
+  /** Views are distinguished by path plus the project id they display */
+  _viewKey(path, params = {}) {
+    return `${path}|${params.id || ''}`;
+  }
+
+  _setProgress(active) {
+    if (typeof document === 'undefined') return;
+    const bar = document.getElementById('kb-route-progress');
+    if (!bar) return;
+    clearTimeout(this._progressTimer);
+    if (active) {
+      // Only show for loads that take a noticeable moment
+      this._progressTimer = setTimeout(() => bar.classList.add('is-active'), 120);
+    } else {
+      bar.classList.remove('is-active');
     }
   }
 
@@ -164,12 +221,12 @@ export class Router {
           </div>
           <div>
             <h3 class="font-bold text-slate-800 text-lg">Protected Educational Content</h3>
-            <p class="text-xs text-slate-500">This lesson is encrypted with AES-256. Enter the passphrase to unlock.</p>
+            <p class="text-xs text-slate-500">This content is encrypted with AES-256. Enter the access code or passphrase your teacher gave you.</p>
           </div>
         </div>
 
         <div class="space-y-1">
-          <sl-input id="input-share-passphrase" type="password" password-toggle placeholder="Passphrase or Student ID" autofocus>
+          <sl-input id="input-share-passphrase" type="password" password-toggle placeholder="Access code or passphrase" autofocus>
             <sl-icon name="key" slot="prefix"></sl-icon>
           </sl-input>
           <div id="decrypt-error-msg" class="text-xs text-red-600 font-medium hidden" aria-live="assertive"></div>
@@ -200,7 +257,12 @@ export class Router {
 
       submitBtn.setAttribute('loading', '');
       try {
-        const unpacked = await CryptoShareEngine.unpackSharePayload(dParam, true, passphrase);
+        // Access codes are printed as "K7M2-QX9P" but stored without punctuation; accept either
+        const normalized = normalizeAccessCode(passphrase);
+        const unpacked = await CryptoShareEngine.unpackSharePayload(dParam, true, passphrase)
+          .catch(err => (normalized && normalized !== passphrase
+            ? CryptoShareEngine.unpackSharePayload(dParam, true, normalized)
+            : Promise.reject(err)));
         dialog.remove();
         toast.success('Lesson unlocked successfully!');
         this._activateSharedPayload(unpacked);
@@ -243,7 +305,12 @@ export class Router {
     } else if (type === 'video') {
       store.setState('activeVideo', payload);
       this.navigate('#/video?kiosk=1');
-    } else if (type === 'gradebook' || type === 'student_grade_report') {
+    } else if (type === 'student_grade_report') {
+      // Read-only student view; never touches the teacher's gradebook state
+      this.navigate('#/report');
+    } else if (type === 'assignment') {
+      this.navigate('#/assignments/take');
+    } else if (type === 'gradebook') {
       store.setState('activeCourse', payload);
       this.navigate('#/gradebook');
     } else {
@@ -253,6 +320,12 @@ export class Router {
 
   _renderEphemeralBanner(type, payload) {
     if (typeof document === 'undefined') return;
+    // Grade reports and assignments are for viewing/answering only, never for copying into a library
+    // (Video links are student copies without answer keys, so saving them as a project makes no sense)
+    if (type === 'assignment' || type === 'student_grade_report' || (type === 'video' && payload?.secure)) {
+      document.getElementById('kb-ephemeral-banner')?.remove();
+      return;
+    }
 
     const existing = document.getElementById('kb-ephemeral-banner');
     if (existing) existing.remove();
@@ -317,12 +390,20 @@ export class Router {
     const announcer = document.getElementById('kb-aria-announcer');
     if (announcer) {
       const titles = {
+        '#/': 'KennisBoost Home Hub',
+        '#/home': 'KennisBoost Home Hub',
         '#/flashcards': 'Flashcards and Study Engine',
         '#/flashcards/study': 'Flashcard Review Session',
         '#/flashcards/game': 'Tower Defense Study Game',
         '#/timeline': 'Interactive Timeline Engine',
         '#/video': 'Video Assessment Platform',
         '#/gradebook': 'Browser Gradebook',
+        '#/assignments': 'Assignments',
+        '#/assignments/edit': 'Assignment Editor',
+        '#/assignments/take': 'Assignment',
+        '#/assignments/submissions': 'Assignment Submissions',
+        '#/report': 'Student Grade Report',
+        '#/guide': 'Teacher Guide and Recommended Workflows',
         '#/share': 'Shared Lesson Decryption'
       };
       announcer.textContent = `Navigated to ${titles[path] || path}`;
@@ -334,7 +415,14 @@ export class Router {
     const navLinks = document.querySelectorAll('[data-route-link]');
     navLinks.forEach(link => {
       const target = link.getAttribute('data-route-link');
-      if (path.startsWith(target)) {
+      let isActive = false;
+      if (target === '#/') {
+        isActive = (path === '#/' || path === '#/home' || path === '');
+      } else {
+        isActive = path.startsWith(target);
+      }
+
+      if (isActive) {
         link.classList.add('kb-nav-active');
         link.setAttribute('aria-current', 'page');
       } else {

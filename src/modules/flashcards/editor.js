@@ -3,11 +3,13 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { SketchCanvas } from './sketch-canvas.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { toast } from '../../utils/toast.js';
+import { RichTextEditor } from '../../components/rich-text-editor.js';
+import { ClassManager } from '../../components/class-manager.js';
 
 /**
  * Deck & Card Editor (KB-CARD-001)
- * 100ms debounced KaTeX/Mhchem live preview, TTS language config,
- * vector sketch pad modal, and card list management.
+ * Integrated RichTextEditor with KaTeX/Mhchem, Card Up/Down reordering,
+ * sidebar search, sketch preview badges, auto-save debounce, and class tagging.
  */
 export class FlashcardEditor {
   constructor(deck, options = {}) {
@@ -17,21 +19,52 @@ export class FlashcardEditor {
     this.onClose = options.onClose || null;
 
     this.selectedCardIndex = 0;
-    this.debounceTimer = null;
-    this.sketchInstance = null;
+    this.sidebarSearch = '';
+    this.autoSaveTimer = null;
+    this.frontEditor = null;
+    this.backEditor = null;
+    this.classes = [];
   }
 
-  mount(containerEl) {
+  async mount(containerEl) {
     this.container = containerEl;
+    this.classes = await ClassManager.getClasses();
+
     if (this.deck.cards.length === 0) {
       this.addCard();
     }
     this._render();
+    this._bindGlobalKeys();
     return () => this.unmount();
   }
 
   unmount() {
-    if (this.debounceTimer) clearTimeout(this.debounceTimer);
+    clearTimeout(this.autoSaveTimer);
+    if (this.frontEditor) this.frontEditor.destroy();
+    if (this.backEditor) this.backEditor.destroy();
+    if (this._keyHandler) window.removeEventListener('keydown', this._keyHandler);
+  }
+
+  _bindGlobalKeys() {
+    this._keyHandler = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        this.addCard();
+      } else if (e.altKey && e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (this.selectedCardIndex > 0) {
+          this.selectedCardIndex--;
+          this._render();
+        }
+      } else if (e.altKey && e.key === 'ArrowDown') {
+        e.preventDefault();
+        if (this.selectedCardIndex < this.deck.cards.length - 1) {
+          this.selectedCardIndex++;
+          this._render();
+        }
+      }
+    };
+    window.addEventListener('keydown', this._keyHandler);
   }
 
   addCard() {
@@ -54,6 +87,7 @@ export class FlashcardEditor {
     this.deck.cards.push(newCard);
     this.selectedCardIndex = this.deck.cards.length - 1;
     this._render();
+    this._scheduleAutoSave();
   }
 
   deleteCard(index) {
@@ -64,6 +98,7 @@ export class FlashcardEditor {
     this.deck.cards.splice(index, 1);
     this.selectedCardIndex = Math.max(0, index - 1);
     this._render();
+    this._scheduleAutoSave();
   }
 
   duplicateCard(index) {
@@ -83,86 +118,162 @@ export class FlashcardEditor {
     this.deck.cards.splice(index + 1, 0, copy);
     this.selectedCardIndex = index + 1;
     this._render();
+    this._scheduleAutoSave();
   }
 
-  async saveDeck() {
-    const titleInput = this.container.querySelector('#input-deck-title');
+  moveCard(fromIndex, toIndex) {
+    if (toIndex < 0 || toIndex >= this.deck.cards.length) return;
+    const item = this.deck.cards.splice(fromIndex, 1)[0];
+    this.deck.cards.splice(toIndex, 0, item);
+    this.selectedCardIndex = toIndex;
+    this._render();
+    this._scheduleAutoSave();
+  }
+
+  _scheduleAutoSave() {
+    const statusEl = this.container?.querySelector('#label-auto-save-status');
+    if (statusEl) statusEl.textContent = 'Unsaved changes...';
+
+    clearTimeout(this.autoSaveTimer);
+    this.autoSaveTimer = setTimeout(async () => {
+      await this.saveDeck(false);
+      if (statusEl) statusEl.textContent = 'Saved to browser';
+    }, 600);
+  }
+
+  async saveDeck(notify = true) {
+    const titleInput = this.container?.querySelector('#input-deck-title');
     if (titleInput && titleInput.value.trim()) {
       this.deck.title = titleInput.value.trim();
     }
+    const descInput = this.container?.querySelector('#input-deck-desc');
+    if (descInput) {
+      this.deck.description = descInput.value.trim();
+    }
+    const classSelect = this.container?.querySelector('#select-deck-class');
+    if (classSelect) {
+      this.deck.class_id = classSelect.value || null;
+    }
+
     this.deck.updated_at = new Date().toISOString();
 
     try {
       await storage.table('flashcards').put(this.deck);
-      toast.success('Deck saved successfully!');
-      if (typeof this.onSave === 'function') this.onSave(this.deck);
+      if (notify) {
+        toast.success('Deck saved successfully!');
+        if (typeof this.onSave === 'function') this.onSave(this.deck);
+      }
     } catch (err) {
       console.error('Save deck error:', err);
-      toast.danger('Failed to save deck.');
+      if (notify) toast.danger('Failed to save deck.');
     }
   }
 
   _render() {
     const currentCard = this.deck.cards[this.selectedCardIndex] || this.deck.cards[0];
 
+    // Filter sidebar cards
+    const filteredCardIndices = this.deck.cards.map((c, i) => ({ card: c, originalIndex: i }))
+      .filter(({ card }) => {
+        if (!this.sidebarSearch) return true;
+        const q = this.sidebarSearch.toLowerCase();
+        const fText = typeof card.front === 'string' ? card.front : (card.front?.text || '');
+        const bText = typeof card.back === 'string' ? card.back : (card.back?.text || '');
+        return fText.toLowerCase().includes(q) || bText.toLowerCase().includes(q);
+      });
+
+    const safeTitle = Sanitizer.escapeHTML(this.deck.title || 'Untitled Flashcard Deck');
+    const safeDesc = Sanitizer.escapeHTML(this.deck.description || '');
+
     this.container.innerHTML = `
-      <div class="space-y-4">
-        <!-- Editor Header -->
-        <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3 bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
-          <div class="flex items-center gap-3 w-full sm:w-auto">
-            <button id="btn-editor-back" class="text-slate-500 hover:text-slate-800 p-1" title="Back to Decks">
-              <sl-icon name="arrow-left" class="text-lg"></sl-icon>
-            </button>
-            <sl-input id="input-deck-title" value="${Sanitizer.escapeHtml(this.deck.title)}" placeholder="Deck Title" size="medium" class="font-bold flex-1 sm:w-80"></sl-input>
+      <div class="space-y-4 max-w-7xl mx-auto">
+        <!-- Editor Header & Metadata Bar -->
+        <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+          <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div class="flex items-center gap-3 w-full sm:w-auto flex-1">
+              <button id="btn-editor-back" class="text-slate-500 hover:text-slate-800 p-1" title="Back to Decks">
+                <sl-icon name="arrow-left" class="text-lg"></sl-icon>
+              </button>
+              <sl-input id="input-deck-title" value="${safeTitle}" placeholder="Deck Title (e.g. AP Chemistry Unit 1)" size="medium" class="font-bold flex-1 max-w-md"></sl-input>
+              <sl-select id="select-deck-class" size="small" placeholder="Assign Class..." class="w-48" value="${Sanitizer.escapeHTML(this.deck.class_id || '')}">
+                <sl-option value="">No Class (General)</sl-option>
+                ${this.classes.map(c => `
+                  <sl-option value="${c.id}">${Sanitizer.escapeHTML(c.name)}</sl-option>
+                `).join('')}
+              </sl-select>
+            </div>
+
+            <div class="flex items-center gap-2 self-end sm:self-auto">
+              <span id="label-auto-save-status" class="text-xs text-slate-400 font-medium">Saved</span>
+              <sl-button variant="default" size="small" id="btn-add-card">
+                <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add Card
+              </sl-button>
+              <sl-button variant="primary" size="small" id="btn-save-deck">
+                <sl-icon slot="prefix" name="check-lg"></sl-icon> Save &amp; Return
+              </sl-button>
+            </div>
           </div>
-          <div class="flex items-center gap-2 self-end sm:self-auto">
-            <sl-button variant="default" id="btn-add-card">
-              <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add Card
-            </sl-button>
-            <sl-button variant="primary" id="btn-save-deck">
-              <sl-icon slot="prefix" name="check-lg"></sl-icon> Save Deck
-            </sl-button>
-          </div>
+
+          <sl-input id="input-deck-desc" value="${safeDesc}" placeholder="Optional deck description or learning objectives..." size="small"></sl-input>
         </div>
 
-        <!-- Main Editor Grid: Card Sidebar + Card Workspace -->
+        <!-- Main Workspace: Card Sidebar + Rich Text Editors -->
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
           <!-- Left: Card List Sidebar -->
-          <div class="lg:col-span-4 bg-white p-3 rounded-xl border border-slate-200 shadow-sm max-h-[700px] flex flex-col">
-            <div class="flex items-center justify-between pb-2 border-b text-xs font-semibold uppercase text-slate-500">
+          <div class="lg:col-span-4 bg-white p-3 rounded-2xl border border-slate-200 shadow-xs max-h-[720px] flex flex-col">
+            <div class="flex items-center justify-between pb-2 border-b border-slate-100 text-xs font-semibold text-slate-600">
               <span>Cards (${this.deck.cards.length})</span>
+              <span class="text-[10px] text-slate-400">Ctrl+Enter to add</span>
             </div>
-            <div class="overflow-y-auto space-y-2 py-2 flex-1" id="cards-nav-list">
-              ${this.deck.cards.map((c, i) => `
-                <div data-card-idx="${i}" class="p-2.5 rounded-lg border text-xs cursor-pointer transition-colors ${i === this.selectedCardIndex ? 'bg-blue-50 border-blue-500 text-blue-900 font-medium' : 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-700'} flex items-center justify-between">
-                  <div class="truncate flex-1 pr-2">
-                    <span class="font-bold text-slate-400 mr-1">#${i + 1}</span>
-                    <span>${Sanitizer.escapeHtml(c.front?.text || '(Empty Card)')}</span>
+
+            <div class="py-2">
+              <sl-input id="input-sidebar-search" placeholder="Filter cards..." size="small" clearable value="${Sanitizer.escapeHTML(this.sidebarSearch)}">
+                <sl-icon slot="prefix" name="search"></sl-icon>
+              </sl-input>
+            </div>
+
+            <div class="overflow-y-auto space-y-1.5 py-1 flex-1 pr-1" id="cards-nav-list">
+              ${filteredCardIndices.map(({ card: c, originalIndex: i }) => {
+                const isSelected = i === this.selectedCardIndex;
+                const frontStr = typeof c.front === 'string' ? c.front : (c.front?.text || '');
+                const safePreview = Sanitizer.escapeHTML(frontStr.trim() || '(Empty Card)');
+                const hasSketch = (c.front?.sketchData?.length > 0) || (c.back?.sketchData?.length > 0);
+
+                return `
+                  <div data-card-idx="${i}" class="p-2.5 rounded-xl border text-xs cursor-pointer transition-all ${isSelected ? 'bg-blue-50 border-blue-500 text-blue-900 font-semibold shadow-xs' : 'bg-slate-50/70 border-slate-200 hover:bg-slate-100 text-slate-700'} flex items-center justify-between">
+                    <div class="truncate flex-1 pr-2 flex items-center gap-1.5">
+                      <span class="text-slate-400 font-mono text-[11px]">#${i + 1}</span>
+                      <span class="truncate">${safePreview}</span>
+                      ${hasSketch ? `<span class="text-[10px] text-indigo-500" title="Contains Vector Drawing">✏</span>` : ''}
+                    </div>
+
+                    <div class="flex items-center gap-0.5">
+                      <button type="button" class="kb-icon-btn text-[11px]" data-move-up="${i}" title="Move Up" ${i === 0 ? 'disabled style="opacity:0.3;"' : ''}>↑</button>
+                      <button type="button" class="kb-icon-btn text-[11px]" data-move-down="${i}" title="Move Down" ${i === this.deck.cards.length - 1 ? 'disabled style="opacity:0.3;"' : ''}>↓</button>
+                      <button type="button" class="kb-icon-btn" data-dup-idx="${i}" title="Duplicate Card">
+                        <sl-icon name="files"></sl-icon>
+                      </button>
+                      <button type="button" class="kb-icon-btn text-red-500 hover:text-red-700" data-del-idx="${i}" title="Delete Card">
+                        <sl-icon name="trash"></sl-icon>
+                      </button>
+                    </div>
                   </div>
-                  <div class="flex items-center gap-1">
-                    <button data-dup-idx="${i}" class="text-slate-400 hover:text-blue-600 p-1" title="Duplicate Card">
-                      <sl-icon name="files"></sl-icon>
-                    </button>
-                    <button data-del-idx="${i}" class="text-slate-400 hover:text-red-600 p-1" title="Delete Card">
-                      <sl-icon name="trash"></sl-icon>
-                    </button>
-                  </div>
-                </div>
-              `).join('')}
+                `;
+              }).join('')}
             </div>
           </div>
 
-          <!-- Right: Active Card Editor & Live KaTeX Preview -->
+          <!-- Right: Card Authoring Workspace -->
           <div class="lg:col-span-8 space-y-4">
-            <!-- Front of Card -->
-            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
-              <div class="flex items-center justify-between border-b pb-2">
+            <!-- Front of Card Section -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+              <div class="flex items-center justify-between border-b border-slate-100 pb-2.5">
                 <span class="font-bold text-sm text-slate-800 flex items-center gap-2">
-                  <span class="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs">F</span>
-                  Front (Question / Prompt)
+                  <span class="w-6 h-6 rounded-lg bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold">F</span>
+                  Front (Prompt / Question)
                 </span>
                 <div class="flex items-center gap-2">
-                  <sl-select id="select-front-lang" size="small" value="${currentCard.front?.ttsLang || 'en-US'}" class="w-28">
+                  <sl-select id="select-front-lang" size="small" value="${currentCard.front?.ttsLang || 'en-US'}" class="w-40" aria-label="Front text-to-speech language">
                     <sl-option value="en-US">English (US)</sl-option>
                     <sl-option value="en-GB">English (UK)</sl-option>
                     <sl-option value="nl-NL">Dutch (NL)</sl-option>
@@ -171,34 +282,28 @@ export class FlashcardEditor {
                     <sl-option value="de-DE">German</sl-option>
                   </sl-select>
                   <sl-button size="small" id="btn-draw-front">
-                    <sl-icon slot="prefix" name="pen"></sl-icon> Sketch
+                    <sl-icon slot="prefix" name="pen"></sl-icon>
+                    ${currentCard.front?.sketchData?.length > 0 ? 'Edit Sketch' : 'Add Sketch'}
                   </sl-button>
+                  ${currentCard.front?.sketchData?.length > 0 ? `
+                    <button type="button" id="btn-remove-front-sketch" class="text-xs text-red-500 hover:text-red-700 underline">Remove Sketch</button>
+                  ` : ''}
                 </div>
               </div>
 
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label class="text-xs text-slate-500 font-medium mb-1 block">Markdown &amp; LaTeX ($$ ... $$)</label>
-                  <sl-textarea id="textarea-front" rows="4" value="${Sanitizer.escapeHtml(currentCard.front?.text || '')}" placeholder="Type question, e.g. What is $$H_2O$$?"></sl-textarea>
-                </div>
-                <div>
-                  <label class="text-xs text-slate-500 font-medium mb-1 block">Live Render Preview</label>
-                  <div id="preview-front" class="p-3 bg-slate-50 border rounded-lg min-h-[96px] text-sm overflow-y-auto max-h-36">
-                    ${Sanitizer.renderSTEMMarkdown(currentCard.front?.text || '')}
-                  </div>
-                </div>
-              </div>
+              <!-- Mount RichTextEditor for Front -->
+              <div id="front-editor-mount"></div>
             </div>
 
-            <!-- Back of Card -->
-            <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm space-y-3">
-              <div class="flex items-center justify-between border-b pb-2">
+            <!-- Back of Card Section -->
+            <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">
+              <div class="flex items-center justify-between border-b border-slate-100 pb-2.5">
                 <span class="font-bold text-sm text-slate-800 flex items-center gap-2">
-                  <span class="w-6 h-6 rounded-full bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs">B</span>
+                  <span class="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold">B</span>
                   Back (Answer / Explanation)
                 </span>
                 <div class="flex items-center gap-2">
-                  <sl-select id="select-back-lang" size="small" value="${currentCard.back?.ttsLang || 'en-US'}" class="w-28">
+                  <sl-select id="select-back-lang" size="small" value="${currentCard.back?.ttsLang || 'en-US'}" class="w-40" aria-label="Back text-to-speech language">
                     <sl-option value="en-US">English (US)</sl-option>
                     <sl-option value="en-GB">English (UK)</sl-option>
                     <sl-option value="nl-NL">Dutch (NL)</sl-option>
@@ -207,34 +312,61 @@ export class FlashcardEditor {
                     <sl-option value="de-DE">German</sl-option>
                   </sl-select>
                   <sl-button size="small" id="btn-draw-back">
-                    <sl-icon slot="prefix" name="pen"></sl-icon> Sketch
+                    <sl-icon slot="prefix" name="pen"></sl-icon>
+                    ${currentCard.back?.sketchData?.length > 0 ? 'Edit Sketch' : 'Add Sketch'}
                   </sl-button>
+                  ${currentCard.back?.sketchData?.length > 0 ? `
+                    <button type="button" id="btn-remove-back-sketch" class="text-xs text-red-500 hover:text-red-700 underline">Remove Sketch</button>
+                  ` : ''}
                 </div>
               </div>
 
-              <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div>
-                  <label class="text-xs text-slate-500 font-medium mb-1 block">Markdown &amp; LaTeX</label>
-                  <sl-textarea id="textarea-back" rows="4" value="${Sanitizer.escapeHtml(currentCard.back?.text || '')}" placeholder="Type answer, e.g. Water is a polar molecule..."></sl-textarea>
-                </div>
-                <div>
-                  <label class="text-xs text-slate-500 font-medium mb-1 block">Live Render Preview</label>
-                  <div id="preview-back" class="p-3 bg-slate-50 border rounded-lg min-h-[96px] text-sm overflow-y-auto max-h-36">
-                    ${Sanitizer.renderSTEMMarkdown(currentCard.back?.text || '')}
-                  </div>
-                </div>
-              </div>
+              <!-- Mount RichTextEditor for Back -->
+              <div id="back-editor-mount"></div>
             </div>
           </div>
         </div>
       </div>
     `;
 
+    // Initialize RichTextEditors
+    const frontText = typeof currentCard.front === 'string' ? currentCard.front : (currentCard.front?.text || '');
+    const backText = typeof currentCard.back === 'string' ? currentCard.back : (currentCard.back?.text || '');
+
+    if (this.frontEditor) this.frontEditor.destroy();
+    if (this.backEditor) this.backEditor.destroy();
+
+    this.frontEditor = new RichTextEditor({
+      initialValue: frontText,
+      placeholder: 'Type front question/prompt in Markdown or KaTeX ($$...$$)...',
+      mode: 'split',
+      minHeight: '130px',
+      onChange: (val) => {
+        if (typeof currentCard.front === 'string') currentCard.front = { text: val, ttsLang: 'en-US' };
+        else currentCard.front.text = val;
+        this._scheduleAutoSave();
+      }
+    });
+
+    this.backEditor = new RichTextEditor({
+      initialValue: backText,
+      placeholder: 'Type back answer/explanation in Markdown or KaTeX ($$\\ce{...}$$)...',
+      mode: 'split',
+      minHeight: '130px',
+      onChange: (val) => {
+        if (typeof currentCard.back === 'string') currentCard.back = { text: val, ttsLang: 'en-US' };
+        else currentCard.back.text = val;
+        this._scheduleAutoSave();
+      }
+    });
+
+    this.container.querySelector('#front-editor-mount')?.appendChild(this.frontEditor.element);
+    this.container.querySelector('#back-editor-mount')?.appendChild(this.backEditor.element);
+
     this._bindEditorEvents(currentCard);
   }
 
   _bindEditorEvents(currentCard) {
-    // Toolbar buttons
     this.container.querySelector('#btn-editor-back')?.addEventListener('click', () => {
       if (this.onClose) this.onClose();
     });
@@ -244,15 +376,43 @@ export class FlashcardEditor {
     });
 
     this.container.querySelector('#btn-save-deck')?.addEventListener('click', () => {
-      this.saveDeck();
+      this.saveDeck(true);
+    });
+
+    // Metadata inputs
+    this.container.querySelector('#input-deck-title')?.addEventListener('sl-input', () => this._scheduleAutoSave());
+    this.container.querySelector('#input-deck-desc')?.addEventListener('sl-input', () => this._scheduleAutoSave());
+    this.container.querySelector('#select-deck-class')?.addEventListener('sl-change', () => this._scheduleAutoSave());
+
+    // Sidebar Search
+    this.container.querySelector('#input-sidebar-search')?.addEventListener('sl-input', (e) => {
+      this.sidebarSearch = e.target.value.trim();
+      this._render();
     });
 
     // Card Selection
     this.container.querySelectorAll('[data-card-idx]').forEach(el => {
       el.addEventListener('click', (e) => {
-        if (e.target.closest('[data-dup-idx]') || e.target.closest('[data-del-idx]')) return;
+        if (e.target.closest('button')) return;
         this.selectedCardIndex = Number(el.getAttribute('data-card-idx'));
         this._render();
+      });
+    });
+
+    // Move Up / Move Down
+    this.container.querySelectorAll('[data-move-up]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = Number(btn.getAttribute('data-move-up'));
+        this.moveCard(idx, idx - 1);
+      });
+    });
+
+    this.container.querySelectorAll('[data-move-down]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = Number(btn.getAttribute('data-move-down'));
+        this.moveCard(idx, idx + 1);
       });
     });
 
@@ -274,46 +434,40 @@ export class FlashcardEditor {
       });
     });
 
-    // 100ms Debounced Front Input
-    const frontTextarea = this.container.querySelector('#textarea-front');
-    const frontPreview = this.container.querySelector('#preview-front');
-    frontTextarea?.addEventListener('sl-input', (e) => {
-      const val = e.target.value;
-      currentCard.front.text = val;
-      if (this.debounceTimer) clearTimeout(this.debounceTimer);
-      this.debounceTimer = setTimeout(() => {
-        frontPreview.innerHTML = Sanitizer.renderSTEMMarkdown(val);
-      }, 100);
-    });
-
-    // 100ms Debounced Back Input
-    const backTextarea = this.container.querySelector('#textarea-back');
-    const backPreview = this.container.querySelector('#preview-back');
-    backTextarea?.addEventListener('sl-input', (e) => {
-      const val = e.target.value;
-      currentCard.back.text = val;
-      if (this.debounceTimer) clearTimeout(this.debounceTimer);
-      this.debounceTimer = setTimeout(() => {
-        backPreview.innerHTML = Sanitizer.renderSTEMMarkdown(val);
-      }, 100);
-    });
-
     // TTS Language Selectors
     this.container.querySelector('#select-front-lang')?.addEventListener('sl-change', (e) => {
-      currentCard.front.ttsLang = e.target.value;
+      if (typeof currentCard.front === 'string') currentCard.front = { text: currentCard.front, ttsLang: e.target.value };
+      else currentCard.front.ttsLang = e.target.value;
+      this._scheduleAutoSave();
     });
 
     this.container.querySelector('#select-back-lang')?.addEventListener('sl-change', (e) => {
-      currentCard.back.ttsLang = e.target.value;
+      if (typeof currentCard.back === 'string') currentCard.back = { text: currentCard.back, ttsLang: e.target.value };
+      else currentCard.back.ttsLang = e.target.value;
+      this._scheduleAutoSave();
     });
 
-    // Sketch Canvas Modals
+    // Sketch Canvas Dialogs
     this.container.querySelector('#btn-draw-front')?.addEventListener('click', () => {
       this._openSketchDialog(currentCard, 'front');
     });
 
     this.container.querySelector('#btn-draw-back')?.addEventListener('click', () => {
       this._openSketchDialog(currentCard, 'back');
+    });
+
+    this.container.querySelector('#btn-remove-front-sketch')?.addEventListener('click', () => {
+      if (currentCard.front) currentCard.front.sketchData = null;
+      toast.info('Front sketch removed.');
+      this._render();
+      this._scheduleAutoSave();
+    });
+
+    this.container.querySelector('#btn-remove-back-sketch')?.addEventListener('click', () => {
+      if (currentCard.back) currentCard.back.sketchData = null;
+      toast.info('Back sketch removed.');
+      this._render();
+      this._scheduleAutoSave();
     });
   }
 
@@ -377,9 +531,14 @@ export class FlashcardEditor {
     dialog.querySelector('#btn-sketch-clear')?.addEventListener('click', () => sketch.clear());
 
     dialog.querySelector('#btn-sketch-save')?.addEventListener('click', () => {
+      if (typeof card[side] === 'string') {
+        card[side] = { text: card[side], ttsLang: 'en-US' };
+      }
       card[side].sketchData = sketch.getStrokes();
       toast.success('Sketch saved to card!');
       dialog.remove();
+      this._render();
+      this._scheduleAutoSave();
     });
 
     dialog.querySelector('#btn-sketch-cancel')?.addEventListener('click', () => dialog.remove());

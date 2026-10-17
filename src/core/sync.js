@@ -203,7 +203,7 @@ export class SyncManager {
       </div>
       <div slot="footer" class="flex gap-2 justify-end">
         <sl-button variant="default" id="btn-stale-dismiss">Dismiss</sl-button>
-        <sl-button variant="neutral" id="btn-stale-snooze">Remind Tomorrow</sl-button>
+        <sl-button variant="default" id="btn-stale-snooze">Remind Tomorrow</sl-button>
         <sl-button variant="primary" id="btn-stale-export">Export Backup</sl-button>
       </div>
     `;

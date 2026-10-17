@@ -17,6 +17,8 @@ const MIME_TYPES = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.ico': 'image/x-icon',
+  '.woff2': 'font/woff2',
+  '.mp4': 'video/mp4',
   '.kbr': 'application/octet-stream',
   '.kbshare': 'application/json'
 };

@@ -6,7 +6,22 @@
   <title>KennisBoost Tools | 100% Client-Side Educational Suite</title>
   <meta name="description" content="Local-first, zero-backend educational technology suite with Flashcards, Timeline Maker, Interactive Video, and Gradebook.">
   <link rel="manifest" href="manifest.json">
-  <meta name="theme-color" content="#2563eb">
+  <meta name="theme-color" content="#f6f8fb" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#0c1322" media="(prefers-color-scheme: dark)">
+  <link rel="preload" href="fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <!-- Apply saved theme before first paint to avoid a light flash in dark mode -->
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem('kb_theme_mode') || 'system';
+        var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        var c = document.documentElement.classList;
+        c.remove('sl-theme-light');
+        c.add(dark ? 'sl-theme-dark' : 'sl-theme-light');
+        if (t === 'projector') c.add('kb-theme-projector');
+      } catch (e) {}
+    })();
+  </script>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='16' font-weight='bold' fill='%23ffffff' text-anchor='middle'%3EKB%3C/text%3E%3C/svg%3E">
 
   <!-- Native ESM Import Map (MUST precede any module script per HTML spec) -->
@@ -33,6 +48,12 @@
   <script type="module">
     import { setBasePath } from 'https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/utilities/base-path.js';
     setBasePath('https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/');
+    // The autoloader only defines a component once it sees the tag in the DOM. Components the app
+    // creates in code and immediately calls methods on (dialog.show(), alert.toast()) are defined
+    // up front so those calls never hit an un-upgraded element.
+    ['dialog', 'drawer', 'alert', 'button'].forEach((name) => {
+      import(`https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/components/${name}/${name}.js`).catch(() => {});
+    });
   </script>
 
   <!-- KaTeX + Mhchem for STEM Notation -->
@@ -45,76 +66,116 @@
   <link rel="stylesheet" href="css/tailwind.output.css">
   <link rel="stylesheet" href="css/app.css">
 </head>
-<body class="bg-slate-50 text-slate-900 min-h-screen flex flex-col antialiased">
+<body class="min-h-screen flex flex-col">
   <!-- ARIA Live Announcer for Screen Readers -->
   <div id="kb-aria-announcer" class="sr-only" aria-live="polite"></div>
+  <a href="#app-view-container" class="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:rounded-lg focus:bg-white focus:shadow-lg">Skip to content</a>
+  <div id="kb-route-progress" class="kb-route-progress" aria-hidden="true"></div>
 
   <!-- App Header / Navigation Bar -->
-  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm" role="banner">
-    <div class="max-w-7xl mx-auto px-4 flex items-center justify-between h-16">
-      <!-- Brand & Title -->
-      <div class="flex items-center gap-3">
-        <a href="#/flashcards" class="flex items-center gap-2 text-blue-600 focus:outline-none" aria-label="KennisBoost Home">
-          <div class="w-9 h-9 rounded-lg bg-blue-600 text-white flex items-center justify-center font-bold text-lg shadow-sm">
-            KB
-          </div>
-          <div>
-            <span class="font-bold text-slate-900 text-lg tracking-tight">KennisBoost</span>
-            <span class="hidden sm:inline-block text-xs font-semibold px-2 py-0.5 ml-1.5 bg-blue-100 text-blue-700 rounded-full">Tools</span>
-          </div>
-        </a>
-      </div>
+  <header class="kb-header" role="banner">
+    <div class="kb-header-inner">
+      <!-- Brand -->
+      <a href="#/" class="kb-brand" aria-label="KennisBoost Tools home">
+        <span class="kb-brand-mark" aria-hidden="true">KB</span>
+        <span class="kb-brand-name hidden sm:inline">KennisBoost <span>Tools</span></span>
+      </a>
 
-      <!-- Navigation Tabs -->
-      <nav class="flex items-center gap-1 overflow-x-auto" role="navigation" aria-label="Main Navigation">
-        <a href="#/flashcards" data-route-link="#/flashcards" class="px-3 py-2 text-sm font-medium text-slate-600 hover:text-blue-600 rounded-md transition-colors flex items-center gap-1.5">
-          <sl-icon name="collection"></sl-icon>
+      <!-- Primary Navigation (bottom tab bar on small screens) -->
+      <nav class="kb-nav" aria-label="Main navigation">
+        <a href="#/" data-route-link="#/" class="kb-nav-link" title="Home">
+          <sl-icon name="house-door" aria-hidden="true"></sl-icon>
+          <span>Home</span>
+        </a>
+        <a href="#/flashcards" data-route-link="#/flashcards" class="kb-nav-link" title="Flashcards">
+          <sl-icon name="stack" aria-hidden="true"></sl-icon>
           <span>Flashcards</span>
         </a>
-        <a href="#/timeline" data-route-link="#/timeline" class="px-3 py-2 text-sm font-medium text-slate-600 hover:text-blue-600 rounded-md transition-colors flex items-center gap-1.5">
-          <sl-icon name="clock-history"></sl-icon>
+        <a href="#/timeline" data-route-link="#/timeline" class="kb-nav-link" title="Timeline">
+          <sl-icon name="bar-chart-steps" aria-hidden="true"></sl-icon>
           <span>Timeline</span>
         </a>
-        <a href="#/video" data-route-link="#/video" class="px-3 py-2 text-sm font-medium text-slate-600 hover:text-blue-600 rounded-md transition-colors flex items-center gap-1.5">
-          <sl-icon name="play-btn"></sl-icon>
-          <span>Video Assessment</span>
+        <a href="#/video" data-route-link="#/video" class="kb-nav-link" title="Video">
+          <sl-icon name="play-circle" aria-hidden="true"></sl-icon>
+          <span>Video</span>
         </a>
-        <a href="#/gradebook" data-route-link="#/gradebook" class="px-3 py-2 text-sm font-medium text-slate-600 hover:text-blue-600 rounded-md transition-colors flex items-center gap-1.5">
-          <sl-icon name="calculator"></sl-icon>
+        <a href="#/assignments" data-route-link="#/assignments" class="kb-nav-link" title="Assignments">
+          <sl-icon name="ui-checks" aria-hidden="true"></sl-icon>
+          <span>Assignments</span>
+        </a>
+        <a href="#/gradebook" data-route-link="#/gradebook" class="kb-nav-link" title="Gradebook">
+          <sl-icon name="journal-check" aria-hidden="true"></sl-icon>
           <span>Gradebook</span>
         </a>
       </nav>
 
-      <!-- Storage & Utilities Action Dock -->
-      <div class="flex items-center gap-2">
-        <!-- Auto-sync Status -->
-        <div id="sync-status-indicator" class="hidden sm:flex items-center px-2 py-1 bg-slate-100 rounded text-xs text-slate-600" title="Auto-Sync status">
-          <span class="text-xs text-slate-400">● Local Only</span>
-        </div>
+      <!-- Global Class Selector & Action Dock -->
+      <div class="kb-header-actions">
+        <div id="kb-nav-class-selector" class="hidden lg:block"></div>
 
-        <!-- Sync / Backup Dropdown -->
-        <sl-dropdown placement="bottom-end">
-          <sl-button slot="trigger" size="small" caret aria-label="Backup and Storage Options">
-            <sl-icon slot="prefix" name="shield-check"></sl-icon>
-            <span class="hidden sm:inline">Storage</span>
-          </sl-button>
+        <button type="button" id="btn-open-cmd-palette" class="kb-search-trigger hidden sm:inline-flex" title="Search and commands (Ctrl+K)" aria-label="Open command palette">
+          <sl-icon name="search" aria-hidden="true"></sl-icon>
+          <span class="hidden xl:inline">Search</span>
+          <kbd class="kb-kbd">Ctrl K</kbd>
+        </button>
+        <button type="button" id="btn-open-cmd-palette-mobile" class="kb-icon-btn sm:hidden" aria-label="Open command palette">
+          <sl-icon name="search"></sl-icon>
+        </button>
+
+        <a href="#/guide" data-route-link="#/guide" class="kb-icon-btn kb-guide-link" title="Teacher guide" aria-label="Teacher guide: recommended workflows">
+          <sl-icon name="signpost-split"></sl-icon>
+        </a>
+
+        <!-- Theme Switcher -->
+        <sl-dropdown placement="bottom-end" distance="6">
+          <button slot="trigger" type="button" class="kb-icon-btn" aria-label="Change theme" title="Theme">
+            <sl-icon id="icon-active-theme" name="circle-half"></sl-icon>
+          </button>
+          <sl-menu id="kb-theme-menu">
+            <sl-menu-item type="checkbox" value="light">
+              <sl-icon slot="prefix" name="sun"></sl-icon> Light
+            </sl-menu-item>
+            <sl-menu-item type="checkbox" value="dark">
+              <sl-icon slot="prefix" name="moon-stars"></sl-icon> Dark
+            </sl-menu-item>
+            <sl-menu-item type="checkbox" value="system">
+              <sl-icon slot="prefix" name="circle-half"></sl-icon> Match system
+            </sl-menu-item>
+            <sl-divider></sl-divider>
+            <sl-menu-item type="checkbox" value="projector">
+              <sl-icon slot="prefix" name="projector"></sl-icon> High-contrast projector
+            </sl-menu-item>
+          </sl-menu>
+        </sl-dropdown>
+
+        <!-- Storage / Backup Menu -->
+        <sl-dropdown placement="bottom-end" distance="6">
+          <button slot="trigger" type="button" class="kb-icon-btn" aria-label="Backup and storage options" title="Backup &amp; storage">
+            <sl-icon name="hdd-stack"></sl-icon>
+          </button>
           <sl-menu>
+            <sl-menu-label>Backup &amp; storage</sl-menu-label>
             <sl-menu-item id="menu-btn-configure-sync">
-              <sl-icon slot="prefix" name="folder2-open"></sl-icon>
-              Set Auto-Sync File...
+              <sl-icon slot="prefix" name="arrow-repeat"></sl-icon>
+              Set auto-sync file&hellip;
             </sl-menu-item>
             <sl-menu-item id="menu-btn-export-backup">
               <sl-icon slot="prefix" name="download"></sl-icon>
-              Export JSON Backup
+              Export JSON backup
             </sl-menu-item>
             <sl-menu-item id="menu-btn-import-backup">
               <sl-icon slot="prefix" name="upload"></sl-icon>
-              Restore JSON Backup...
+              Restore JSON backup&hellip;
             </sl-menu-item>
             <sl-divider></sl-divider>
             <sl-menu-item id="menu-btn-storage-info">
               <sl-icon slot="prefix" name="info-circle"></sl-icon>
-              Storage Quota & Info
+              Storage quota &amp; info
+            </sl-menu-item>
+            <sl-menu-item id="menu-btn-keyboard-shortcuts">
+              <sl-icon slot="prefix" name="keyboard"></sl-icon>
+              Keyboard shortcuts
+              <span slot="suffix" class="kb-kbd">?</span>
             </sl-menu-item>
           </sl-menu>
         </sl-dropdown>
@@ -125,21 +186,20 @@
   </header>
 
   <!-- Main Dynamic SPA View Container -->
-  <main id="app-view-container" class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6" role="main">
+  <main id="app-view-container" class="kb-main" role="main" tabindex="-1">
     <!-- Rendered dynamically by Router -->
   </main>
 
   <!-- Global Application Footer -->
-  <footer class="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500 no-print" role="contentinfo">
-    <div class="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-2">
+  <footer class="kb-footer no-print" role="contentinfo">
+    <div class="kb-footer-inner">
       <div>
-        <strong>KennisBoost Tools</strong> &mdash; 100% Client-Side Educational Suite. Zero cloud dependency.
+        <strong class="text-slate-700">KennisBoost Tools</strong> &mdash; everything stays on this device. No accounts, no cloud.
       </div>
-      <div class="flex items-center gap-4 text-slate-400">
-        <span>WCAG 2.1 AA Compliant</span>
-        <span>•</span>
-        <span>AES-256 / PBKDF2</span>
-        <span>•</span>
+      <a href="#/guide" class="font-medium text-blue-600 hover:underline">Teacher guide &amp; recommended workflows</a>
+      <div class="kb-footer-tags">
+        <span>WCAG 2.1 AA</span>
+        <span>AES-256 sharing</span>
         <span>FSRS v4</span>
       </div>
     </div>
