@@ -271,7 +271,7 @@ export class ClassManager {
     const activeClass = classes.find(c => c.id === activeId);
 
     const safeLabel = activeClass ? Sanitizer.escapeHTML(activeClass.name) : 'All Classes';
-    const activeColor = activeClass?.color || '#64748b';
+    const activeColor = Sanitizer.safeColor(activeClass?.color, '#64748b');
 
     container.innerHTML = `
       <sl-dropdown id="kb-global-class-dropdown" placement="bottom-start">
@@ -286,8 +286,8 @@ export class ClassManager {
           </sl-menu-item>
           <sl-divider></sl-divider>
           ${classes.map(c => `
-            <sl-menu-item value="${c.id}" class="${c.id === activeId ? 'font-bold text-blue-600' : ''}">
-              <span slot="prefix" class="w-2 h-2 rounded-full" style="background-color: ${c.color || '#2563eb'};"></span>
+            <sl-menu-item value="${Sanitizer.escapeHTML(c.id)}" class="${c.id === activeId ? 'font-bold text-blue-600' : ''}">
+              <span slot="prefix" class="w-2 h-2 rounded-full" style="background-color: ${Sanitizer.safeColor(c.color, '#2563eb')};"></span>
               ${Sanitizer.escapeHTML(c.name)} ${c.section ? `<span class="text-[10px] text-slate-400 ml-1">(${Sanitizer.escapeHTML(c.section)})</span>` : ''}
             </sl-menu-item>
           `).join('')}
@@ -374,7 +374,7 @@ export class ClassManager {
               return `
                 <div class="flex items-center justify-between p-3 rounded-xl border border-slate-200 ${isArchived ? 'bg-slate-50 opacity-75' : 'bg-white'} hover:border-slate-300 shadow-xs transition-all">
                   <div class="flex items-center gap-3 min-w-0 flex-1">
-                    <div class="w-3.5 h-10 rounded-full flex-shrink-0" style="background-color: ${c.color || '#2563eb'};"></div>
+                    <div class="w-3.5 h-10 rounded-full flex-shrink-0" style="background-color: ${Sanitizer.safeColor(c.color, '#2563eb')};"></div>
                     <div class="min-w-0">
                       <div class="text-sm font-semibold text-slate-900 flex items-center gap-2">
                         <span class="truncate">${safeName}</span>
@@ -391,13 +391,13 @@ export class ClassManager {
                     </div>
                   </div>
                   <div class="flex items-center gap-1 flex-shrink-0 ml-2">
-                    <sl-button size="small" variant="default" data-action="gradebook" data-id="${c.id}" title="Open Gradebook">
+                    <sl-button size="small" variant="default" data-action="gradebook" data-id="${Sanitizer.escapeHTML(c.id)}" title="Open Gradebook">
                       <sl-icon name="journal-bookmark"></sl-icon>
                     </sl-button>
-                    <sl-button size="small" variant="default" data-action="roster" data-id="${c.id}" title="Manage Roster">
+                    <sl-button size="small" variant="default" data-action="roster" data-id="${Sanitizer.escapeHTML(c.id)}" title="Manage Roster">
                       <sl-icon name="people"></sl-icon>
                     </sl-button>
-                    <sl-button size="small" variant="default" data-action="settings" data-id="${c.id}" title="Class Settings">
+                    <sl-button size="small" variant="default" data-action="settings" data-id="${Sanitizer.escapeHTML(c.id)}" title="Class Settings">
                       <sl-icon name="gear"></sl-icon>
                     </sl-button>
 
@@ -405,7 +405,7 @@ export class ClassManager {
                       <button slot="trigger" type="button" class="p-1.5 rounded text-slate-400 hover:text-slate-600 hover:bg-slate-100 cursor-pointer" aria-label="More class actions">
                         <sl-icon name="three-dots-vertical"></sl-icon>
                       </button>
-                      <sl-menu class="class-more-menu" data-id="${c.id}">
+                      <sl-menu class="class-more-menu" data-id="${Sanitizer.escapeHTML(c.id)}">
                         <sl-menu-item value="edit">
                           <sl-icon slot="prefix" name="pencil"></sl-icon> Edit Details...
                         </sl-menu-item>
@@ -508,12 +508,12 @@ export class ClassManager {
             });
           } else if (val === 'clone-next-year') {
             const cloned = await this.cloneClassForNextYear(id);
-            toast.success(`Cloned "${Sanitizer.escapeHTML(cloned.name)}" for ${cloned.academic_year}!`);
+            toast.success(`Cloned "${cloned.name}" for ${cloned.academic_year}!`);
             await renderModalContent();
             if (onUpdated) onUpdated();
           } else if (val === 'clone-section') {
             const cloned = await this.cloneClassSection(id);
-            toast.success(`Cloned section to "${Sanitizer.escapeHTML(cloned.section)}"!`);
+            toast.success(`Cloned section to "${cloned.section}"!`);
             await renderModalContent();
             if (onUpdated) onUpdated();
           } else if (val === 'archive') {
@@ -631,7 +631,7 @@ export class ClassManager {
         color: activeColor
       });
 
-      toast.success(`Class "${Sanitizer.escapeHTML(name)}" saved!`);
+      toast.success(`Class "${name}" saved!`);
       dialog.hide();
       if (onSaved) onSaved();
     });

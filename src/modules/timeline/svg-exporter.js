@@ -98,7 +98,7 @@ export class TimelineSVGExporter {
       const laneY = lanesStartY + item.lane * laneHeight;
       const cardHeight = 28;
       const cardWidth = Math.max(130, item.xEnd - item.xStart);
-      const color = item.color || '#3b82f6';
+      const color = Sanitizer.safeColor(item.color, '#3b82f6');
 
       // Stem connector
       svg += `  <line x1="${item.xStart}" y1="${axisY}" x2="${item.xStart}" y2="${laneY}" stroke="${color}" class="connector"/>\n`;

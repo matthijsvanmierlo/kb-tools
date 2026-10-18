@@ -1,5 +1,6 @@
 import { storage } from './storage.js';
 import { toast } from '../utils/toast.js';
+import { DEVICE_BOUND_METADATA } from './backup.js';
 
 /**
  * SyncManager - KB-CORE-002
@@ -13,7 +14,25 @@ export class SyncManager {
     this.debounceTimer = null;
     this.debounceDelayMs = 5000;
     this.isSyncing = false;
+    this.pendingSync = false;
     this.lastSyncTimestamp = null;
+  }
+
+  /**
+   * Writes that aren't user data. Syncing on them would loop forever (every sync stores its
+   * own timestamp) or churn the file for nothing.
+   */
+  static isBookkeepingChange(change) {
+    if (!change) return false;
+    if (change.tableName === 'outbox') return true;
+    if (change.tableName !== 'app_metadata') return false;
+    const key = change.key ?? change.obj?.key;
+    return key === 'last_manual_export_timestamp' || DEVICE_BOUND_METADATA.has(key);
+  }
+
+  /** A real FileSystemFileHandle (a handle restored from an old JSON backup is a plain `{}`) */
+  static isUsableHandle(handle) {
+    return Boolean(handle && typeof handle.createWritable === 'function');
   }
 
   /**
@@ -22,17 +41,36 @@ export class SyncManager {
   async init() {
     try {
       const savedHandle = await this.storage.getMetadata('autosync_file_handle');
-      if (savedHandle) {
+      if (SyncManager.isUsableHandle(savedHandle)) {
         this.fileHandle = savedHandle;
+        // Browsers forget the write grant between sessions; re-granting needs a click
+        if (typeof savedHandle.queryPermission === 'function'
+          && await savedHandle.queryPermission({ mode: 'readwrite' }) === 'prompt') {
+          this._renderReauthorizeBanner();
+        }
+      } else if (savedHandle) {
+        await this.storage.setMetadata('autosync_file_handle', null);
       }
     } catch (e) {
       console.warn('Could not restore FileSystemFileHandle:', e);
     }
 
     // Subscribe to storage mutations for debounced auto-sync
-    this.storage.onMutation(() => {
+    this.storage.onMutation((change) => {
+      if (SyncManager.isBookkeepingChange(change)) return;
       this.triggerDebouncedSync();
     });
+
+    // Write pending changes right away when the tab is hidden or closed
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden' && this.debounceTimer) {
+          clearTimeout(this.debounceTimer);
+          this.debounceTimer = null;
+          this.executeSync();
+        }
+      });
+    }
 
     // Check 72-hour stale backup status
     await this.checkStaleBackup();
@@ -83,7 +121,9 @@ export class SyncManager {
       clearTimeout(this.debounceTimer);
     }
 
+    this._updateSyncIndicator('pending');
     this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
       this.executeSync();
     }, this.debounceDelayMs);
   }
@@ -92,36 +132,49 @@ export class SyncManager {
    * Execute immediate write to the configured file handle
    */
   async executeSync() {
-    if (!this.fileHandle || this.isSyncing) return false;
+    if (!this.fileHandle) return false;
+    if (this.isSyncing) {
+      // A change landed mid-write: write again once the current write finishes
+      this.pendingSync = true;
+      return false;
+    }
 
     try {
       this.isSyncing = true;
+      this.pendingSync = false;
 
       // Verify permission
       if (this.fileHandle.queryPermission) {
-        let permission = await this.fileHandle.queryPermission({ mode: 'readwrite' });
+        const permission = await this.fileHandle.queryPermission({ mode: 'readwrite' });
         if (permission === 'prompt') {
           this._renderReauthorizeBanner();
-          this.isSyncing = false;
           return false;
         }
         if (permission !== 'granted') {
-          this.isSyncing = false;
+          this._updateSyncIndicator('error');
           return false;
         }
       }
 
+      this._updateSyncIndicator('saving');
       const snapshot = await this.storage.dumpMasterSnapshot();
       const jsonStr = JSON.stringify(snapshot, null, 2);
 
+      // createWritable writes to a temporary file that replaces the target only on close(),
+      // so an interrupted write never leaves a half-written backup
       const writable = await this.fileHandle.createWritable();
-      await writable.write(jsonStr);
-      await writable.close();
+      try {
+        await writable.write(jsonStr);
+        await writable.close();
+      } catch (err) {
+        await writable.abort?.().catch(() => {});
+        throw err;
+      }
 
       const now = Date.now();
       this.lastSyncTimestamp = now;
       await this.storage.setMetadata('last_manual_export_timestamp', now);
-      
+
       this._updateSyncIndicator('synced');
       return true;
     } catch (err) {
@@ -130,6 +183,10 @@ export class SyncManager {
       return false;
     } finally {
       this.isSyncing = false;
+      if (this.pendingSync) {
+        this.pendingSync = false;
+        this.triggerDebouncedSync();
+      }
     }
   }
 
@@ -267,7 +324,10 @@ export class SyncManager {
     if (!indicator) return;
 
     if (status === 'synced') {
-      indicator.innerHTML = '<span class="text-xs text-emerald-600 font-medium">● Synced</span>';
+      const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      indicator.innerHTML = `<span class="text-xs text-emerald-600 font-medium" title="Saved to your auto-sync file at ${time}">● Synced</span>`;
+    } else if (status === 'pending') {
+      indicator.innerHTML = '<span class="text-xs text-slate-500 font-medium" title="Unsaved changes will be written to your auto-sync file in a few seconds">● Changes pending</span>';
     } else if (status === 'saving') {
       indicator.innerHTML = '<span class="text-xs text-amber-600 font-medium">● Saving...</span>';
     } else if (status === 'error') {

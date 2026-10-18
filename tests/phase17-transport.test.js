@@ -8,7 +8,9 @@ import { storage, StorageManager } from '../src/core/storage.js';
 import { CryptoShareEngine } from '../src/core/crypto-share.js';
 import { LinkBuilder } from '../src/core/links.js';
 import { RelayTransport, NullTransport, getTransport, setTransportConfig } from '../src/core/transport.js';
-import { shouldBypassCache } from '../sw.js';
+import { loadServiceWorker } from './helpers/load-sw.js';
+
+const { shouldBypassCache } = loadServiceWorker();
 
 describe('Phase 17: Sync-Server Readiness & Transport (§9)', () => {
 
@@ -158,11 +160,12 @@ describe('Phase 17: Sync-Server Readiness & Transport (§9)', () => {
       expect(shouldBypassCache('http://localhost:8000/css/app.css', 'http://localhost:8000')).toBe(false);
     });
 
-    it('does not bypass cache for jsdelivr CDN assets', () => {
-      expect(shouldBypassCache('https://cdn.jsdelivr.net/npm/dexie@4.0.4/dist/dexie.mjs', 'http://localhost:8000')).toBe(false);
+    it('never caches third-party origins (all libraries are self-hosted)', () => {
+      expect(shouldBypassCache('https://cdn.jsdelivr.net/npm/dexie@4.0.4/dist/dexie.mjs', 'http://localhost:8000')).toBe(true);
+      expect(shouldBypassCache('http://localhost:8000/vendor/dexie.mjs', 'http://localhost:8000')).toBe(false);
     });
 
-    it('bypasses cache for cross-origin server calls that are not jsdelivr', () => {
+    it('bypasses cache for cross-origin relay server calls', () => {
       expect(shouldBypassCache('https://school-relay.example.com/drops', 'http://localhost:8000')).toBe(true);
     });
   });

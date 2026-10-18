@@ -17,7 +17,7 @@ export class RosterImportDialog {
    */
   static async open({ course, onDone }) {
     const dialog = document.createElement('sl-dialog');
-    dialog.label = `Import Roster — ${Sanitizer.escapeHTML(course?.name || 'Class')}`;
+    dialog.label = `Import Roster — ${course?.name || 'Class'}`;
     dialog.style.setProperty('--width', '680px');
     dialog.className = 'kb-roster-import-dialog';
 
@@ -278,7 +278,7 @@ export class RosterImportDialog {
                     <span>${tf.label} ${tf.required ? '<span class="text-rose-500">*</span>' : ''}</span>
                     ${tf.note ? `<span class="text-[10px] text-slate-400 font-normal">${tf.note}</span>` : ''}
                   </label>
-                  <sl-select size="small" class="mapping-select w-full" data-target="${tf.key}" value="${currentVal || '__none__'}">
+                  <sl-select size="small" class="mapping-select w-full" data-target="${Sanitizer.escapeHTML(tf.key)}" value="${Sanitizer.escapeHTML(currentVal || '__none__')}">
                     <sl-option value="__none__">-- Do not import --</sl-option>
                     ${tf.canUseEmail ? '<sl-option value="__email__">(Use Email as Student ID)</sl-option>' : ''}
                     ${rawFields.map(f => `
@@ -432,7 +432,7 @@ export class RosterImportDialog {
                     <div class="py-1">
                       <div class="font-medium text-slate-800">${Sanitizer.escapeHTML(u.incoming.full_name)} <span class="font-mono text-slate-400">(${Sanitizer.escapeHTML(u.incoming.student_id)})</span></div>
                       <div class="text-[11px] text-slate-500">
-                        ${u.changes.map(c => `${c.field}: "${Sanitizer.escapeHTML(c.from || 'none')}" → "${Sanitizer.escapeHTML(c.to)}"`).join(', ')}
+                        ${u.changes.map(c => `${Sanitizer.escapeHTML(c.field)}: "${Sanitizer.escapeHTML(c.from || 'none')}" → "${Sanitizer.escapeHTML(c.to)}"`).join(', ')}
                       </div>
                     </div>
                   `).join('')}
@@ -446,7 +446,7 @@ export class RosterImportDialog {
                 <div class="mt-2 divide-y divide-rose-100 max-h-32 overflow-y-auto">
                   ${conflicts.map(c => `
                     <div class="py-1 text-rose-800">
-                      Row ${c.row?.rowNumber || '?'}: ${Sanitizer.escapeHTML(c.reason)}
+                      Row ${Sanitizer.escapeHTML(c.row?.rowNumber || '?')}: ${Sanitizer.escapeHTML(c.reason)}
                     </div>
                   `).join('')}
                 </div>

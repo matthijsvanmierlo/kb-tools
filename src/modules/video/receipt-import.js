@@ -4,6 +4,7 @@
  */
 
 import { storage } from '../../core/storage.js';
+import { Sanitizer } from '../../core/sanitizer.js';
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { GradebookBridge } from '../gradebook/bridge.js';
 import { openReceipt, IDENTITY_LABELS } from './secure.js';
@@ -79,7 +80,9 @@ export async function importVideoReceipts({
   let imported = 0;
   let createdColumns = false;
 
-  for (const { file, result: r } of opened) {
+  for (const { file, result: result } of opened) {
+    // Receipt scores are student-controlled: coerce to numbers before they are stored or rendered
+    const r = { ...result, earned: Sanitizer.safeNumber(result.earned), max: Sanitizer.safeNumber(result.max), percent: Sanitizer.safeNumber(result.percent) };
     if (!r.ok) {
       problems.push(`${file}: ${receiptErrorText(r.error)}`);
       continue;

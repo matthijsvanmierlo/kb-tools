@@ -141,7 +141,7 @@ export class VideoGatekeeper {
         <div class="space-y-4 p-4">
           <div class="flex items-center justify-between text-xs font-semibold text-slate-500 uppercase">
             <span>${isMulti ? 'Select All That Apply' : 'Multiple Choice Question'}</span>
-            <span>${checkpoint.points || 1} pt(s)</span>
+            <span>${Sanitizer.safeNumber(checkpoint.points || 1, 1)} pt(s)</span>
           </div>
 
           <div class="text-sm font-medium text-slate-900">${promptHtml}</div>
@@ -149,7 +149,7 @@ export class VideoGatekeeper {
           <div class="space-y-2" id="checkpoint-options-list">
             ${options.map(opt => `
               <label class="flex items-start gap-3 p-3 border rounded-lg cursor-pointer hover:bg-slate-50 transition-colors text-xs text-slate-800">
-                <input type="${isMulti ? 'checkbox' : 'radio'}" name="cp-option" value="${opt.id}" class="mt-0.5" />
+                <input type="${isMulti ? 'checkbox' : 'radio'}" name="cp-option" value="${Sanitizer.escapeHtml(opt.id)}" class="mt-0.5" />
                 <span class="flex-1">${Sanitizer.escapeHtml(opt.text)}</span>
               </label>
             `).join('')}
@@ -241,7 +241,7 @@ export class VideoGatekeeper {
         <div class="space-y-4 p-4">
           <div class="flex items-center justify-between text-xs font-semibold text-slate-500 uppercase">
             <span>Open Response Question</span>
-            <span>${checkpoint.points || 1} pt(s)</span>
+            <span>${Sanitizer.safeNumber(checkpoint.points || 1, 1)} pt(s)</span>
           </div>
           <div class="text-sm font-medium text-slate-900">${promptHtml}</div>
           <sl-textarea id="textarea-open-answer" rows="4" placeholder="Type your response here..."></sl-textarea>

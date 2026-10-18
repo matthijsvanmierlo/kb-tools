@@ -5,6 +5,7 @@ import { toast } from './utils/toast.js';
 import { Sanitizer } from './core/sanitizer.js';
 import { normalizeAccessCode } from './core/access-codes.js';
 import { getTransport } from './core/transport.js';
+import { normalizeSharedEnvelope, toLibraryRecord } from './core/shared-payload.js';
 
 /**
  * Extract student share params from URL query parameters.
@@ -164,7 +165,7 @@ export class Router {
             <sl-icon name="exclamation-octagon" class="text-4xl text-red-500"></sl-icon>
             <h2 class="text-xl font-bold text-slate-800">Error Loading View</h2>
             <p class="text-sm text-slate-600">${Sanitizer.escapeHTML(err.message)}</p>
-            <sl-button variant="primary" onclick="window.location.hash='#/'">Return Home</sl-button>
+            <sl-button variant="primary" href="#/">Return Home</sl-button>
           </div>
         `;
       }
@@ -208,11 +209,30 @@ export class Router {
     }
   }
 
+  /**
+   * Remove share secrets (payload, key, hosted ref) from the address bar and session history as
+   * soon as they are in memory, so they don't linger in history, screenshots or over a shoulder.
+   */
+  _scrubShareHash() {
+    if (typeof window === 'undefined' || !window.history?.replaceState) return;
+    const { pathname, search } = window.location;
+    window.history.replaceState(window.history.state, '', `${pathname}${search}#/share`);
+  }
+
   async _handleShareRoute(params) {
     const shareParams = extractShareParams(params);
     store.setState('shareParams', shareParams);
 
     let effectiveParams = { ...params };
+
+    // A bare #/share (e.g. Back after the payload was scrubbed) has nothing left to open
+    if (!effectiveParams.d && !effectiveParams.ref) {
+      if (typeof document !== 'undefined' && document.getElementById('sl-decrypt-dialog')) return;
+      // Replace rather than push so the Back button doesn't bounce between #/share and home
+      if (typeof window !== 'undefined') window.location.replace('#/');
+      return;
+    }
+    this._scrubShareHash();
 
     if (effectiveParams.ref) {
       try {
@@ -221,44 +241,61 @@ export class Router {
         const rawJsonStr = await CryptoShareEngine.unwrapHosted(hosted.ciphertext, effectiveParams.k);
         const parsed = JSON.parse(rawJsonStr);
         if (parsed.d) {
-          effectiveParams.d = parsed.d;
-          effectiveParams.enc = (parsed.enc === 1 || parsed.enc === '1' || parsed.enc === true) ? '1' : '0';
+          effectiveParams = { ...effectiveParams, ...CryptoShareEngine.parseShareFile(rawJsonStr) };
         } else {
           this._activateSharedPayload(parsed);
           return;
         }
       } catch (err) {
         toast.danger('Failed to load shared lesson from server: ' + (err.message || 'not found.'));
-        this.navigate('#/flashcards');
+        this.navigate('#/');
         return;
       }
     }
 
-    const isEncrypted = effectiveParams.enc === '1';
-    const dParam = effectiveParams.d;
+    await this._openSharePayload(effectiveParams.d, effectiveParams.enc === '1', Number(effectiveParams.v) === 2 ? 2 : 1);
+  }
 
+  /**
+   * Open a .kbshare file's contents (Home "Open file", OS file launch, share sheet).
+   * @param {string} text
+   */
+  async openShareFile(text) {
+    let file;
+    try {
+      file = CryptoShareEngine.parseShareFile(text);
+    } catch (_) {
+      toast.danger('This file is not a KennisBoost lesson (.kbshare).');
+      return;
+    }
+    await this._openSharePayload(file.d, file.enc === '1', file.v);
+  }
+
+  async _openSharePayload(dParam, isEncrypted, version) {
     if (!dParam) {
       toast.danger('Invalid share link: missing data payload.');
-      this.navigate('#/flashcards');
+      this.navigate('#/');
       return;
     }
 
     if (!isEncrypted) {
       try {
-        const unpacked = await CryptoShareEngine.unpackSharePayload(dParam, false);
+        const unpacked = await CryptoShareEngine.unpackSharePayload(dParam, false, '', version);
         this._activateSharedPayload(unpacked);
       } catch (err) {
-        toast.danger('Failed to load shared lesson: payload corrupted.');
-        this.navigate('#/flashcards');
+        toast.danger(err.message === 'UNSUPPORTED_BROWSER'
+          ? 'This browser is too old to open this lesson. Please update it or try Chrome, Edge, Firefox or Safari.'
+          : 'Failed to load shared lesson: payload corrupted.');
+        this.navigate('#/');
       }
       return;
     }
 
     // Encrypted payload: open decryption dialog
-    this._renderDecryptionDialog(dParam);
+    this._renderDecryptionDialog(dParam, version);
   }
 
-  _renderDecryptionDialog(dParam) {
+  _renderDecryptionDialog(dParam, version = 1) {
     if (typeof document === 'undefined') return;
 
     const existing = document.getElementById('sl-decrypt-dialog');
@@ -315,9 +352,9 @@ export class Router {
       try {
         // Access codes are printed as "K7M2-QX9P" but stored without punctuation; accept either
         const normalized = normalizeAccessCode(passphrase);
-        const unpacked = await CryptoShareEngine.unpackSharePayload(dParam, true, passphrase)
+        const unpacked = await CryptoShareEngine.unpackSharePayload(dParam, true, passphrase, version)
           .catch(err => (normalized && normalized !== passphrase
-            ? CryptoShareEngine.unpackSharePayload(dParam, true, normalized)
+            ? CryptoShareEngine.unpackSharePayload(dParam, true, normalized, version)
             : Promise.reject(err)));
         dialog.remove();
         toast.success('Lesson unlocked successfully!');
@@ -346,7 +383,16 @@ export class Router {
 
   _activateSharedPayload(unpacked) {
     // Unpacked structure: { v: 1, type: 'flashcards' | 'timeline' | 'video' | 'gradebook' | 'student_grade_report', payload: ... }
-    const { type, payload } = unpacked;
+    let type;
+    let payload;
+    try {
+      ({ type, payload } = normalizeSharedEnvelope(unpacked));
+    } catch (err) {
+      console.warn('Rejected shared payload:', err.message);
+      toast.danger('This shared link is not a valid KennisBoost lesson.');
+      this.navigate('#/');
+      return;
+    }
     store.setState('ephemeralData', { type, payload });
 
     const isStudent = type === 'assignment' || (type === 'video' && payload?.secure) || type === 'student_grade_report' || type === 'assignment_feedback';
@@ -419,17 +465,17 @@ export class Router {
       try {
         if (type === 'flashcards') {
           const table = storage.table('flashcards');
-          const item = { ...payload, id: crypto.randomUUID(), updated_at: new Date().toISOString() };
+          const item = toLibraryRecord(payload);
           await table.put(item);
           toast.success('Deck saved to local library!');
         } else if (type === 'timeline') {
           const table = storage.table('timelines');
-          const item = { ...payload, id: crypto.randomUUID(), updated_at: new Date().toISOString() };
+          const item = toLibraryRecord(payload);
           await table.put(item);
           toast.success('Timeline saved to local library!');
         } else if (type === 'video') {
           const table = storage.table('video_assessments');
-          const item = { ...payload, id: crypto.randomUUID(), updated_at: new Date().toISOString() };
+          const item = toLibraryRecord(payload);
           await table.put(item);
           toast.success('Video assessment saved to local library!');
         }

@@ -304,7 +304,7 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
               <span id="title-display">${safeTitle}</span>
             </h2>
             <p class="text-xs text-slate-500" id="header-metadata-display">
-              <span id="cp-count-badge">${activeVideo.checkpoints?.length || 0}</span> checkpoint(s) &bull; Provider: ${(activeVideo.provider || 'html5').toUpperCase()}
+              <span id="cp-count-badge">${activeVideo.checkpoints?.length || 0}</span> checkpoint(s) &bull; Provider: ${Sanitizer.escapeHTML((activeVideo.provider || 'html5').toUpperCase())}
             </p>
           </div>
         </div>
@@ -334,13 +334,13 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
             <sl-input id="input-video-title" label="Assessment title" value="${safeTitle}"></sl-input>
           </div>
           <div class="md:col-span-4">
-            <sl-select id="select-video-class" label="Class" value="${activeVideo.class_id || ''}">
+            <sl-select id="select-video-class" label="Class" value="${Sanitizer.escapeHTML(activeVideo.class_id || '')}">
               <sl-option value="">No class (general)</sl-option>
               ${classes.map(c => `<sl-option value="${c.id}">${Sanitizer.escapeHTML(c.name)}</sl-option>`).join('')}
             </sl-select>
           </div>
           <div class="md:col-span-3">
-            <sl-select id="select-video-provider" label="Video provider" value="${activeVideo.provider || 'html5'}">
+            <sl-select id="select-video-provider" label="Video provider" value="${Sanitizer.escapeHTML(activeVideo.provider || 'html5')}">
               <sl-option value="html5"><sl-icon slot="prefix" name="film"></sl-icon> MP4 / WebM file</sl-option>
               <sl-option value="youtube"><sl-icon slot="prefix" name="youtube"></sl-icon> YouTube</sl-option>
               <sl-option value="vimeo"><sl-icon slot="prefix" name="vimeo"></sl-icon> Vimeo</sl-option>
@@ -498,25 +498,25 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
         const timeFormatted = formatSeconds(cp.timestamp_sec, true);
 
         return `
-          <div class="group p-3 border border-slate-200 rounded-xl bg-white hover:border-slate-300 hover:shadow-sm transition-all flex items-start justify-between gap-3 text-xs" data-cp-id="${cp.id}">
+          <div class="group p-3 border border-slate-200 rounded-xl bg-white hover:border-slate-300 hover:shadow-sm transition-all flex items-start justify-between gap-3 text-xs" data-cp-id="${Sanitizer.escapeHTML(cp.id)}">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2 flex-wrap">
-                <button type="button" class="btn-seek-cp inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 font-semibold text-blue-700 tabular-nums cursor-pointer" data-sec="${cp.timestamp_sec}" title="Jump to ${timeFormatted}">
+                <button type="button" class="btn-seek-cp inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-slate-100 hover:bg-blue-50 font-semibold text-blue-700 tabular-nums cursor-pointer" data-sec="${Sanitizer.safeNumber(cp.timestamp_sec)}" title="Jump to ${timeFormatted}">
                   <sl-icon name="play-fill" class="text-[10px]"></sl-icon>${timeFormatted}
                 </button>
-                <span class="px-1.5 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide ${badge.color}">${badge.label}</span>
-                <span class="text-slate-400 text-[11px] tabular-nums">${cp.points || 0} pt${cp.points === 1 ? '' : 's'}</span>
+                <span class="px-1.5 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide ${badge.color}">${Sanitizer.escapeHTML(badge.label)}</span>
+                <span class="text-slate-400 text-[11px] tabular-nums">${Sanitizer.safeNumber(cp.points)} pt${cp.points === 1 ? '' : 's'}</span>
               </div>
               <div class="kb-prose text-slate-700 mt-1.5 line-clamp-2 [&_p]:m-0">${previewHtml}</div>
             </div>
             <div class="flex items-center flex-shrink-0 -mr-1">
-              <button type="button" class="btn-edit-cp kb-icon-btn !w-8 !h-8 hover:!text-blue-600" title="Edit checkpoint" aria-label="Edit checkpoint" data-id="${cp.id}">
+              <button type="button" class="btn-edit-cp kb-icon-btn !w-8 !h-8 hover:!text-blue-600" title="Edit checkpoint" aria-label="Edit checkpoint" data-id="${Sanitizer.escapeHTML(cp.id)}">
                 <sl-icon name="pencil"></sl-icon>
               </button>
-              <button type="button" class="btn-duplicate-cp kb-icon-btn !w-8 !h-8" title="Duplicate checkpoint" aria-label="Duplicate checkpoint" data-id="${cp.id}">
+              <button type="button" class="btn-duplicate-cp kb-icon-btn !w-8 !h-8" title="Duplicate checkpoint" aria-label="Duplicate checkpoint" data-id="${Sanitizer.escapeHTML(cp.id)}">
                 <sl-icon name="copy"></sl-icon>
               </button>
-              <button type="button" class="btn-del-cp kb-icon-btn !w-8 !h-8 hover:!text-red-600" title="Delete checkpoint" aria-label="Delete checkpoint" data-id="${cp.id}">
+              <button type="button" class="btn-del-cp kb-icon-btn !w-8 !h-8 hover:!text-red-600" title="Delete checkpoint" aria-label="Delete checkpoint" data-id="${Sanitizer.escapeHTML(cp.id)}">
                 <sl-icon name="trash"></sl-icon>
               </button>
             </div>
@@ -605,7 +605,7 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
         <div class="absolute w-2.5 h-2.5 -ml-1.25 rounded-full bg-blue-600 border border-white shadow-xs pointer-events-auto cursor-pointer hover:scale-125 transition-transform"
              style="left: ${pct}%; top: 50%; transform: translateY(-50%);"
              title="@${formatSeconds(cp.timestamp_sec, true)}: ${safePrompt}"
-             data-sec="${cp.timestamp_sec}">
+             data-sec="${Sanitizer.safeNumber(cp.timestamp_sec)}">
         </div>
       `;
     }).join('');
@@ -669,7 +669,7 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
     activeVideo.provider = providerSelect.value;
     const headerMetadata = container.querySelector('#header-metadata-display');
     if (headerMetadata) {
-      headerMetadata.innerHTML = `${activeVideo.checkpoints?.length || 0} checkpoint(s) &bull; Provider: ${(activeVideo.provider || 'html5').toUpperCase()}`;
+      headerMetadata.innerHTML = `${activeVideo.checkpoints?.length || 0} checkpoint(s) &bull; Provider: ${Sanitizer.escapeHTML((activeVideo.provider || 'html5').toUpperCase())}`;
     }
     saveAssessment();
   });
@@ -677,7 +677,7 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
   const updateHeaderMetadata = () => {
     const headerMetadata = container.querySelector('#header-metadata-display');
     if (headerMetadata) {
-      headerMetadata.innerHTML = `${activeVideo.checkpoints?.length || 0} checkpoint(s) &bull; Provider: ${(activeVideo.provider || 'html5').toUpperCase()}`;
+      headerMetadata.innerHTML = `${activeVideo.checkpoints?.length || 0} checkpoint(s) &bull; Provider: ${Sanitizer.escapeHTML((activeVideo.provider || 'html5').toUpperCase())}`;
     }
   };
 
@@ -808,7 +808,7 @@ function openCheckpointAuthoringModal({ activeVideo, checkpoint, currentVideoTim
       <!-- Timestamp & Points Header Row -->
       <div class="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
         <div class="sm:col-span-5">
-          <sl-input id="input-cp-timestamp" label="Trigger Timestamp (sec or mm:ss)" value="${initialData.timestamp_sec}" type="text" help-text="e.g. 15.5 or 0:15.5"></sl-input>
+          <sl-input id="input-cp-timestamp" label="Trigger Timestamp (sec or mm:ss)" value="${Sanitizer.escapeHTML(initialData.timestamp_sec)}" type="text" help-text="e.g. 15.5 or 0:15.5"></sl-input>
         </div>
         <div class="sm:col-span-3">
           <sl-button size="small" id="btn-use-cur-time" class="w-full">
@@ -816,13 +816,13 @@ function openCheckpointAuthoringModal({ activeVideo, checkpoint, currentVideoTim
           </sl-button>
         </div>
         <div class="sm:col-span-4">
-          <sl-input id="input-cp-points" label="Points Value (0-100)" type="number" min="0" max="100" value="${initialData.points != null ? initialData.points : 1}"></sl-input>
+          <sl-input id="input-cp-points" label="Points Value (0-100)" type="number" min="0" max="100" value="${Sanitizer.safeNumber(initialData.points, 1)}"></sl-input>
         </div>
       </div>
 
       <!-- Question Type Selector -->
       <div>
-        <sl-select id="select-cp-type" label="Question Type" value="${initialData.type || 'single_choice'}">
+        <sl-select id="select-cp-type" label="Question Type" value="${Sanitizer.escapeHTML(initialData.type || 'single_choice')}">
           <sl-option value="single_choice">Multiple Choice (Single Answer)</sl-option>
           <sl-option value="multi_choice">Multiple Select (Checkboxes)</sl-option>
           <sl-option value="open_response">Open / Short Answer (Auto-Grade Keywords)</sl-option>
@@ -849,7 +849,7 @@ function openCheckpointAuthoringModal({ activeVideo, checkpoint, currentVideoTim
 
       <!-- Auto-Grade Keywords Container (for open_response) -->
       <div id="keywords-builder-container" class="space-y-2 hidden">
-        <sl-input id="input-keywords" label="Auto-Grade Accepted Keywords" placeholder="e.g. gas, giant, hydrogen, red spot" help-text="Comma-separated keywords. If the student's answer contains any of these, full points are awarded." value="${(initialData.keywords || []).join(', ')}"></sl-input>
+        <sl-input id="input-keywords" label="Auto-Grade Accepted Keywords" placeholder="e.g. gas, giant, hydrogen, red spot" help-text="Comma-separated keywords. If the student's answer contains any of these, full points are awarded." value="${Sanitizer.escapeHTML((initialData.keywords || []).join(', '))}"></sl-input>
       </div>
     </div>
 
@@ -1461,9 +1461,9 @@ function showReceiptResultDialog(result) {
         <p class="text-xs text-slate-500">${esc(id.help)}</p>
         <div class="rounded-xl bg-slate-50 border border-slate-200 p-4 flex items-center justify-between">
           <span class="text-sm text-slate-600">${result.format === 'v2' ? 'Score (re-graded on this device)' : 'Score claimed in receipt'}</span>
-          <span class="text-xl font-bold text-slate-900 tabular-nums">${result.earned} / ${result.max}</span>
+          <span class="text-xl font-bold text-slate-900 tabular-nums">${Sanitizer.safeNumber(result.earned)} / ${Sanitizer.safeNumber(result.max)}</span>
         </div>
-        ${result.format === 'v2' && result.clientScore && result.clientScore.earned !== result.earned ? `<p class="text-xs text-amber-700">The student's device reported ${result.clientScore.earned} points; the re-graded score above is what counts.</p>` : ''}
+        ${result.format === 'v2' && result.clientScore && result.clientScore.earned !== result.earned ? `<p class="text-xs text-amber-700">The student's device reported ${Sanitizer.safeNumber(result.clientScore.earned)} points; the re-graded score above is what counts.</p>` : ''}
       </div>
       <sl-button slot="footer" variant="primary" class="kb-receipt-close">Close</sl-button>`;
   }

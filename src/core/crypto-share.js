@@ -4,36 +4,78 @@ const LZString = lzLib.compressToEncodedURIComponent ? lzLib : (lzLib.default ||
 
 /**
  * CryptoShareEngine - KB-CORE-004
- * Zero-backend cryptographic sharing using Web Crypto API (PBKDF2 + AES-GCM 256)
- * and LZ-String URL serialization.
+ * Zero-backend sharing with the Web Crypto API.
+ *
+ * Format v2 (default when CompressionStream exists):
+ *   JSON → deflate-raw → [PBKDF2-SHA-256 600k → AES-256-GCM, packed salt(16)‖iv(12)‖ct] → base64url
+ *   URL: #/share?v=2&enc=0|1&d=…    file: {"v":2,"enc":0|1,"d":"…"}
+ * Format v1 (legacy, still decoded): LZ-String, PBKDF2 100k.
+ *
+ * Everything after `#` stays in the browser (RFC 3986 fragments are never sent to the server),
+ * and the router scrubs it from the address bar as soon as it has been read.
  */
+export const SHARE_FORMAT_VERSION = 2;
+export const PBKDF2_ITERATIONS = 600000;
+const LEGACY_PBKDF2_ITERATIONS = 100000;
+// Binds ciphertext to this format so a v2 blob can never be reinterpreted as something else
+const V2_AAD = new TextEncoder().encode('kb-share-v2');
+
+const getSubtle = () => {
+  const subtle = typeof crypto !== 'undefined' ? crypto.subtle : globalThis.crypto?.subtle;
+  if (!subtle) throw new Error('Web Crypto API is not available');
+  return subtle;
+};
+
+export function supportsCompressionStreams() {
+  return typeof CompressionStream === 'function' && typeof DecompressionStream === 'function';
+}
+
+async function pipeBytes(bytes, transform) {
+  const writer = transform.writable.getWriter();
+  // Write and read concurrently: awaiting the write first can deadlock on backpressure
+  const written = writer.write(bytes).then(() => writer.close());
+  const reader = transform.readable.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  await written;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
+export const deflateRaw = (bytes) => pipeBytes(bytes, new CompressionStream('deflate-raw'));
+export const inflateRaw = (bytes) => pipeBytes(bytes, new DecompressionStream('deflate-raw'));
+
 export class CryptoShareEngine {
   /**
-   * Derive AES-GCM key from passphrase and 16-byte salt via PBKDF2
+   * Derive AES-GCM key from passphrase and 16-byte salt via PBKDF2-SHA-256
    * @param {string} passphrase
    * @param {Uint8Array} saltUint8
+   * @param {number} [iterations]
    * @returns {Promise<CryptoKey>}
    */
-  static async deriveKey(passphrase, saltUint8) {
-    const enc = new TextEncoder();
-    const subtle = typeof crypto !== 'undefined' ? crypto.subtle : globalThis.crypto?.subtle;
-    if (!subtle) throw new Error('Web Crypto API is not available');
-
+  static async deriveKey(passphrase, saltUint8, iterations = PBKDF2_ITERATIONS) {
+    const subtle = getSubtle();
     const keyMaterial = await subtle.importKey(
       'raw',
-      enc.encode(passphrase),
+      new TextEncoder().encode(passphrase),
       { name: 'PBKDF2' },
       false,
       ['deriveKey']
     );
 
     return subtle.deriveKey(
-      {
-        name: 'PBKDF2',
-        salt: saltUint8,
-        iterations: 100000,
-        hash: 'SHA-256'
-      },
+      { name: 'PBKDF2', salt: saltUint8, iterations, hash: 'SHA-256' },
       keyMaterial,
       { name: 'AES-GCM', length: 256 },
       false,
@@ -43,61 +85,130 @@ export class CryptoShareEngine {
 
   /**
    * Serialize and optionally encrypt a payload for URL or .kbshare file sharing
-   * @param {string} moduleType - 'flashcards' | 'timeline' | 'video' | 'gradebook' | 'student_grade_report'
+   * @param {string} moduleType - 'flashcards' | 'timeline' | 'video' | 'gradebook' | 'student_grade_report' | …
    * @param {object} dataObject - Dataset to share
    * @param {string} [passphrase=''] - Optional encryption passphrase
-   * @returns {Promise<{ url: string, exceedsUrlLimit: boolean, rawFileContent: string, length: number }>}
+   * @param {{ version?: 1|2 }} [options] - force a format (tests / compatibility)
+   * @returns {Promise<{ url: string, exceedsUrlLimit: boolean, rawFileContent: string, length: number, version: number }>}
    */
-  static async createSharePayload(moduleType, dataObject, passphrase = '') {
+  static async createSharePayload(moduleType, dataObject, passphrase = '', options = {}) {
     const envelope = JSON.stringify({ v: 1, type: moduleType, payload: dataObject });
-    let compressed;
-    let isEncrypted = false;
+    const isEncrypted = Boolean(passphrase && passphrase.trim().length > 0);
+    const version = options.version || (supportsCompressionStreams() ? SHARE_FORMAT_VERSION : 1);
 
-    if (passphrase && passphrase.trim().length > 0) {
-      isEncrypted = true;
-      const subtle = typeof crypto !== 'undefined' ? crypto.subtle : globalThis.crypto?.subtle;
-      const salt = crypto.getRandomValues(new Uint8Array(16));
-      const iv = crypto.getRandomValues(new Uint8Array(12));
-      const key = await this.deriveKey(passphrase, salt);
-      const plaintextBytes = new TextEncoder().encode(envelope);
-      const ciphertextBuf = await subtle.encrypt({ name: 'AES-GCM', iv }, key, plaintextBytes);
-
-      const packed = new Uint8Array(16 + 12 + ciphertextBuf.byteLength);
-      packed.set(salt, 0);
-      packed.set(iv, 16);
-      packed.set(new Uint8Array(ciphertextBuf), 28);
-
-      // Convert binary Uint8Array to binary string for LZString
-      let binStr = '';
-      for (let i = 0; i < packed.byteLength; i++) {
-        binStr += String.fromCharCode(packed[i]);
-      }
-      compressed = LZString.compressToEncodedURIComponent(binStr);
-    } else {
-      compressed = LZString.compressToEncodedURIComponent(envelope);
-    }
+    const d = version === 2
+      ? await this._packV2(envelope, isEncrypted ? passphrase : '')
+      : await this._packV1(envelope, isEncrypted ? passphrase : '');
 
     const baseUrl = typeof window !== 'undefined'
       ? `${window.location.origin}${window.location.pathname}`
       : 'http://localhost/';
-    const shareUrl = `${baseUrl}#/share?enc=${isEncrypted ? '1' : '0'}&d=${compressed}`;
+    const versionParam = version === 2 ? 'v=2&' : '';
+    const shareUrl = `${baseUrl}#/share?${versionParam}enc=${isEncrypted ? '1' : '0'}&d=${d}`;
+
+    const file = { enc: isEncrypted ? 1 : 0, d };
+    if (version === 2) file.v = 2;
 
     return {
       url: shareUrl,
       exceedsUrlLimit: shareUrl.length > 2048,
       length: shareUrl.length,
-      rawFileContent: JSON.stringify({ enc: isEncrypted ? 1 : 0, d: compressed })
+      version,
+      rawFileContent: JSON.stringify(file)
     };
+  }
+
+  static async _packV2(envelope, passphrase) {
+    const compressed = await deflateRaw(new TextEncoder().encode(envelope));
+    if (!passphrase) return bytesToB64Url(compressed);
+
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await this.deriveKey(passphrase, salt, PBKDF2_ITERATIONS);
+    const ct = new Uint8Array(await getSubtle().encrypt({ name: 'AES-GCM', iv, additionalData: V2_AAD }, key, compressed));
+    const packed = new Uint8Array(28 + ct.byteLength);
+    packed.set(salt, 0);
+    packed.set(iv, 16);
+    packed.set(ct, 28);
+    return bytesToB64Url(packed);
+  }
+
+  static async _packV1(envelope, passphrase) {
+    if (!passphrase) return LZString.compressToEncodedURIComponent(envelope);
+
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await this.deriveKey(passphrase, salt, LEGACY_PBKDF2_ITERATIONS);
+    const ct = await getSubtle().encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(envelope));
+    const packed = new Uint8Array(28 + ct.byteLength);
+    packed.set(salt, 0);
+    packed.set(iv, 16);
+    packed.set(new Uint8Array(ct), 28);
+    let binStr = '';
+    for (let i = 0; i < packed.byteLength; i++) binStr += String.fromCharCode(packed[i]);
+    return LZString.compressToEncodedURIComponent(binStr);
+  }
+
+  /**
+   * Parse a .kbshare file body into share parameters.
+   * @param {string} text
+   * @returns {{ d: string, enc: '0'|'1', v: number }}
+   */
+  static parseShareFile(text) {
+    let parsed;
+    try {
+      parsed = JSON.parse(String(text || '').trim());
+    } catch (_) {
+      throw new Error('CORRUPTED_PAYLOAD');
+    }
+    if (!parsed || typeof parsed.d !== 'string') throw new Error('CORRUPTED_PAYLOAD');
+    const enc = parsed.enc === 1 || parsed.enc === '1' || parsed.enc === true ? '1' : '0';
+    return { d: parsed.d, enc, v: Number(parsed.v) === 2 ? 2 : 1 };
   }
 
   /**
    * Unpack and optionally decrypt a shared payload
-   * @param {string} dParam - LZString-compressed payload string
+   * @param {string} dParam - encoded payload string
    * @param {boolean} isEncrypted - Whether AES-GCM decryption is required
    * @param {string} [passphrase=''] - User-entered passphrase
+   * @param {number} [version] - share format version: the `v` URL/file parameter (absent → 1).
+   *   Defaults to the format createSharePayload produces in this browser.
    * @returns {Promise<{ v: number, type: string, payload: any }>}
    */
-  static async unpackSharePayload(dParam, isEncrypted, passphrase = '') {
+  static async unpackSharePayload(dParam, isEncrypted, passphrase = '', version = supportsCompressionStreams() ? SHARE_FORMAT_VERSION : 1) {
+    if (Number(version) === 2) return this._unpackV2(dParam, isEncrypted, passphrase);
+    return this._unpackV1(dParam, isEncrypted, passphrase);
+  }
+
+  static async _unpackV2(dParam, isEncrypted, passphrase) {
+    if (!supportsCompressionStreams()) throw new Error('UNSUPPORTED_BROWSER');
+    let bytes;
+    try {
+      bytes = b64UrlToBytes(dParam);
+    } catch (_) {
+      throw new Error('CORRUPTED_PAYLOAD');
+    }
+
+    if (isEncrypted) {
+      if (bytes.length < 28 + 16) throw new Error('CORRUPTED_PAYLOAD');
+      const key = await this.deriveKey(passphrase, bytes.slice(0, 16), PBKDF2_ITERATIONS);
+      try {
+        bytes = new Uint8Array(await getSubtle().decrypt(
+          { name: 'AES-GCM', iv: bytes.slice(16, 28), additionalData: V2_AAD }, key, bytes.slice(28)
+        ));
+      } catch (_) {
+        throw new Error('INVALID_PASSPHRASE');
+      }
+    }
+
+    try {
+      return JSON.parse(new TextDecoder().decode(await inflateRaw(bytes)));
+    } catch (_) {
+      throw new Error('CORRUPTED_PAYLOAD');
+    }
+  }
+
+  static async _unpackV1(dParam, isEncrypted, passphrase) {
     const decompressed = LZString.decompressFromEncodedURIComponent(dParam);
     if (!decompressed) throw new Error('CORRUPTED_PAYLOAD');
 
@@ -118,17 +229,10 @@ export class CryptoShareEngine {
       throw new Error('CORRUPTED_PAYLOAD');
     }
 
-    const salt = packed.slice(0, 16);
-    const iv = packed.slice(16, 28);
-    const ciphertext = packed.slice(28);
-
-    const subtle = typeof crypto !== 'undefined' ? crypto.subtle : globalThis.crypto?.subtle;
-    const key = await this.deriveKey(passphrase, salt);
-
+    const key = await this.deriveKey(passphrase, packed.slice(0, 16), LEGACY_PBKDF2_ITERATIONS);
     try {
-      const decryptedBuf = await subtle.decrypt({ name: 'AES-GCM', iv }, key, ciphertext);
-      const jsonStr = new TextDecoder().decode(decryptedBuf);
-      return JSON.parse(jsonStr);
+      const decryptedBuf = await getSubtle().decrypt({ name: 'AES-GCM', iv: packed.slice(16, 28) }, key, packed.slice(28));
+      return JSON.parse(new TextDecoder().decode(decryptedBuf));
     } catch (err) {
       throw new Error('INVALID_PASSPHRASE');
     }

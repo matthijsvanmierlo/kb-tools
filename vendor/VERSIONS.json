@@ -1,0 +1,15 @@
+{
+  "dexie": "4.4.6",
+  "zod": "4.6.7",
+  "lz-string": "1.5.0",
+  "papaparse": "5.7.0",
+  "marked": "18.1.1",
+  "dompurify": "3.4.17",
+  "jspdf": "4.2.1",
+  "jspdf-autotable": "5.0.9",
+  "jszip": "3.10.2",
+  "qrcode-generator": "2.0.4",
+  "@shoelace-style/shoelace": "2.20.1",
+  "katex": "0.19.0",
+  "jsqr": "1.4.0"
+}

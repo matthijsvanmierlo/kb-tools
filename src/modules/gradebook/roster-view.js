@@ -244,8 +244,8 @@ export async function renderRosterView({
                   const safeId = Sanitizer.escapeHTML(s.student_id || '');
                   const safeEmail = Sanitizer.escapeHTML(s.email || '—');
                   const lastDate = stats.latestTimestamp ? new Date(stats.latestTimestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '—';
-                  const gradeStr = stats.gradePercent !== null ? `${stats.gradePercent}%` : '—';
-                  const letterStr = stats.gradeLetter && stats.gradeLetter !== '—' ? `(${stats.gradeLetter})` : '';
+                  const gradeStr = stats.gradePercent !== null ? `${Sanitizer.escapeHTML(stats.gradePercent)}%` : '—';
+                  const letterStr = stats.gradeLetter && stats.gradeLetter !== '—' ? `(${Sanitizer.escapeHTML(stats.gradeLetter)})` : '';
 
                   return `
                     <tr class="hover:bg-slate-50 transition-colors ${isChecked ? 'bg-blue-50/40' : ''}">
@@ -278,7 +278,7 @@ export async function renderRosterView({
                       </td>
                       <td class="p-3 text-center">
                         <span class="inline-block px-2 py-0.5 rounded-full font-medium ${stats.handinCount > 0 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}">
-                          ${stats.handinCount}
+                          ${Sanitizer.escapeHTML(stats.handinCount)}
                         </span>
                       </td>
                       <td class="p-3 text-slate-500">${lastDate}</td>
@@ -316,7 +316,7 @@ export async function renderRosterView({
           </div>
           <div class="px-4 py-2 border-t border-slate-100 bg-slate-50 text-xs text-slate-500 flex justify-between items-center">
             <span>Showing ${filtered.length} of ${students.length} student${students.length === 1 ? '' : 's'}</span>
-            <span class="text-slate-400">Sorted by ${sortField} (${sortDirection})</span>
+            <span class="text-slate-400">Sorted by ${Sanitizer.escapeHTML(sortField)} (${Sanitizer.escapeHTML(sortDirection)})</span>
           </div>
         </div>
       </div>
@@ -498,7 +498,7 @@ export async function renderRosterView({
         if (student) {
           await AccessCodes.regenerate(student);
           revealedCodes.add(student.student_id);
-          toast.success(`Access code generated for ${Sanitizer.escapeHTML(student.full_name)}.`);
+          toast.success(`Access code generated for ${student.full_name}.`);
           onRefresh();
         }
       });
@@ -532,7 +532,7 @@ export async function renderRosterView({
         } else if (action === 'report-pdf') {
           const doc = GradebookReportGenerator.generateStudentPDF(student, course, allAssignments, gradesMap);
           doc.save(`${student.student_id}_Report.pdf`);
-          toast.success(`Exported PDF report for ${Sanitizer.escapeHTML(student.full_name)}!`);
+          toast.success(`Exported PDF report for ${student.full_name}!`);
         } else if (action === 'remove') {
           const ok = await ConfirmDialog.show({
             title: `Remove ${Sanitizer.escapeHTML(student.full_name)}?`,
@@ -562,18 +562,18 @@ export async function renderRosterView({
     if (gradeKeys.length > 0) {
       await gradesTable.bulkDelete(gradeKeys);
     }
-    toast.success(`Student ${Sanitizer.escapeHTML(student.full_name)} removed.`);
+    toast.success(`Student ${student.full_name} removed.`);
   }
 
   function promptShareLink(student, linkData) {
     const dialog = document.createElement('sl-dialog');
-    dialog.label = `Encrypted Link — ${Sanitizer.escapeHTML(student.full_name)}`;
+    dialog.label = `Encrypted Link — ${student.full_name}`;
     dialog.innerHTML = `
       <div class="space-y-3 py-1 text-sm">
         <p class="text-xs text-slate-500">
           This secure link gives ${Sanitizer.escapeHTML(student.full_name)} private access to their grades and feedback.
         </p>
-        <sl-input id="share-link-input" value="${linkData.url}" readonly>
+        <sl-input id="share-link-input" value="${Sanitizer.escapeHTML(linkData.url)}" readonly>
           <sl-button slot="suffix" id="btn-copy-share-url" size="small" variant="primary">
             <sl-icon slot="prefix" name="clipboard"></sl-icon> Copy
           </sl-button>

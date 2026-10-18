@@ -49,6 +49,17 @@ window.KB_CONFIG = {
 };
 ```
 
+## Content Security Policy
+
+The app's CSP only allows network requests to its own origin (`connect-src 'self'`). If the relay
+runs on a different origin than the app, allow it explicitly:
+
+- bundled server: `KB_RELAY_ORIGIN=https://relay.myschool.edu npm start`
+- static hosting: `KB_RELAY_ORIGIN=https://relay.myschool.edu npm run csp`, which regenerates the
+  `<meta>` tag and `_headers` with the relay allowed (then `npm run build:sw` and deploy).
+
+The "Connect to a school server" dialog tells teachers when a relay is blocked by the CSP.
+
 ## Environment Variables
 
 | Variable | Default | Description |

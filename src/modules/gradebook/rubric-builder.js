@@ -72,8 +72,8 @@ export class RubricScorer {
       const scoreBadge = drawer.querySelector('#rubric-score-badge');
       if (scoreBadge) {
         scoreBadge.innerHTML = `
-          <span class="font-bold text-slate-800 text-lg">${score.totalEarned} / ${score.totalPossible} pts</span>
-          <span class="text-sm font-bold text-blue-600 ml-2">(${score.percent}% — ${score.letter})</span>
+          <span class="font-bold text-slate-800 text-lg">${Sanitizer.escapeHTML(Sanitizer.safeNumber(score.totalEarned))} / ${Sanitizer.escapeHTML(Sanitizer.safeNumber(score.totalPossible))} pts</span>
+          <span class="text-sm font-bold text-blue-600 ml-2">(${Sanitizer.escapeHTML(Sanitizer.safeNumber(score.percent))}% — ${Sanitizer.escapeHTML(score.letter)})</span>
         `;
       }
 
@@ -112,7 +112,7 @@ export class RubricScorer {
                 ${(rubric.tiers || []).map(t => `
                   <th class="p-2.5 border-b border-r text-center">
                     <div>${Sanitizer.escapeHTML(t.label)}</div>
-                    <span class="text-[10px] text-slate-400 font-mono">(${t.default_points} pts)</span>
+                    <span class="text-[10px] text-slate-400 font-mono">(${Sanitizer.escapeHTML(Sanitizer.safeNumber(t.default_points))} pts)</span>
                   </th>
                 `).join('')}
               </tr>
@@ -122,7 +122,7 @@ export class RubricScorer {
                 <tr class="border-b">
                   <td class="p-2.5 border-r font-medium text-slate-900 bg-slate-50">
                     <div>${Sanitizer.escapeHTML(c.name)}</div>
-                    <span class="text-[10px] text-slate-400">Weight: ${c.weight || 1.0}x</span>
+                    <span class="text-[10px] text-slate-400">Weight: ${Sanitizer.escapeHTML(Sanitizer.safeNumber(c.weight || 1.0))}x</span>
                   </td>
                   ${(rubric.tiers || []).map(t => {
                     const cell = c.cells ? c.cells[t.id] : null;
@@ -130,10 +130,10 @@ export class RubricScorer {
                     const desc = cell ? (cell.descriptor || '') : '';
                     return `
                       <td class="p-1 border-r text-center align-top">
-                        <button type="button" data-crit-id="${c.id}" data-tier-id="${t.id}" data-desc="${Sanitizer.escapeHTML(desc)}" data-crit-name="${Sanitizer.escapeHTML(c.name)}" data-tier-label="${Sanitizer.escapeHTML(t.label)}"
+                        <button type="button" data-crit-id="${Sanitizer.escapeHTML(c.id)}" data-tier-id="${Sanitizer.escapeHTML(t.id)}" data-desc="${Sanitizer.escapeHTML(desc)}" data-crit-name="${Sanitizer.escapeHTML(c.name)}" data-tier-label="${Sanitizer.escapeHTML(t.label)}"
                                 class="rubric-cell-btn w-full h-full p-2 rounded border border-slate-200 text-left hover:bg-slate-50 transition-colors flex flex-col justify-between min-h-[70px]">
                           <span class="text-[11px] text-slate-700 leading-tight">${Sanitizer.escapeHTML(desc || 'No descriptor')}</span>
-                          <span class="text-[10px] font-bold text-blue-600 font-mono self-end mt-1">${pts} pts</span>
+                          <span class="text-[10px] font-bold text-blue-600 font-mono self-end mt-1">${Sanitizer.escapeHTML(Sanitizer.safeNumber(pts))} pts</span>
                         </button>
                       </td>
                     `;
@@ -174,7 +174,8 @@ export class RubricScorer {
         // Auto-append feedback descriptor: "[Criteria - Tier]: Descriptor text"
         const descriptorSnippet = `[${cName} - ${tLabel}]: ${desc}`;
         // Remove prior descriptor for this criterion if present
-        const regex = new RegExp(`\\[${cName} - [^\\]]+\\]: [^\\n]+`, 'g');
+        const safeName = String(cName ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const regex = new RegExp(`\\[${safeName} - [^\\]]+\\]: [^\\n]+`, 'g');
         if (currentFeedback.match(regex)) {
           currentFeedback = currentFeedback.replace(regex, descriptorSnippet);
         } else {
@@ -251,10 +252,10 @@ export class RubricDesigner {
                 </p>
               </div>
               <div class="flex items-center gap-1.5">
-                <sl-button size="small" variant="default" class="btn-edit-rubric" data-id="${r.id}">
+                <sl-button size="small" variant="default" class="btn-edit-rubric" data-id="${Sanitizer.escapeHTML(r.id)}">
                   <sl-icon slot="prefix" name="pencil"></sl-icon> Edit
                 </sl-button>
-                <sl-button size="small" variant="text" class="btn-delete-rubric text-red-600" data-id="${r.id}">
+                <sl-button size="small" variant="text" class="btn-delete-rubric text-red-600" data-id="${Sanitizer.escapeHTML(r.id)}">
                   <sl-icon name="trash"></sl-icon>
                 </sl-button>
               </div>
@@ -359,13 +360,13 @@ export class RubricDesigner {
                   <div class="flex items-center justify-between">
                     <span class="text-[10px] font-bold text-slate-400 font-mono">Tier ${idx + 1}</span>
                     ${currentRubric.tiers.length > 1 ? `
-                      <button type="button" class="btn-del-tier text-slate-400 hover:text-red-600 p-0.5" data-tier-id="${t.id}" title="Remove tier">
+                      <button type="button" class="btn-del-tier text-slate-400 hover:text-red-600 p-0.5" data-tier-id="${Sanitizer.escapeHTML(t.id)}" title="Remove tier">
                         <sl-icon name="x-lg" class="text-xs"></sl-icon>
                       </button>
                     ` : ''}
                   </div>
-                  <sl-input size="small" class="tier-label-inp" data-tier-id="${t.id}" value="${Sanitizer.escapeHTML(t.label)}" placeholder="Tier Name"></sl-input>
-                  <sl-input size="small" type="number" class="tier-pts-inp" data-tier-id="${t.id}" value="${t.default_points}" placeholder="Pts"></sl-input>
+                  <sl-input size="small" class="tier-label-inp" data-tier-id="${Sanitizer.escapeHTML(t.id)}" value="${Sanitizer.escapeHTML(t.label)}" placeholder="Tier Name"></sl-input>
+                  <sl-input size="small" type="number" class="tier-pts-inp" data-tier-id="${Sanitizer.escapeHTML(t.id)}" value="${Sanitizer.escapeHTML(t.default_points)}" placeholder="Pts"></sl-input>
                 </div>
               `).join('')}
             </div>
@@ -382,15 +383,15 @@ export class RubricDesigner {
 
             <div class="space-y-3 max-h-[380px] overflow-y-auto pr-1" id="criteria-list-mount">
               ${currentRubric.criteria.map((c, cIdx) => `
-                <div class="p-3 border rounded-xl bg-slate-50 space-y-2" data-crit-id="${c.id}">
+                <div class="p-3 border rounded-xl bg-slate-50 space-y-2" data-crit-id="${Sanitizer.escapeHTML(c.id)}">
                   <div class="flex items-center justify-between gap-3">
                     <div class="flex items-center gap-2 flex-1">
                       <span class="font-bold text-slate-600 text-xs font-mono">#${cIdx + 1}</span>
-                      <sl-input size="small" class="crit-name-inp flex-1" data-crit-id="${c.id}" value="${Sanitizer.escapeHTML(c.name)}" placeholder="Criterion Name"></sl-input>
-                      <sl-input size="small" type="number" step="0.1" class="crit-weight-inp w-24" data-crit-id="${c.id}" value="${c.weight || 1.0}" label="Weight"></sl-input>
+                      <sl-input size="small" class="crit-name-inp flex-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" value="${Sanitizer.escapeHTML(c.name)}" placeholder="Criterion Name"></sl-input>
+                      <sl-input size="small" type="number" step="0.1" class="crit-weight-inp w-24" data-crit-id="${Sanitizer.escapeHTML(c.id)}" value="${Sanitizer.escapeHTML(c.weight || 1.0)}" label="Weight"></sl-input>
                     </div>
                     ${currentRubric.criteria.length > 1 ? `
-                      <button type="button" class="btn-del-crit text-slate-400 hover:text-red-600 p-1" data-crit-id="${c.id}" title="Delete Criterion">
+                      <button type="button" class="btn-del-crit text-slate-400 hover:text-red-600 p-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" title="Delete Criterion">
                         <sl-icon name="trash"></sl-icon>
                       </button>
                     ` : ''}
@@ -406,9 +407,9 @@ export class RubricDesigner {
                         <div class="p-2 border rounded-lg bg-white space-y-1">
                           <div class="flex items-center justify-between text-[10px] text-slate-500 font-medium">
                             <span>${Sanitizer.escapeHTML(t.label)}</span>
-                            <span class="font-mono text-blue-600">${pts} pts</span>
+                            <span class="font-mono text-blue-600">${Sanitizer.escapeHTML(Sanitizer.safeNumber(pts))} pts</span>
                           </div>
-                          <sl-textarea size="small" class="cell-desc-inp" data-crit-id="${c.id}" data-tier-id="${t.id}" rows="2" placeholder="Quality descriptor..." value="${Sanitizer.escapeHTML(desc)}"></sl-textarea>
+                          <sl-textarea size="small" class="cell-desc-inp" data-crit-id="${Sanitizer.escapeHTML(c.id)}" data-tier-id="${Sanitizer.escapeHTML(t.id)}" rows="2" placeholder="Quality descriptor..." value="${Sanitizer.escapeHTML(desc)}"></sl-textarea>
                         </div>
                       `;
                     }).join('')}

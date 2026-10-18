@@ -1,4 +1,4 @@
-import { z } from 'zod';
+import { z } from './zod.js';
 import papaLib from 'papaparse';
 import { Sanitizer } from './sanitizer.js';
 import { defaultAcademicYear } from './academic-year.js';
@@ -33,6 +33,9 @@ export const CardSideSchema = z.object({
   text: z.string().default(''),
   mediaUrl: z.string().optional(),
   sketchData: z.array(StrokeSchema).optional(),
+  // Card media: idb-blob:// reference locally, data: URL inside shared decks (src/utils/media.js)
+  imageRef: z.string().nullable().optional(),
+  audioRef: z.string().nullable().optional(),
   ttsLang: z.string().default('en-US')
 });
 

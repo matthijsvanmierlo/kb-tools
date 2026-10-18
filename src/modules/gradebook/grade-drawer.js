@@ -28,6 +28,7 @@ const FEEDBACK_SNIPPETS = [
 ];
 
 const esc = (v) => Sanitizer.escapeHTML(v ?? '');
+const num = (v, fallback = 0) => esc(Sanitizer.safeNumber(v, fallback));
 const clone = (v) => JSON.parse(JSON.stringify(v ?? null));
 
 function round1(n) {
@@ -83,11 +84,11 @@ export class GradeDetailsDrawer {
         ${levels.map(l => {
           const active = current !== null && current !== undefined && current !== '' && Number(current) === Number(l.value);
           return `
-            <button type="button" ${attrs} data-level="${l.value}" role="radio" aria-checked="${active}"
+            <button type="button" ${attrs} data-level="${esc(l.value)}" role="radio" aria-checked="${active}"
               title="${esc(l.description || '')}"
               class="kb-level-btn inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors ${active ? 'text-white border-transparent' : 'bg-white border-slate-200 text-slate-700 hover:border-slate-300'}"
-              style="${active ? `background-color:${l.color}` : ''}">
-              <span class="tabular-nums">${l.value}</span><span class="font-medium ${active ? 'text-white/90' : 'text-slate-500'}">${esc(l.label)}</span>
+              style="${active ? `background-color:${Sanitizer.safeColor(l.color)}` : ''}">
+              <span class="tabular-nums">${esc(l.value)}</span><span class="font-medium ${active ? 'text-white/90' : 'text-slate-500'}">${esc(l.label)}</span>
             </button>`;
         }).join('')}
       </div>`;
@@ -100,7 +101,7 @@ export class GradeDetailsDrawer {
       const rawPct = round1((Number(state.raw_score) / maxScore) * 100);
       const effPct = round1(norm.effectivePct);
       if (state.status === 'late' && effPct !== rawPct) {
-        return `<p class="text-xs text-amber-700 mt-2 flex items-center gap-1.5"><sl-icon name="info-circle"></sl-icon> Late policy applies: ${rawPct}% → <strong>${effPct}%</strong> (${esc(letterForPercent(effPct, course))})</p>`;
+        return `<p class="text-xs text-amber-700 mt-2 flex items-center gap-1.5"><sl-icon name="info-circle"></sl-icon> Late policy applies: ${num(rawPct)}% → <strong>${num(effPct)}%</strong> (${esc(letterForPercent(effPct, course))})</p>`;
       }
       if (state.status === 'late') {
         return `<p class="text-xs text-slate-500 mt-2">This category has no late penalty configured. Set one in class settings → Categories &amp; policies.</p>`;
@@ -116,14 +117,14 @@ export class GradeDetailsDrawer {
         <section class="space-y-3">
           <div class="flex items-center justify-between gap-3">
             <h3 class="text-sm font-semibold text-slate-900 flex items-center gap-2"><sl-icon name="grid-3x3" class="text-violet-600"></sl-icon> ${esc(rubric.title)}</h3>
-            <span class="text-xs tabular-nums text-slate-500">${score.totalEarned} / ${score.totalPossible} rubric pts${isProficiency ? '' : ` → <strong class="text-slate-900">${scaled} / ${maxScore}</strong>`}</span>
+            <span class="text-xs tabular-nums text-slate-500">${num(score.totalEarned)} / ${num(score.totalPossible)} rubric pts${isProficiency ? '' : ` → <strong class="text-slate-900">${num(scaled)} / ${num(maxScore)}</strong>`}</span>
           </div>
           <div class="space-y-3">
             ${(rubric.criteria || []).map(c => `
               <div class="rounded-xl border border-slate-200 p-3 space-y-2">
                 <div class="flex items-baseline justify-between gap-2">
                   <span class="text-sm font-medium text-slate-800">${esc(c.name)}</span>
-                  ${c.weight && c.weight !== 1 ? `<span class="text-[11px] text-slate-400">×${c.weight}</span>` : ''}
+                  ${c.weight && c.weight !== 1 ? `<span class="text-[11px] text-slate-400">×${num(c.weight, 1)}</span>` : ''}
                 </div>
                 <div class="grid gap-1.5" style="grid-template-columns: repeat(${(rubric.tiers || []).length || 1}, minmax(0, 1fr));">
                   ${(rubric.tiers || []).map(t => {
@@ -132,13 +133,13 @@ export class GradeDetailsDrawer {
                     const active = state.rubric_eval[c.id] === t.id;
                     return `
                       <button type="button" class="kb-rubric-pick text-left rounded-lg border p-2 transition-colors ${active ? 'kb-rubric-active' : 'border-slate-200 hover:bg-slate-50'}"
-                        data-crit="${c.id}" data-tier="${t.id}" aria-pressed="${active}">
-                        <span class="flex items-center justify-between gap-1 text-[11px] font-semibold text-slate-700"><span class="truncate">${esc(t.label)}</span><span class="tabular-nums text-blue-600">${pts}</span></span>
+                        data-crit="${esc(c.id)}" data-tier="${esc(t.id)}" aria-pressed="${active}">
+                        <span class="flex items-center justify-between gap-1 text-[11px] font-semibold text-slate-700"><span class="truncate">${esc(t.label)}</span><span class="tabular-nums text-blue-600">${num(pts)}</span></span>
                         ${cell?.descriptor ? `<span class="block text-[11px] leading-snug text-slate-500 mt-1">${esc(cell.descriptor)}</span>` : ''}
                       </button>`;
                   }).join('')}
                 </div>
-                <sl-input size="small" class="kb-rubric-comment" data-crit="${c.id}" placeholder="Comment on ${esc(c.name.toLowerCase())} (optional)" value="${esc(state.rubric_comments[c.id] || '')}"></sl-input>
+                <sl-input size="small" class="kb-rubric-comment" data-crit="${esc(c.id)}" placeholder="Comment on ${esc(c.name.toLowerCase())} (optional)" value="${esc(state.rubric_comments[c.id] || '')}"></sl-input>
               </div>
             `).join('')}
           </div>
@@ -156,8 +157,8 @@ export class GradeDetailsDrawer {
                 <span class="text-xs font-bold text-blue-700 tabular-nums">${esc(s.code)}</span>
                 <p class="text-xs text-slate-600 leading-snug mt-0.5">${esc(s.description)}</p>
               </div>
-              ${levelButtons(state.standard_scores[s.id], `data-std="${s.id}"`)}
-              <sl-input size="small" class="kb-std-comment" data-std="${s.id}" placeholder="Feedback on this standard (optional)" value="${esc(state.standard_comments[s.id] || '')}"></sl-input>
+              ${levelButtons(state.standard_scores[s.id], `data-std="${esc(s.id)}"`)}
+              <sl-input size="small" class="kb-std-comment" data-std="${esc(s.id)}" placeholder="Feedback on this standard (optional)" value="${esc(state.standard_comments[s.id] || '')}"></sl-input>
             </div>
           `).join('')}
         </section>`;
@@ -197,10 +198,10 @@ export class GradeDetailsDrawer {
             </div>
             ${state.status === 'late' ? `
               <div class="flex items-center gap-3 pt-1">
-                <sl-input id="input-grade-days-late" type="number" min="1" size="small" value="${state.days_late}" class="w-28" label="Days late"></sl-input>
-                <p class="text-xs text-slate-500 pt-5">${policy.late_mode === 'daily' ? `−${policy.late_daily_pct || 0}% per day, capped at ${policy.max_late_cap_pct || 50}%` : policy.late_mode === 'fixed' ? `Flat −${policy.late_deduct_pct || 0}% penalty` : 'No automatic penalty for this category'}</p>
+                <sl-input id="input-grade-days-late" type="number" min="1" size="small" value="${num(state.days_late, 1)}" class="w-28" label="Days late"></sl-input>
+                <p class="text-xs text-slate-500 pt-5">${policy.late_mode === 'daily' ? `−${num(policy.late_daily_pct)}% per day, capped at ${num(policy.max_late_cap_pct || 50)}%` : policy.late_mode === 'fixed' ? `Flat −${num(policy.late_deduct_pct)}% penalty` : 'No automatic penalty for this category'}</p>
               </div>` : ''}
-            ${state.status === 'missing' ? `<p class="text-xs text-slate-500">Counts as ${policy.missing_floor_pct ?? 0}% until work is turned in.</p>` : ''}
+            ${state.status === 'missing' ? `<p class="text-xs text-slate-500">Counts as ${num(policy.missing_floor_pct)}% until work is turned in.</p>` : ''}
             ${state.status === 'exempt' ? `<p class="text-xs text-slate-500">Excused work is left out of all averages.</p>` : ''}
           </section>
 
@@ -212,8 +213,8 @@ export class GradeDetailsDrawer {
               ${levelButtons(state.raw_score, 'data-single-level')}
             ` : `
               <div class="flex items-center gap-2">
-                <sl-input id="input-grade-score" type="number" min="0" step="0.5" value="${state.raw_score ?? ''}" class="w-32" aria-label="Points earned"></sl-input>
-                <span class="text-sm text-slate-500 tabular-nums">/ ${maxScore} pts</span>
+                <sl-input id="input-grade-score" type="number" min="0" step="0.5" value="${esc(state.raw_score)}" class="w-32" aria-label="Points earned"></sl-input>
+                <span class="text-sm text-slate-500 tabular-nums">/ ${num(maxScore)} pts</span>
                 ${rubric ? '<span class="text-xs text-slate-400">· filled in by the rubric below, editable</span>' : ''}
               </div>
               <div id="grade-penalty-preview">${penaltyPreview()}</div>

@@ -97,7 +97,7 @@ export class AccessCodes {
       alert('Allow pop-ups to print code slips.');
       return;
     }
-    const esc = Sanitizer.escapeHTML;
+    const esc = v => Sanitizer.escapeHTML(v);
     const slips = students.filter(s => s.access_code).map(s => `
       <div class="slip">
         <div class="cls">${esc(course?.name || 'Class')}${course?.section ? ` · ${esc(course.section)}` : ''}</div>

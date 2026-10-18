@@ -93,7 +93,7 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
       <div class="space-y-4">
         <div class="flex flex-wrap items-center justify-between gap-2">
           <span class="text-xs font-semibold px-2 py-1 rounded-md tabular-nums ${total === 100 ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}">
-            Weights total ${total}%${total === 100 ? ' ✓' : ' — should add up to 100%'}
+            Weights total ${esc(total)}%${total === 100 ? ' ✓' : ' — should add up to 100%'}
           </span>
           <sl-button size="small" id="cs-add-cat"><sl-icon slot="prefix" name="plus-lg"></sl-icon> Add category</sl-button>
         </div>
@@ -103,21 +103,21 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
           return sectionCard(`
             <div class="flex items-end gap-2">
               <sl-input size="small" class="cs-cat flex-1" data-i="${i}" data-f="name" label="Category" value="${esc(c.name)}"></sl-input>
-              <sl-input size="small" type="number" class="cs-cat w-24" data-i="${i}" data-f="weight_pct" label="Weight %" value="${c.weight_pct ?? 0}"></sl-input>
-              <sl-input size="small" type="number" class="cs-cat w-28" data-i="${i}" data-f="drop_lowest" label="Drop lowest" value="${c.drop_lowest ?? 0}" min="0"></sl-input>
+              <sl-input size="small" type="number" class="cs-cat w-24" data-i="${i}" data-f="weight_pct" label="Weight %" value="${esc(c.weight_pct ?? 0)}"></sl-input>
+              <sl-input size="small" type="number" class="cs-cat w-28" data-i="${i}" data-f="drop_lowest" label="Drop lowest" value="${esc(c.drop_lowest ?? 0)}" min="0"></sl-input>
               <button type="button" class="kb-icon-btn hover:!text-red-600 cs-del-cat mb-0.5" data-i="${i}" aria-label="Remove category"><sl-icon name="trash"></sl-icon></button>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-1 border-t border-slate-100">
-              <sl-select size="small" class="cs-pol sm:col-span-2" data-i="${i}" data-f="late_mode" label="Late work" value="${mode}">
+              <sl-select size="small" class="cs-pol sm:col-span-2" data-i="${i}" data-f="late_mode" label="Late work" value="${esc(mode)}">
                 ${Object.entries(LATE_MODES).map(([k, v]) => `<sl-option value="${k}">${v}</sl-option>`).join('')}
               </sl-select>
               ${mode === 'fixed' ? `
-                <sl-input size="small" type="number" class="cs-pol" data-i="${i}" data-f="late_deduct_pct" label="Deduct %" value="${p.late_deduct_pct ?? 10}"></sl-input>
+                <sl-input size="small" type="number" class="cs-pol" data-i="${i}" data-f="late_deduct_pct" label="Deduct %" value="${esc(p.late_deduct_pct ?? 10)}"></sl-input>
               ` : mode === 'daily' ? `
-                <sl-input size="small" type="number" class="cs-pol" data-i="${i}" data-f="late_daily_pct" label="% per day" value="${p.late_daily_pct ?? 5}"></sl-input>
-                <sl-input size="small" type="number" class="cs-pol" data-i="${i}" data-f="max_late_cap_pct" label="Max penalty %" value="${p.max_late_cap_pct ?? 50}"></sl-input>
+                <sl-input size="small" type="number" class="cs-pol" data-i="${i}" data-f="late_daily_pct" label="% per day" value="${esc(p.late_daily_pct ?? 5)}"></sl-input>
+                <sl-input size="small" type="number" class="cs-pol" data-i="${i}" data-f="max_late_cap_pct" label="Max penalty %" value="${esc(p.max_late_cap_pct ?? 50)}"></sl-input>
               ` : '<div class="hidden sm:block"></div>'}
-              <sl-input size="small" type="number" class="cs-pol ${mode === 'daily' ? 'sm:col-span-4' : ''}" data-i="${i}" data-f="missing_floor_pct" label="Missing counts as %" value="${p.missing_floor_pct ?? 0}"></sl-input>
+              <sl-input size="small" type="number" class="cs-pol ${mode === 'daily' ? 'sm:col-span-4' : ''}" data-i="${i}" data-f="missing_floor_pct" label="Missing counts as %" value="${esc(p.missing_floor_pct ?? 0)}"></sl-input>
             </div>
           `);
         }).join('')}
@@ -131,12 +131,12 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
     return `
       <div class="space-y-4">
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <sl-select id="cs-scale-preset" label="Start from a preset" value="${draft.letter_scale.preset || 'custom'}">
+          <sl-select id="cs-scale-preset" label="Start from a preset" value="${esc(draft.letter_scale.preset || 'custom')}">
             ${Object.entries(LETTER_SCALE_PRESETS).map(([k, v]) => `<sl-option value="${k}">${esc(v.name)}</sl-option>`).join('')}
             <sl-option value="custom">Custom</sl-option>
           </sl-select>
           <sl-select id="cs-scale-copy" label="Copy from another class" placeholder="${otherCourses.length ? 'Choose a class…' : 'No other classes yet'}" ${otherCourses.length ? '' : 'disabled'}>
-            ${otherCourses.map(c => `<sl-option value="${c.id}">${esc(c.name)}${c.section ? ` · ${esc(c.section)}` : ''}</sl-option>`).join('')}
+            ${otherCourses.map(c => `<sl-option value="${esc(c.id)}">${esc(c.name)}${c.section ? ` · ${esc(c.section)}` : ''}</sl-option>`).join('')}
           </sl-select>
         </div>
         ${sectionCard(`
@@ -150,7 +150,7 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
               const idx = draft.letter_scale.bands.indexOf(b);
               return `
                 <sl-input size="small" class="cs-band" data-i="${idx}" data-f="label" value="${esc(b.label)}" aria-label="Grade label"></sl-input>
-                <sl-input size="small" type="number" class="cs-band" data-i="${idx}" data-f="min" value="${b.min}" aria-label="Minimum percent"></sl-input>
+                <sl-input size="small" type="number" class="cs-band" data-i="${idx}" data-f="min" value="${esc(b.min)}" aria-label="Minimum percent"></sl-input>
                 <button type="button" class="kb-icon-btn hover:!text-red-600 cs-del-band" data-i="${idx}" aria-label="Remove band"><sl-icon name="x-lg"></sl-icon></button>`;
             }).join('')}
           </div>
@@ -209,9 +209,9 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
                 const idx = sbg.levels.indexOf(l);
                 return `
                   <div class="flex items-center gap-2">
-                    <input type="color" class="cs-lvl w-8 h-8 rounded-md border border-slate-200 bg-transparent cursor-pointer flex-shrink-0" data-i="${idx}" data-f="color" value="${esc(l.color || '#64748b')}" aria-label="Level ${l.value} colour" />
-                    <span class="w-6 text-center text-sm font-bold tabular-nums text-slate-700">${l.value}</span>
-                    <sl-input size="small" class="cs-lvl flex-1 min-w-0" data-i="${idx}" data-f="label" value="${esc(l.label)}" aria-label="Level ${l.value} label"></sl-input>
+                    <input type="color" class="cs-lvl w-8 h-8 rounded-md border border-slate-200 bg-transparent cursor-pointer flex-shrink-0" data-i="${idx}" data-f="color" value="${esc(l.color || '#64748b')}" aria-label="Level ${esc(l.value)} colour" />
+                    <span class="w-6 text-center text-sm font-bold tabular-nums text-slate-700">${esc(l.value)}</span>
+                    <sl-input size="small" class="cs-lvl flex-1 min-w-0" data-i="${idx}" data-f="label" value="${esc(l.label)}" aria-label="Level ${esc(l.value)} label"></sl-input>
                   </div>`;
               }).join('')}
             </div>
@@ -219,12 +219,12 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
           `)}
           ${sectionCard(`
             <h4 class="text-sm font-semibold text-slate-900">Mastery calculation</h4>
-            <sl-select id="cs-calc" value="${sbg.calculation}" size="small">
+            <sl-select id="cs-calc" value="${esc(sbg.calculation)}" size="small">
               ${Object.entries(SBG_CALCULATION_METHODS).map(([k, v]) => `<sl-option value="${k}">${esc(v.name)}</sl-option>`).join('')}
             </sl-select>
             ${helper(esc(SBG_CALCULATION_METHODS[sbg.calculation]?.help || ''))}
             ${sbg.calculation === 'decaying_average' ? `
-              <sl-input size="small" type="number" step="0.05" min="0.05" max="0.95" id="cs-decay" label="Weight of the newest score" value="${sbg.decay_weight}"></sl-input>
+              <sl-input size="small" type="number" step="0.05" min="0.05" max="0.95" id="cs-decay" label="Weight of the newest score" value="${esc(sbg.decay_weight)}"></sl-input>
             ` : ''}
           `)}
         </div>
@@ -239,9 +239,9 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
             ${mbands.map(b => {
               const idx = sbg.mastery_bands.indexOf(b);
               return `
-                <sl-input size="small" type="number" step="0.1" class="cs-mband" data-i="${idx}" data-f="min" value="${b.min}" aria-label="Minimum mastery"></sl-input>
+                <sl-input size="small" type="number" step="0.1" class="cs-mband" data-i="${idx}" data-f="min" value="${esc(b.min)}" aria-label="Minimum mastery"></sl-input>
                 <sl-input size="small" class="cs-mband" data-i="${idx}" data-f="letter" value="${esc(b.letter)}" aria-label="Letter"></sl-input>
-                <sl-input size="small" type="number" class="cs-mband" data-i="${idx}" data-f="percent" value="${b.percent}" aria-label="Reported percent"></sl-input>
+                <sl-input size="small" type="number" class="cs-mband" data-i="${idx}" data-f="percent" value="${esc(b.percent)}" aria-label="Reported percent"></sl-input>
                 <button type="button" class="kb-icon-btn hover:!text-red-600 cs-del-mband" data-i="${idx}" aria-label="Remove row"><sl-icon name="x-lg"></sl-icon></button>`;
             }).join('')}
           </div>

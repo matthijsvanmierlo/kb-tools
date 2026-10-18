@@ -44,30 +44,30 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
 
         <div class="space-y-2">
           <span class="text-[0.8125rem] font-semibold text-slate-900">Scoring</span>
-          <sl-radio-group id="as-scoring" value="${current.scoring}">
+          <sl-radio-group id="as-scoring" value="${esc(current.scoring)}">
             <sl-radio-button value="points"><sl-icon slot="prefix" name="123"></sl-icon> Points</sl-radio-button>
-            <sl-radio-button value="proficiency"><sl-icon slot="prefix" name="bullseye"></sl-icon> Proficiency (0–${maxLevel})</sl-radio-button>
+            <sl-radio-button value="proficiency"><sl-icon slot="prefix" name="bullseye"></sl-icon> Proficiency (0–${esc(maxLevel)})</sl-radio-button>
           </sl-radio-group>
           <p class="text-xs text-slate-500">${isProf ? 'Score each student on the proficiency scale for every aligned standard.' : 'Enter points earned; percentages and letters follow the class grading scale.'}</p>
         </div>
 
         <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <sl-select id="as-cat" label="Category" value="${current.category_id || ''}">
-            ${(course.categories || []).map(c => `<sl-option value="${c.id}">${esc(c.name)} · ${c.weight_pct}%</sl-option>`).join('')}
+          <sl-select id="as-cat" label="Category" value="${esc(current.category_id)}">
+            ${(course.categories || []).map(c => `<sl-option value="${esc(c.id)}">${esc(c.name)} · ${esc(c.weight_pct)}%</sl-option>`).join('')}
           </sl-select>
           ${isProf ? `
-            <sl-input label="Scale" value="0 – ${maxLevel}" disabled></sl-input>
+            <sl-input label="Scale" value="0 – ${esc(maxLevel)}" disabled></sl-input>
           ` : `
-            <sl-input id="as-max" label="Max points" type="number" min="1" value="${current.max_score || 100}"></sl-input>
+            <sl-input id="as-max" label="Max points" type="number" min="1" value="${esc(current.max_score || 100)}"></sl-input>
           `}
           <sl-input id="as-due" label="Due date" type="date" value="${esc(current.due_date || '')}"></sl-input>
           ${(course.terms || []).length > 1 ? `
-            <sl-select id="as-term" label="Term" value="${current.term_id || ''}">
-              ${course.terms.map(t => `<sl-option value="${t.id}">${esc(t.name)}</sl-option>`).join('')}
+            <sl-select id="as-term" label="Term" value="${esc(current.term_id)}">
+              ${course.terms.map(t => `<sl-option value="${esc(t.id)}">${esc(t.name)}</sl-option>`).join('')}
             </sl-select>` : '<div class="hidden sm:block"></div>'}
-          <sl-select id="as-rubric" label="Rubric" value="${current.rubric_id || ''}" class="sm:col-span-2">
+          <sl-select id="as-rubric" label="Rubric" value="${esc(current.rubric_id)}" class="sm:col-span-2">
             <sl-option value="">No rubric</sl-option>
-            ${rubrics.map(r => `<sl-option value="${r.id}">${esc(r.title)}</sl-option>`).join('')}
+            ${rubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title)}</sl-option>`).join('')}
           </sl-select>
         </div>
 
@@ -77,8 +77,8 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
             ${onOpenSettings ? '<button type="button" id="as-manage-standards" class="text-xs font-medium text-blue-600 hover:underline">Manage standards</button>' : ''}
           </div>
           ${standards.length ? `
-            <sl-select id="as-standards" multiple clearable max-options-visible="4" placeholder="Choose standards this assignment assesses" value="${current.standard_ids.join(' ')}">
-              ${standards.map(s => `<sl-option value="${s.id}">${esc(s.code)}<span slot="suffix" class="text-[11px] text-slate-400 max-w-[260px] truncate">${esc(s.description)}</span></sl-option>`).join('')}
+            <sl-select id="as-standards" multiple clearable max-options-visible="4" placeholder="Choose standards this assignment assesses" value="${esc(current.standard_ids.join(' '))}">
+              ${standards.map(s => `<sl-option value="${esc(s.id)}">${esc(s.code)}<span slot="suffix" class="text-[11px] text-slate-400 max-w-[260px] truncate">${esc(s.description)}</span></sl-option>`).join('')}
             </sl-select>
           ` : `
             <p class="text-xs text-slate-500 rounded-lg border border-dashed border-slate-300 p-3">This class has no standards yet. Add or import them in class settings → Standards.</p>
@@ -89,7 +89,7 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
           <div class="rounded-xl border border-slate-200 p-4 space-y-3">
             <span class="text-[0.8125rem] font-semibold text-slate-900">Whole-column actions</span>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
-              ${isProf ? '' : `<sl-button size="small" id="as-bulk-max"><sl-icon slot="prefix" name="check-all"></sl-icon> Fill empty with ${current.max_score}</sl-button>`}
+              ${isProf ? '' : `<sl-button size="small" id="as-bulk-max"><sl-icon slot="prefix" name="check-all"></sl-icon> Fill empty with ${esc(current.max_score)}</sl-button>`}
               <sl-button size="small" id="as-bulk-missing"><sl-icon slot="prefix" name="exclamation-octagon"></sl-icon> Mark empty as missing</sl-button>
               <sl-button size="small" id="as-bulk-late"><sl-icon slot="prefix" name="clock-history"></sl-icon> Mark empty as late</sl-button>
               <sl-button size="small" id="as-bulk-clear"><sl-icon slot="prefix" name="eraser"></sl-icon> Clear all scores</sl-button>

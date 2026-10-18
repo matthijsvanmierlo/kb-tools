@@ -224,6 +224,33 @@ export function buildCanvasExportRows({
   return { headers, rows: [pointsRow, ...studentRows] };
 }
 
+export const GOOGLE_CLASSROOM_HEADERS = ['Email Address', 'Assignment Score', 'Feedback'];
+
+/**
+ * Google Classroom / SIS preset: one assignment, three columns. Import it into a Google Sheet,
+ * then in Classroom use Grades → Import grades from Sheets (students are matched by email).
+ * Students without an email can't be matched and are left out.
+ */
+export function buildGoogleClassroomRows({
+  assignment,
+  students = [],
+  gradesMap = new Map()
+}) {
+  const map = gradesMap.get ? gradesMap : new Map(Object.entries(gradesMap));
+  const rows = [];
+  for (const student of students) {
+    if (!student.email) continue;
+    const rec = map.get(`${student.student_id}+${assignment.id}`);
+    const hasScore = rec && rec.raw_score !== null && rec.raw_score !== undefined && rec.raw_score !== '';
+    rows.push({
+      'Email Address': student.email,
+      'Assignment Score': hasScore ? rec.raw_score : '',
+      Feedback: rec?.feedback || ''
+    });
+  }
+  return { headers: [...GOOGLE_CLASSROOM_HEADERS], rows, skipped: students.length - rows.length };
+}
+
 /**
  * Build OneRoster 1.1 CSV Results Bundle (Zip)
  */

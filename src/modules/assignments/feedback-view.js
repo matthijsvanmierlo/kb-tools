@@ -25,10 +25,10 @@ export async function renderFeedbackView(params, router, container) {
   }
 
   const p = eph.payload;
-  const earned = p.score?.earned ?? 0;
-  const possible = p.score?.possible ?? 0;
+  const earned = Sanitizer.safeNumber(p.score?.earned);
+  const possible = Sanitizer.safeNumber(p.score?.possible);
   const percent = possible > 0 ? ((earned / possible) * 100).toFixed(1) : '100.0';
-  const pending = p.score?.pending ?? 0;
+  const pending = Sanitizer.safeNumber(p.score?.pending);
 
   let submittedDateStr = '';
   if (p.submission?.submitted_at) {
@@ -39,7 +39,8 @@ export async function renderFeedbackView(params, router, container) {
     }
   }
 
-  const isLate = (p.submission?.days_late ?? 0) > 0;
+  const daysLate = Sanitizer.safeNumber(p.submission?.days_late);
+  const isLate = daysLate > 0;
   const isVerified = p.submission?.identity === 'verified';
 
   container.innerHTML = `
@@ -55,7 +56,7 @@ export async function renderFeedbackView(params, router, container) {
             <span class="font-medium text-slate-900">${esc(p.student?.full_name || 'Student')}</span>
             ${p.student?.student_id ? `<span class="text-xs text-slate-400 font-mono">(${esc(p.student.student_id)})</span>` : ''}
             ${submittedDateStr ? `<span class="text-slate-300">·</span><span>Submitted ${esc(submittedDateStr)}</span>` : ''}
-            ${isLate ? `<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Late (+${p.submission.days_late}d)</span>` : ''}
+            ${isLate ? `<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 text-amber-700 border border-amber-200">Late (+${daysLate}d)</span>` : ''}
             ${isVerified ? `<span class="px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1"><sl-icon name="patch-check"></sl-icon> Verified</span>` : ''}
           </div>
         </div>
@@ -96,9 +97,9 @@ export async function renderFeedbackView(params, router, container) {
           return `
             <div class="bg-white rounded-xl border border-slate-200 p-5 space-y-4 shadow-sm print:shadow-none">
               <div class="flex items-center justify-between gap-3">
-                <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Question ${q.n}</span>
+                <span class="text-xs font-bold uppercase tracking-wider text-slate-500">Question ${Sanitizer.safeNumber(q.n)}</span>
                 <span class="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold border ${badgeCls}">
-                  ${q.earned} / ${q.possible} pts
+                  ${Sanitizer.safeNumber(q.earned)} / ${Sanitizer.safeNumber(q.possible)} pts
                 </span>
               </div>
 

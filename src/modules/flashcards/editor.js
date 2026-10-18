@@ -198,7 +198,7 @@ export class FlashcardEditor {
               <sl-select id="select-deck-class" size="small" placeholder="Assign Class..." class="w-48" value="${Sanitizer.escapeHTML(this.deck.class_id || '')}">
                 <sl-option value="">No Class (General)</sl-option>
                 ${this.classes.map(c => `
-                  <sl-option value="${c.id}">${Sanitizer.escapeHTML(c.name)}</sl-option>
+                  <sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)}</sl-option>
                 `).join('')}
               </sl-select>
             </div>
@@ -273,7 +273,7 @@ export class FlashcardEditor {
                   Front (Prompt / Question)
                 </span>
                 <div class="flex items-center gap-2">
-                  <sl-select id="select-front-lang" size="small" value="${currentCard.front?.ttsLang || 'en-US'}" class="w-40" aria-label="Front text-to-speech language">
+                  <sl-select id="select-front-lang" size="small" value="${Sanitizer.escapeHTML(currentCard.front?.ttsLang || 'en-US')}" class="w-40" aria-label="Front text-to-speech language">
                     <sl-option value="en-US">English (US)</sl-option>
                     <sl-option value="en-GB">English (UK)</sl-option>
                     <sl-option value="nl-NL">Dutch (NL)</sl-option>
@@ -293,6 +293,7 @@ export class FlashcardEditor {
 
               <!-- Mount RichTextEditor for Front -->
               <div id="front-editor-mount"></div>
+              <div class="kb-card-media" data-media-side="front"></div>
             </div>
 
             <!-- Back of Card Section -->
@@ -303,7 +304,7 @@ export class FlashcardEditor {
                   Back (Answer / Explanation)
                 </span>
                 <div class="flex items-center gap-2">
-                  <sl-select id="select-back-lang" size="small" value="${currentCard.back?.ttsLang || 'en-US'}" class="w-40" aria-label="Back text-to-speech language">
+                  <sl-select id="select-back-lang" size="small" value="${Sanitizer.escapeHTML(currentCard.back?.ttsLang || 'en-US')}" class="w-40" aria-label="Back text-to-speech language">
                     <sl-option value="en-US">English (US)</sl-option>
                     <sl-option value="en-GB">English (UK)</sl-option>
                     <sl-option value="nl-NL">Dutch (NL)</sl-option>
@@ -323,6 +324,7 @@ export class FlashcardEditor {
 
               <!-- Mount RichTextEditor for Back -->
               <div id="back-editor-mount"></div>
+              <div class="kb-card-media" data-media-side="back"></div>
             </div>
           </div>
         </div>
@@ -468,6 +470,106 @@ export class FlashcardEditor {
       toast.info('Back sketch removed.');
       this._render();
       this._scheduleAutoSave();
+    });
+
+    this.container.querySelectorAll('[data-media-side]').forEach(el => {
+      this._mountMediaControls(el, currentCard, el.dataset.mediaSide);
+    });
+  }
+
+  /**
+   * Image + audio clip controls for one side of a card. Images are downscaled to WebP and
+   * recordings capped at 10 s before they are stored (src/utils/media.js).
+   */
+  async _mountMediaControls(el, card, side) {
+    const media = await import('../../utils/media.js');
+    if (typeof card[side] === 'string') card[side] = { text: card[side], ttsLang: 'en-US' };
+    const data = card[side] || (card[side] = { text: '', ttsLang: 'en-US' });
+    const label = side === 'front' ? 'front' : 'back';
+    const [imgSrc, audioSrc] = await Promise.all([
+      media.resolveMediaSrc(data.imageRef, 'image'),
+      media.resolveMediaSrc(data.audioRef, 'audio')
+    ]);
+
+    el.innerHTML = `
+      <div class="flex flex-wrap items-center gap-2 pt-1">
+        <input type="file" accept="image/*" class="hidden" data-role="image-input" aria-hidden="true">
+        <sl-button size="small" data-role="add-image"><sl-icon slot="prefix" name="image"></sl-icon> ${imgSrc ? 'Replace image' : 'Add image'}</sl-button>
+        <sl-button size="small" data-role="record"><sl-icon slot="prefix" name="mic"></sl-icon> ${audioSrc ? 'Re-record audio' : 'Record audio'}</sl-button>
+        <span class="text-xs text-slate-500" data-role="status" aria-live="polite"></span>
+      </div>
+      ${imgSrc ? `
+        <div class="kb-card-media-item">
+          <img src="${Sanitizer.escapeHTML(imgSrc)}" alt="Image on the ${label} of the card" class="max-h-40 rounded-lg border border-slate-200">
+          <button type="button" class="text-xs text-red-500 hover:text-red-700 underline" data-role="remove-image">Remove image</button>
+        </div>` : ''}
+      ${audioSrc ? `
+        <div class="kb-card-media-item">
+          <audio controls preload="none" src="${Sanitizer.escapeHTML(audioSrc)}" aria-label="Audio clip on the ${label} of the card"></audio>
+          <button type="button" class="text-xs text-red-500 hover:text-red-700 underline" data-role="remove-audio">Remove audio</button>
+        </div>` : ''}`;
+
+    const status = el.querySelector('[data-role="status"]');
+    const refresh = () => { this._scheduleAutoSave(); this._mountMediaControls(el, card, side); };
+    const fileInput = el.querySelector('[data-role="image-input"]');
+
+    el.querySelector('[data-role="add-image"]').addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      status.textContent = 'Optimising image…';
+      try {
+        const blob = await media.downscaleImage(file);
+        data.imageRef = await media.storeMediaBlob(blob);
+        toast.success(`Image added (${Math.max(1, Math.round(blob.size / 1024))} KB).`);
+        refresh();
+      } catch (err) {
+        status.textContent = '';
+        toast.danger(err.message === 'IMAGE_TOO_LARGE' ? 'That image is larger than 25 MB.' : 'Could not read that image.');
+      }
+    });
+
+    const recordBtn = el.querySelector('[data-role="record"]');
+    let session = null;
+    recordBtn.addEventListener('click', async () => {
+      if (session) {
+        session.stop();
+        return;
+      }
+      try {
+        session = await media.startAudioClip();
+      } catch (err) {
+        toast.danger(err?.name === 'NotAllowedError'
+          ? 'Microphone access was blocked. Allow it for this site to record audio.'
+          : 'Audio recording is not available in this browser.');
+        return;
+      }
+      recordBtn.innerHTML = '<sl-icon slot="prefix" name="stop-circle"></sl-icon> Stop recording';
+      recordBtn.variant = 'danger';
+      const started = Date.now();
+      const tick = setInterval(() => {
+        status.textContent = `Recording… ${Math.ceil((media.AUDIO_MAX_MS - (Date.now() - started)) / 1000)} s left`;
+      }, 250);
+      try {
+        const blob = await session.result;
+        data.audioRef = await media.storeMediaBlob(blob);
+        toast.success('Audio clip saved.');
+      } catch (_) {
+        toast.warning('Nothing was recorded.');
+      } finally {
+        clearInterval(tick);
+        session = null;
+        refresh();
+      }
+    });
+
+    el.querySelector('[data-role="remove-image"]')?.addEventListener('click', () => {
+      data.imageRef = null;
+      refresh();
+    });
+    el.querySelector('[data-role="remove-audio"]')?.addEventListener('click', () => {
+      data.audioRef = null;
+      refresh();
     });
   }
 

@@ -196,7 +196,7 @@ describe('Phase 1: StorageManager & Snapshot Dump/Restore', () => {
     await flashcardsTable.put(testDeck);
 
     const snapshot = await storageManager.dumpMasterSnapshot();
-    expect(snapshot.version).toBe(1);
+    expect(snapshot.version).toBe(2);
     expect(snapshot.data.flashcards.length).toBeGreaterThan(0);
 
     // Clear and restore

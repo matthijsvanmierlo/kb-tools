@@ -8,6 +8,8 @@ import { FlashcardEditor } from './editor.js';
 import { StudyPlayer } from './study-player.js';
 import { TowerDefenseEngine } from './tower-defense.js';
 import { ProjectLibraryView } from '../../components/project-library.js';
+import { renderStudyPlanner, applySavedRetention } from './study-planner.js';
+import { normalizeSharedEnvelope } from '../../core/shared-payload.js';
 import { ClassManager } from '../../components/class-manager.js';
 import * as jspdfLib from 'jspdf';
 import * as autotableLib from 'jspdf-autotable';
@@ -20,6 +22,7 @@ const autoTable = autotableLib.autoTable || autotableLib.default;
  */
 export async function renderFlashcardsView(params, router, container) {
   const hash = window.location.hash || '#/flashcards';
+  await applySavedRetention();
 
   // Sub-route: Study
   if (hash.startsWith('#/flashcards/study')) {
@@ -136,6 +139,10 @@ async function renderLibrary(container, router) {
     await seedSampleDeck();
   }
 
+  container.innerHTML = '<div data-role="library"></div><div data-role="planner" class="max-w-7xl mx-auto mt-6 px-0"></div>';
+  const libraryEl = container.querySelector('[data-role="library"]');
+  const plannerEl = container.querySelector('[data-role="planner"]');
+
   const library = new ProjectLibraryView({
     moduleType: 'flashcards',
     title: 'Flashcard Decks',
@@ -163,7 +170,8 @@ async function renderLibrary(container, router) {
         try {
           const text = await file.text();
           if (file.name.endsWith('.json')) {
-            const parsed = JSON.parse(text);
+            // Imported files come from elsewhere: same value hygiene as shared links
+            const parsed = normalizeSharedEnvelope({ type: 'flashcards', payload: JSON.parse(text) }).payload;
             const newDeck = {
               version: 1,
               id: generateUUID(),
@@ -201,7 +209,8 @@ async function renderLibrary(container, router) {
             await storage.table('flashcards').put(newDeck);
             toast.success(`Imported deck with ${res.data.length} cards!`);
           }
-          library.render(container);
+          library.render(libraryEl);
+          renderStudyPlanner(plannerEl);
         } catch (err) {
           toast.danger('Import failed: ' + err.message);
         }
@@ -210,7 +219,8 @@ async function renderLibrary(container, router) {
     }
   });
 
-  await library.render(container);
+  await library.render(libraryEl);
+  await renderStudyPlanner(plannerEl);
 }
 
 export function exportPrintableStudyGuidePDF(deck) {

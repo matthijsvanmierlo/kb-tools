@@ -29,6 +29,7 @@ import {
   buildGradebookMailMergeRows,
   buildGradebookWideRows,
   buildCanvasExportRows,
+  buildGoogleClassroomRows,
   buildOneRosterExportZip
 } from './gradebook-csv.js';
 
@@ -137,7 +138,7 @@ export async function renderGradebookView(params, router, container) {
 
   const safeCourseName = Sanitizer.escapeHTML(activeCourse.name || 'Course');
   const safeSection = Sanitizer.escapeHTML(activeCourse.section || '');
-  const courseColor = activeCourse.color || '#2563eb';
+  const courseColor = Sanitizer.safeColor(activeCourse.color, '#2563eb');
 
   container.innerHTML = `
     <div class="space-y-4 max-w-7xl mx-auto">
@@ -150,9 +151,9 @@ export async function renderGradebookView(params, router, container) {
             </span>
             <div class="min-w-0 flex-1">
               <div class="flex items-center gap-2">
-                <sl-select id="select-active-course" size="small" value="${activeCourse.id}" class="font-semibold text-slate-900 min-w-0 flex-1 sm:flex-none sm:w-64" aria-label="Active class">
+                <sl-select id="select-active-course" size="small" value="${Sanitizer.escapeHTML(activeCourse.id)}" class="font-semibold text-slate-900 min-w-0 flex-1 sm:flex-none sm:w-64" aria-label="Active class">
                   ${courses.map(c => `
-                    <sl-option value="${c.id}">${Sanitizer.escapeHTML(c.name)}${c.section ? `<span slot="suffix" class="text-xs text-slate-400">${Sanitizer.escapeHTML(c.section)}</span>` : ''}</sl-option>
+                    <sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)}${c.section ? `<span slot="suffix" class="text-xs text-slate-400">${Sanitizer.escapeHTML(c.section)}</span>` : ''}</sl-option>
                   `).join('')}
                 </sl-select>
                 <sl-tooltip content="Class settings: policies, grading scale, standards, access codes">
@@ -163,7 +164,7 @@ export async function renderGradebookView(params, router, container) {
               </div>
               <p class="text-xs text-slate-500 mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1">
                 <button type="button" id="btn-grading-mode" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[11px] font-semibold ${activeCourse.grading_scale === 'sbg' ? 'bg-blue-50 text-blue-700' : 'bg-slate-100 text-slate-600'} hover:ring-1 hover:ring-slate-300" title="Change grading mode in class settings">${activeCourse.grading_scale === 'sbg' ? '<sl-icon name="bullseye"></sl-icon> Standards-based' : '<sl-icon name="123"></sl-icon> Points'}</button>
-                <span>${safeSection ? `${safeSection} &bull; ` : ''}${activeCourse.academic_year || '2026-2027'} &bull; <span id="header-student-count">${students.length}</span> students &bull; <span id="header-assignment-count">${assignments.length}</span> assignments</span>
+                <span>${safeSection ? `${safeSection} &bull; ` : ''}${Sanitizer.escapeHTML(activeCourse.academic_year || '2026-2027')} &bull; <span id="header-student-count">${students.length}</span> students &bull; <span id="header-assignment-count">${assignments.length}</span> assignments</span>
               </p>
             </div>
           </div>
@@ -234,10 +235,10 @@ export async function renderGradebookView(params, router, container) {
             <button id="btn-view-roster" class="px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${viewMode === 'roster' ? 'bg-white text-slate-900 shadow-xs font-semibold' : 'text-slate-500 hover:text-slate-800'}"><sl-icon name="people"></sl-icon> Roster</button>
           </div>
           ${(activeCourse.terms || []).length > 1 ? `
-            <sl-select id="select-term-filter" size="small" value="${selectedTermId}" class="w-40" aria-label="Term">
+            <sl-select id="select-term-filter" size="small" value="${Sanitizer.escapeHTML(selectedTermId)}" class="w-40" aria-label="Term">
               <sl-icon slot="prefix" name="calendar3"></sl-icon>
               <sl-option value="all">All terms</sl-option>
-              ${activeCourse.terms.map(t => `<sl-option value="${t.id}">${Sanitizer.escapeHTML(t.name)}</sl-option>`).join('')}
+              ${activeCourse.terms.map(t => `<sl-option value="${Sanitizer.escapeHTML(t.id)}">${Sanitizer.escapeHTML(t.name)}</sl-option>`).join('')}
             </sl-select>
           ` : ''}
           <div class="flex items-center gap-0.5 ml-auto">
@@ -608,6 +609,22 @@ export async function renderGradebookView(params, router, container) {
             gradesMap
           });
           return { headers, rows, filename: `${cleanCourseName}_canvas_grades.csv` };
+        }
+      },
+      {
+        id: 'google_classroom',
+        label: 'Google Classroom / SIS (one assignment)',
+        description: 'Email Address, Assignment Score, Feedback. Open in Google Sheets, then use Classroom → Grades → Import grades.',
+        choice: {
+          label: 'Assignment',
+          options: allAssignments.map(a => ({ value: a.id, label: `${a.title} (${a.max_score} pts)` }))
+        },
+        build: async (opts) => {
+          const assignment = allAssignments.find(a => a.id === opts.choice) || allAssignments[0];
+          if (!assignment) return { headers: [], rows: [], filename: `${cleanCourseName}_classroom.csv` };
+          const { headers, rows } = buildGoogleClassroomRows({ assignment, students, gradesMap });
+          const cleanTitle = (assignment.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_').slice(0, 30);
+          return { headers, rows, filename: `${cleanCourseName}_${cleanTitle}_classroom.csv` };
         }
       },
       {
@@ -1003,7 +1020,7 @@ async function openStudentDrawer({ student, course, assignments, gradesMap, rubr
                     <span class="font-medium text-slate-800">${title}</span>
                     <span class="text-[11px] text-slate-400 ml-1.5">${subDate}</span>
                   </div>
-                  <span class="font-mono text-slate-600">${sub.status || 'submitted'}</span>
+                  <span class="font-mono text-slate-600">${Sanitizer.escapeHTML(sub.status || 'submitted')}</span>
                 </div>
               `;
             }).join('')}
@@ -1114,7 +1131,7 @@ async function openStudentDrawer({ student, course, assignments, gradesMap, rubr
   drawer.querySelector('#btn-drawer-del-student')?.addEventListener('click', async () => {
     const confirmed = await ConfirmDialog.show({
       title: 'Remove Student',
-      message: `Are you sure you want to remove ${student.full_name}? All associated grades for this student will be deleted.`,
+      message: `Are you sure you want to remove ${Sanitizer.escapeHTML(student.full_name)}? All associated grades for this student will be deleted.`,
       confirmText: 'Remove',
       variant: 'danger'
     });
@@ -1140,7 +1157,7 @@ function openSelectAssignmentForKBRModal(assignments, onSelected) {
       <sl-select id="select-kbr-target-as" label="Gradebook column" value="__auto">
         <sl-option value="__auto"><sl-icon slot="prefix" name="magic"></sl-icon> One column per video (recommended)</sl-option>
         <sl-divider></sl-divider>
-        ${assignments.map(a => `<sl-option value="${a.id}">${Sanitizer.escapeHTML(a.title)} (max ${a.max_score})</sl-option>`).join('')}
+        ${assignments.map(a => `<sl-option value="${Sanitizer.escapeHTML(a.id)}">${Sanitizer.escapeHTML(a.title)} (max ${Sanitizer.escapeHTML(a.max_score)})</sl-option>`).join('')}
       </sl-select>
     </div>
     <div slot="footer" class="flex justify-end gap-2">
@@ -1222,7 +1239,7 @@ function openSelectStudentModal(students, onSelected) {
   dialog.innerHTML = `
     <div class="space-y-3">
       <sl-select id="select-modal-student" label="Student Roster">
-        ${students.map(s => `<sl-option value="${s.student_id}">${Sanitizer.escapeHTML(s.full_name)} (${Sanitizer.escapeHTML(s.student_id)})</sl-option>`).join('')}
+        ${students.map(s => `<sl-option value="${Sanitizer.escapeHTML(s.student_id)}">${Sanitizer.escapeHTML(s.full_name)} (${Sanitizer.escapeHTML(s.student_id)})</sl-option>`).join('')}
       </sl-select>
     </div>
     <div slot="footer" class="flex justify-end gap-2">

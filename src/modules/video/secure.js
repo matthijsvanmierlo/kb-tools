@@ -1,5 +1,6 @@
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { KioskReportEngine } from './kiosk-report.js';
+import { Sanitizer } from '../../core/sanitizer.js';
 
 /**
  * Video Assessment Security (KB-VID-004)
@@ -260,7 +261,10 @@ export async function openReceipt(text, { teacherPrivateJwk, getAssessment, getS
       earned: graded.earned,
       max: graded.max,
       percent: graded.percent,
-      clientScore: body.client_score,
+      // Student-controlled: coerce so it can only ever be rendered as a number
+      clientScore: body.client_score
+        ? { earned: Sanitizer.safeNumber(body.client_score.earned), max: Sanitizer.safeNumber(body.client_score.max) }
+        : null,
       completedAt: body.completed_at,
       assessment,
       detail: graded.perCheckpoint
@@ -278,9 +282,10 @@ export async function openReceipt(text, { teacherPrivateJwk, getAssessment, getS
     studentName: r.studentName,
     studentId: r.studentId || '',
     identity: 'legacy',
-    earned: r.totalScore,
-    max: r.maxScore,
-    percent: r.percent,
+    // Student-controlled values: coerce to numbers at the source
+    earned: Sanitizer.safeNumber(r.totalScore),
+    max: Sanitizer.safeNumber(r.maxScore),
+    percent: Sanitizer.safeNumber(r.percent),
     completedAt: r.completedAt,
     assessment: null,
     detail: null

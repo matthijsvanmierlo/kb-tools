@@ -264,8 +264,8 @@ export async function renderTimelineView(params, router, container) {
               All (${activeTimeline.events.length})
             </button>
             ${categories.map(cat => `
-              <button data-cat="${cat}" class="px-2.5 py-1 rounded-full font-medium transition-colors ${activeCategoryFilter === cat ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">
-                ${cat}
+              <button data-cat="${Sanitizer.escapeHTML(cat)}" class="px-2.5 py-1 rounded-full font-medium transition-colors ${activeCategoryFilter === cat ? 'bg-blue-600 text-white' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}">
+                ${Sanitizer.escapeHTML(cat)}
               </button>
             `).join('')}
           </div>
@@ -365,24 +365,26 @@ export async function renderTimelineView(params, router, container) {
           ${sorted.map(ev => {
             const safeTitle = Sanitizer.escapeHTML(ev.title);
             const safeCat = Sanitizer.escapeHTML(ev.category || 'General');
-            const dateStr = ev.end_date ? `${ev.start_date} &rarr; ${ev.end_date}` : ev.start_date;
+            const dateStr = ev.end_date ? `${Sanitizer.escapeHTML(ev.start_date)} &rarr; ${Sanitizer.escapeHTML(ev.end_date)}` : Sanitizer.escapeHTML(ev.start_date);
+            const color = Sanitizer.safeColor(ev.color, '#3b82f6');
+            const bgColor = color.length === 7 ? `${color}20` : color;
             return `
               <tr class="hover:bg-slate-50 transition-colors">
                 <td class="py-2.5 px-3 font-mono font-medium text-slate-600">${dateStr}</td>
                 <td class="py-2.5 px-3 font-bold text-slate-900">${safeTitle}</td>
                 <td class="py-2.5 px-3">
-                  <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold" style="background-color: ${ev.color || '#3b82f6'}20; color: ${ev.color || '#3b82f6'};">
+                  <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold" style="background-color: ${bgColor}; color: ${color};">
                     ${safeCat}
                   </span>
                 </td>
                 <td class="py-2.5 px-3 text-right space-x-1 whitespace-nowrap">
-                  <button type="button" class="kb-icon-btn" data-table-action="inspect" data-id="${ev.id}" title="Inspect Details">
+                  <button type="button" class="kb-icon-btn" data-table-action="inspect" data-id="${Sanitizer.escapeHTML(ev.id)}" title="Inspect Details">
                     <sl-icon name="eye"></sl-icon>
                   </button>
-                  <button type="button" class="kb-icon-btn" data-table-action="edit" data-id="${ev.id}" title="Edit">
+                  <button type="button" class="kb-icon-btn" data-table-action="edit" data-id="${Sanitizer.escapeHTML(ev.id)}" title="Edit">
                     <sl-icon name="pencil"></sl-icon>
                   </button>
-                  <button type="button" class="kb-icon-btn text-red-500 hover:text-red-700" data-table-action="delete" data-id="${ev.id}" title="Delete">
+                  <button type="button" class="kb-icon-btn text-red-500 hover:text-red-700" data-table-action="delete" data-id="${Sanitizer.escapeHTML(ev.id)}" title="Delete">
                     <sl-icon name="trash"></sl-icon>
                   </button>
                 </td>
@@ -445,8 +447,8 @@ export async function renderTimelineView(params, router, container) {
     drawer.label = ev.title;
 
     const spanText = ev.end_date
-      ? `<span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-xs font-mono">${ev.start_date} &rarr; ${ev.end_date}</span>`
-      : `<span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-xs font-mono">Milestone: ${ev.start_date}</span>`;
+      ? `<span class="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-xs font-mono">${Sanitizer.escapeHTML(ev.start_date)} &rarr; ${Sanitizer.escapeHTML(ev.end_date)}</span>`
+      : `<span class="bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded text-xs font-mono">Milestone: ${Sanitizer.escapeHTML(ev.start_date)}</span>`;
 
     const descriptionHtml = ev.description ? Sanitizer.renderSTEMMarkdown(ev.description) : '<p class="text-xs text-slate-400 italic">No description provided.</p>';
 
@@ -766,7 +768,7 @@ function openEventEditorModal(eventObj, timeline, onSaveCallback) {
         <sl-input id="input-ev-category" label="Category" value="${Sanitizer.escapeHTML(ev.category || 'General')}"></sl-input>
         <div>
           <label class="text-xs text-slate-500 font-medium block mb-1">Color Marker</label>
-          <sl-color-picker id="picker-ev-color" value="${ev.color || '#3b82f6'}" size="small" no-format-toggle></sl-color-picker>
+          <sl-color-picker id="picker-ev-color" value="${Sanitizer.safeColor(ev.color, '#3b82f6')}" size="small" no-format-toggle></sl-color-picker>
         </div>
       </div>
 

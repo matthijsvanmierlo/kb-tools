@@ -1,8 +1,14 @@
 /**
  * Complete FSRS v4 Mathematical Spaced Repetition Engine (KB-CARD-002)
  */
+export const DEFAULT_RETENTION = 0.90;
+export const MIN_RETENTION = 0.80;
+export const MAX_RETENTION = 0.95;
+export const RETENTION_METADATA_KEY = 'fsrs_request_retention';
+const MAX_INTERVAL_DAYS = 36500;
+
 export class FSRSEngine {
-  constructor(customWeights = null, requestRetention = 0.90) {
+  constructor(customWeights = null, requestRetention = DEFAULT_RETENTION) {
     // Standard calibrated FSRS v4 default parameters
     this.w = customWeights || [
       0.4, 0.6, 2.4, 5.8, // w0..w3: Initial stability for Again(1), Hard(2), Good(3), Easy(4)
@@ -21,7 +27,18 @@ export class FSRSEngine {
       2.61                // w16: Easy bonus multiplier
     ];
 
-    this.requestRetention = requestRetention;
+    this.requestRetention = FSRSEngine.clampRetention(requestRetention);
+  }
+
+  static clampRetention(r) {
+    const n = Number(r);
+    if (!Number.isFinite(n)) return DEFAULT_RETENTION;
+    return Math.min(MAX_RETENTION, Math.max(MIN_RETENTION, n));
+  }
+
+  setRequestRetention(r) {
+    this.requestRetention = FSRSEngine.clampRetention(r);
+    return this.requestRetention;
   }
 
   /**
@@ -35,12 +52,73 @@ export class FSRSEngine {
   }
 
   /**
-   * Next interval in days for target retention R = 0.90
+   * Next interval in days: the time until retrievability decays to the requested retention.
+   * Solving R(t, S) = r for t gives t = S / (19/81) · (r^-2 − 1); at r = 0.90 that is exactly S.
    * @param {number} stability
+   * @param {number} [retention=this.requestRetention]
    */
-  nextInterval(stability) {
-    const interval = (stability / (19 / 81)) * (Math.pow(this.requestRetention, -2) - 1);
-    return Math.max(1, Math.round(interval));
+  nextInterval(stability, retention = this.requestRetention) {
+    const interval = (stability / (19 / 81)) * (Math.pow(retention, -2) - 1);
+    return Math.min(MAX_INTERVAL_DAYS, Math.max(1, Math.round(interval)));
+  }
+
+  /**
+   * Due time of an already-reviewed card under a (possibly different) target retention.
+   * Cards in learning/relearning keep their short-term due time.
+   * @returns {number|null} epoch ms, or null for new cards
+   */
+  dueFor(card, retention = this.requestRetention) {
+    const f = card?.fsrs;
+    if (!f || !f.last_review || f.state === 0) return null;
+    if (f.state !== 2 || !(f.stability > 0)) return Number.isFinite(f.due_timestamp) ? f.due_timestamp : Date.parse(f.due) || null;
+    return new Date(f.last_review).getTime() + this.nextInterval(f.stability, retention) * 86400000;
+  }
+
+  /**
+   * Apply the current retention target to every review card's due date.
+   * @returns {object[]} cards (same objects, fsrs updated) that changed
+   */
+  rescheduleCards(cards) {
+    const changed = [];
+    for (const card of cards || []) {
+      const due = this.dueFor(card);
+      if (due === null || card.fsrs.state !== 2 || due === card.fsrs.due_timestamp) continue;
+      card.fsrs = {
+        ...card.fsrs,
+        scheduled_days: this.nextInterval(card.fsrs.stability),
+        due_timestamp: due,
+        due: new Date(due).toISOString()
+      };
+      changed.push(card);
+    }
+    return changed;
+  }
+
+  /**
+   * Reviews falling due on each of the next `days` days (day 0 includes everything overdue).
+   * Learning cards due later today count toward today. New cards are reported separately.
+   * @returns {{ days: Array<{ date: Date, count: number }>, newCards: number, overdue: number }}
+   */
+  forecastWorkload(cards, { days = 7, retention = this.requestRetention, nowMs = Date.now() } = {}) {
+    const startOfToday = new Date(nowMs);
+    startOfToday.setHours(0, 0, 0, 0);
+    const buckets = Array.from({ length: days }, (_, i) => ({
+      date: new Date(startOfToday.getTime() + i * 86400000),
+      count: 0
+    }));
+    let newCards = 0;
+    let overdue = 0;
+    for (const card of cards || []) {
+      const due = this.dueFor(card, retention);
+      if (due === null) {
+        newCards++;
+        continue;
+      }
+      if (due < nowMs) overdue++;
+      const dayIndex = Math.max(0, Math.floor((due - startOfToday.getTime()) / 86400000));
+      if (dayIndex < days) buckets[dayIndex].count++;
+    }
+    return { days: buckets, newCards, overdue };
   }
 
   /**

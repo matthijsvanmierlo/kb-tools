@@ -2,6 +2,8 @@
 <html lang="en" class="sl-theme-light">
 <head>
   <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-XxvYv1UFBXLuc/8++TLCQOYKSkKceK21waLdpzF9Lrk='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' data:; media-src 'self' blob: data: https:; frame-src https://www.youtube-nocookie.com https://player.vimeo.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>KennisBoost Tools | 100% Client-Side Educational Suite</title>
   <meta name="description" content="Local-first, zero-backend educational technology suite with Flashcards, Timeline Maker, Interactive Video, and Gradebook.">
@@ -9,58 +11,42 @@
   <meta name="theme-color" content="#f6f8fb" media="(prefers-color-scheme: light)">
   <meta name="theme-color" content="#0c1322" media="(prefers-color-scheme: dark)">
   <link rel="preload" href="fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
-  <!-- Apply saved theme before first paint to avoid a light flash in dark mode -->
-  <script>
-    (function () {
-      try {
-        var t = localStorage.getItem('kb_theme_mode') || 'system';
-        var dark = t === 'dark' || (t === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
-        var c = document.documentElement.classList;
-        c.remove('sl-theme-light');
-        c.add(dark ? 'sl-theme-dark' : 'sl-theme-light');
-        if (t === 'projector') c.add('kb-theme-projector');
-      } catch (e) {}
-    })();
-  </script>
-  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232563eb'/%3E%3Ctext x='16' y='22' font-family='sans-serif' font-size='16' font-weight='bold' fill='%23ffffff' text-anchor='middle'%3EKB%3C/text%3E%3C/svg%3E">
+  <link rel="icon" type="image/svg+xml" href="icons/icon.svg">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <!-- Theme before first paint + file:// guard (external so the CSP needs no inline scripts) -->
+  <script src="src/boot/preboot.js"></script>
 
-  <!-- Native ESM Import Map (MUST precede any module script per HTML spec) -->
+  <!--
+    Native ESM import map (MUST precede any module script per HTML spec).
+    Every dependency is self-hosted under vendor/ (npm run vendor). The SHA-256 of this exact
+    script body is pinned in the CSP above; tests/phase18-security-headers.test.js keeps them in sync.
+  -->
   <script type="importmap">
   {
     "imports": {
-      "dexie": "https://cdn.jsdelivr.net/npm/dexie@4.0.4/dist/dexie.mjs",
-      "zod": "https://cdn.jsdelivr.net/npm/zod@3.23.8/+esm",
-      "lz-string": "https://cdn.jsdelivr.net/npm/lz-string@1.5.0/+esm",
-      "papaparse": "https://cdn.jsdelivr.net/npm/papaparse@5.4.1/+esm",
-      "marked": "https://cdn.jsdelivr.net/npm/marked@12.0.2/+esm",
-      "dompurify": "https://cdn.jsdelivr.net/npm/dompurify@3.1.5/+esm",
-      "jspdf": "https://cdn.jsdelivr.net/npm/jspdf@2.5.1/+esm",
-      "jspdf-autotable": "https://cdn.jsdelivr.net/npm/jspdf-autotable@3.8.2/+esm",
-      "jszip": "https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm"
+      "dexie": "./vendor/dexie.mjs",
+      "zod": "./vendor/zod.mjs",
+      "lz-string": "./vendor/lz-string.mjs",
+      "papaparse": "./vendor/papaparse.mjs",
+      "marked": "./vendor/marked.mjs",
+      "dompurify": "./vendor/dompurify.mjs",
+      "jspdf": "./vendor/jspdf.mjs",
+      "jspdf-autotable": "./vendor/jspdf-autotable.mjs",
+      "jszip": "./vendor/jszip.mjs",
+      "qrcode-generator": "./vendor/qrcode-generator.mjs"
     }
   }
   </script>
 
-  <!-- Shoelace Web Components (WCAG 2.1 AA) -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/themes/light.css" />
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/themes/dark.css" />
-  <script type="module" src="https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/shoelace-autoloader.js"></script>
-  <script type="module">
-    import { setBasePath } from 'https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/utilities/base-path.js';
-    setBasePath('https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/');
-    // The autoloader only defines a component once it sees the tag in the DOM. Components the app
-    // creates in code and immediately calls methods on (dialog.show(), alert.toast()) are defined
-    // up front so those calls never hit an un-upgraded element.
-    ['dialog', 'drawer', 'alert', 'button'].forEach((name) => {
-      import(`https://cdn.jsdelivr.net/npm/@shoelace-style/shoelace@2.15.0/cdn/components/${name}/${name}.js`).catch(() => {});
-    });
-  </script>
+  <!-- Shoelace Web Components (WCAG 2.1 AA), self-hosted -->
+  <link rel="stylesheet" href="vendor/shoelace/themes/light.css" />
+  <link rel="stylesheet" href="vendor/shoelace/themes/dark.css" />
+  <script type="module" src="src/boot/shoelace-setup.js"></script>
 
-  <!-- KaTeX + Mhchem for STEM Notation -->
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.css" />
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/katex.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/mhchem.min.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.10/dist/contrib/auto-render.min.js"></script>
+  <!-- KaTeX + mhchem for STEM notation, self-hosted -->
+  <link rel="stylesheet" href="vendor/katex/katex.min.css" />
+  <script defer src="vendor/katex/katex.min.js"></script>
+  <script defer src="vendor/katex/contrib/mhchem.min.js"></script>
 
   <!-- Tailwind & App Custom CSS -->
   <link rel="stylesheet" href="css/tailwind.output.css">
@@ -245,40 +231,11 @@
     </div>
   </footer>
 
-  <!-- Direct File Protocol Guard (Friendly instructions if opened directly via file://) -->
-  <script>
-    if (window.location.protocol === 'file:') {
-      document.addEventListener('DOMContentLoaded', function() {
-        var container = document.getElementById('app-view-container');
-        if (container) {
-          container.innerHTML = `
-            <div style="max-width: 640px; margin: 40px auto; padding: 32px 24px; background: #ffffff; border: 2px solid #3b82f6; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); font-family: system-ui, -apple-system, sans-serif; text-align: center;">
-              <div style="width: 56px; height: 56px; border-radius: 50%; background: #eff6ff; color: #2563eb; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px auto; font-size: 28px;">
-                🚀
-              </div>
-              <h2 style="font-size: 22px; font-weight: bold; color: #0f172a; margin: 0 0 8px 0;">Local Web Server Required</h2>
-              <p style="font-size: 14px; color: #475569; line-height: 1.6; margin: 0 0 20px 0;">
-                You opened KennisBoost Tools directly from the filesystem (<code>file://</code>). Web browsers strictly block native ES modules and IndexedDB storage on direct file paths for security.
-              </p>
-              <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: left; margin-bottom: 24px; font-family: monospace; font-size: 13px;">
-                <p style="margin: 0 0 6px 0; color: #64748b;"># Run this command in your project terminal:</p>
-                <p style="margin: 0; color: #0f172a; font-weight: bold;">npm start</p>
-              </div>
-              <p style="font-size: 14px; color: #475569; margin: 0 0 16px 0;">
-                Once the server is running, open:
-              </p>
-              <a href="http://localhost:8000" style="display: inline-block; padding: 12px 28px; background: #2563eb; color: #ffffff; text-decoration: none; font-weight: 600; border-radius: 8px; font-size: 15px; box-shadow: 0 2px 4px rgba(37,99,235,0.3);">
-                Open http://localhost:8000
-              </a>
-            </div>
-          `;
-        }
-      });
-    }
-  </script>
-
-  <!-- Optional Server Relay Configuration -->
-  <script src="config.js" onerror="void 0"></script>
+  <!--
+    Optional relay pre-configuration for managed deployments: copy config.example.js to config.js
+    and add <script src="config.js"></script> here. Prefer the in-app "Connect to a school server"
+    dialog, which keeps the teacher token in this browser instead of a publicly served file.
+  -->
 
   <!-- Application Bootloader -->
   <script type="module" src="src/main.js"></script>

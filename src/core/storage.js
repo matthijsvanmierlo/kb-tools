@@ -1,5 +1,8 @@
 import Dexie from 'dexie';
 import { splitName } from './names.js';
+import {
+  BACKUP_TABLES, BACKUP_VERSION, DEVICE_BOUND_METADATA, parseBackup, stripDeviceMetadata, blobToBase64, base64ToBlob
+} from './backup.js';
 
 const DATA_TABLES = new Set([
   'flashcards',
@@ -157,6 +160,13 @@ function wrapDexieTable(rawTable, tableName, storageManager) {
       return typeof val === 'function' ? val.bind(target) : val;
     }
   });
+}
+
+/** Below this quota the profile is most likely a guest/ephemeral one (normal profiles get GBs) */
+export const TEMPORARY_PROFILE_QUOTA_BYTES = 120 * 1024 * 1024;
+
+export function isTemporaryProfileQuota(estimate) {
+  return Boolean(estimate && estimate.quota > 0 && estimate.quota < TEMPORARY_PROFILE_QUOTA_BYTES);
 }
 
 /**
@@ -338,22 +348,34 @@ export class StorageManager {
     await this.setMetadata('schema_version', 4);
 
     if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
-      const requestPersistence = async () => {
-        if (navigator.storage && navigator.storage.persist) {
+      let persisted = false;
+      try {
+        persisted = navigator.storage?.persisted ? await navigator.storage.persisted() : false;
+      } catch (_) {}
+      await this.setMetadata('is_persistent', persisted);
+
+      // Ask for eviction protection on the first interaction (Firefox shows a prompt, so not at
+      // load); Chromium grants it silently for engaged or installed sites.
+      if (!persisted && navigator.storage?.persist) {
+        const requestPersistence = async () => {
+          window.removeEventListener('pointerdown', requestPersistence);
+          window.removeEventListener('keydown', requestPersistence);
           try {
             const isPersisted = await navigator.storage.persist();
             await this.setMetadata('is_persistent', isPersisted);
+            if (!isPersisted) console.warn('Storage eviction protection not granted by browser.');
           } catch (e) {
             console.debug('storage.persist failed:', e);
           }
-        }
-        window.removeEventListener('pointerdown', requestPersistence);
-        window.removeEventListener('keydown', requestPersistence);
-      };
-      window.addEventListener('pointerdown', requestPersistence, { once: true });
-      window.addEventListener('keydown', requestPersistence, { once: true });
+        };
+        window.addEventListener('pointerdown', requestPersistence, { once: true });
+        window.addEventListener('keydown', requestPersistence, { once: true });
+      }
 
-      await this.checkStorageQuota();
+      const quota = await this.checkStorageQuota();
+      if (!this.ephemeralMode && isTemporaryProfileQuota(quota)) {
+        this._renderTemporarySessionBanner();
+      }
     }
 
     return this;
@@ -413,6 +435,34 @@ export class StorageManager {
     }
   }
 
+  /**
+   * Shared/guest Chromebook profiles (DeviceEphemeralUsersEnabled) and some private modes wipe
+   * storage at sign-out; they show up as an unusually small quota.
+   */
+  _renderTemporarySessionBanner() {
+    if (typeof document === 'undefined' || document.getElementById('kb-temporary-session-banner')) return;
+    try {
+      if (sessionStorage.getItem('kb_temp_banner_dismissed')) return;
+    } catch (_) {}
+    const banner = document.createElement('div');
+    banner.id = 'kb-temporary-session-banner';
+    banner.setAttribute('role', 'alert');
+    banner.className = 'kb-temp-session-banner no-print';
+    banner.innerHTML = `
+      <sl-icon name="exclamation-triangle-fill" aria-hidden="true"></sl-icon>
+      <span><strong>Temporary session detected.</strong> This browser profile may erase everything when you sign out or close it. Download a backup before closing this window.</span>
+      <button type="button" data-action="backup">Download backup</button>
+      <button type="button" data-action="dismiss" aria-label="Dismiss warning">✕</button>`;
+    banner.querySelector('[data-action="backup"]').addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('kb-request-backup'));
+    });
+    banner.querySelector('[data-action="dismiss"]').addEventListener('click', () => {
+      try { sessionStorage.setItem('kb_temp_banner_dismissed', '1'); } catch (_) {}
+      banner.remove();
+    });
+    document.body.prepend(banner);
+  }
+
   _renderQuotaWarning(usageMB, quotaMB, percent) {
     if (typeof document === 'undefined') return;
     const alert = document.createElement('sl-alert');
@@ -449,10 +499,11 @@ export class StorageManager {
   }
 
   // --- Binary Asset Routing (64KB Rule) ---
-  async saveBinaryAsset(id, blob) {
+  async saveBinaryAsset(id, blob, { preferIndexedDb = false } = {}) {
     const isLarge = blob.size > 65536;
 
-    if (isLarge && typeof navigator !== 'undefined' && navigator.storage && navigator.storage.getDirectory) {
+    // preferIndexedDb: small card media stays in IndexedDB so backups can include it
+    if (isLarge && !preferIndexedDb && typeof navigator !== 'undefined' && navigator.storage && navigator.storage.getDirectory) {
       try {
         const root = await navigator.storage.getDirectory();
         const assetsDir = await root.getDirectoryHandle('assets', { create: true });
@@ -517,6 +568,24 @@ export class StorageManager {
     }
 
     return uri;
+  }
+
+  /** Raw Blob behind an asset URI (idb-blob:// or opfs://), or null */
+  async getBinaryBlob(uri) {
+    if (!uri) return null;
+    if (uri.startsWith('idb-blob://')) {
+      const id = uri.slice('idb-blob://'.length);
+      const record = this.ephemeralMode
+        ? this.memoryStore.get('binary_blobs')?.get(id)
+        : await this.db.binary_blobs.get(id);
+      return record?.data || null;
+    }
+    if (uri.startsWith('opfs://assets/') && navigator.storage?.getDirectory) {
+      const root = await navigator.storage.getDirectory();
+      const dir = await root.getDirectoryHandle('assets');
+      return (await dir.getFileHandle(uri.slice('opfs://assets/'.length))).getFile();
+    }
+    return null;
   }
 
   revokeObjectURL(url) {
@@ -760,70 +829,82 @@ export class StorageManager {
   }
 
   /**
-   * Export all database tables into a master JSON snapshot
+   * Export all database tables into a portable master JSON snapshot (format v2).
+   * Device-bound metadata is left out; media blobs are embedded as base64.
    */
   async dumpMasterSnapshot() {
-    const tables = [
-      'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
-      'gradebook_students', 'gradebook_assignments', 'gradebook_grades',
-      'gradebook_rubrics', 'assignments', 'assignment_submissions', 'app_metadata'
-    ];
-
     const snapshot = {
-      version: 1,
+      version: BACKUP_VERSION,
       exported_at: new Date().toISOString(),
-      data: {}
+      data: {},
+      blobs: []
     };
 
-    for (const tbl of tables) {
-      snapshot.data[tbl] = await this.table(tbl).toArray();
+    for (const tbl of BACKUP_TABLES) {
+      const rows = await this.table(tbl).toArray();
+      snapshot.data[tbl] = tbl === 'app_metadata' ? stripDeviceMetadata(rows) : rows;
+    }
+
+    const blobs = await this.table('binary_blobs').toArray();
+    for (const b of blobs) {
+      if (typeof b?.data?.arrayBuffer === 'function') {
+        snapshot.blobs.push({ id: b.id, mime_type: b.mime_type || b.data.type, data: await blobToBase64(b.data) });
+      }
     }
 
     return snapshot;
   }
 
   /**
-   * Restore all database tables from a master JSON snapshot
+   * Restore all database tables from a master JSON snapshot. Validates first (throws BackupError),
+   * then replaces every table in one transaction. Device-bound metadata on this device is kept.
    */
   async restoreMasterSnapshot(snapshot) {
-    if (!snapshot || !snapshot.data || typeof snapshot.data !== 'object') {
-      throw new Error('Invalid snapshot data');
-    }
+    const { snapshot: valid } = typeof snapshot === 'string'
+      ? parseBackup(snapshot)
+      : parseBackup(JSON.stringify(snapshot));
 
-    const tables = [
-      'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
-      'gradebook_students', 'gradebook_assignments', 'gradebook_grades',
-      'gradebook_rubrics', 'assignments', 'assignment_submissions', 'app_metadata'
-    ];
-
-    const validTables = tables.filter(t => Array.isArray(snapshot.data[t]));
-
-    if (this.ephemeralMode) {
-      for (const tbl of validTables) {
-        await this.table(tbl).clear();
-        await this.table(tbl).bulkPut(snapshot.data[tbl]);
-      }
-    } else {
-      const dbTables = validTables.map(t => this.db[t]);
-      await this.db.transaction('rw', dbTables, async () => {
-        for (const tbl of validTables) {
-          await this.db[tbl].clear();
-          await this.db[tbl].bulkPut(snapshot.data[tbl]);
-        }
-      });
-    }
-
-    // Post-restore stamping on records lacking metadata
+    const tables = BACKUP_TABLES.filter(t => Array.isArray(valid.data[t]));
     const now = new Date().toISOString();
-    for (const tbl of validTables) {
-      if (DATA_TABLES.has(tbl)) {
-        await this.table(tbl).toCollection().modify((r) => {
+    const prepared = {};
+    for (const tbl of tables) {
+      let rows = valid.data[tbl].map(r => ({ ...r }));
+      if (tbl === 'app_metadata') {
+        const keep = (await this.table('app_metadata').toArray()).filter(r => DEVICE_BOUND_METADATA.has(r.key));
+        rows = [...stripDeviceMetadata(rows), ...keep];
+      } else if (DATA_TABLES.has(tbl)) {
+        for (const r of rows) {
           r.created_at = r.created_at || r.updated_at || now;
           r.updated_at = r.updated_at || now;
-          if (!r.id) r.id = crypto.randomUUID();
-        });
+        }
       }
+      prepared[tbl] = rows;
     }
+    const blobs = (valid.blobs || []).map(b => ({
+      id: b.id,
+      mime_type: b.mime_type,
+      size_bytes: Math.floor(b.data.length * 3 / 4),
+      data: base64ToBlob(b.data, b.mime_type)
+    }));
+
+    if (this.ephemeralMode) {
+      for (const tbl of tables) {
+        await this.table(tbl).clear();
+        await this.table(tbl).bulkPut(prepared[tbl]);
+      }
+      if (blobs.length) await this.table('binary_blobs').bulkPut(blobs);
+      return;
+    }
+
+    // Raw Dexie tables: a restore must not be replayed into the sync outbox as fresh edits
+    const dbTables = [...tables.map(t => this.db[t]), this.db.binary_blobs];
+    await this.db.transaction('rw', dbTables, async () => {
+      for (const tbl of tables) {
+        await this.db[tbl].clear();
+        await this.db[tbl].bulkPut(prepared[tbl]);
+      }
+      if (blobs.length) await this.db.binary_blobs.bulkPut(blobs);
+    });
   }
 }
 

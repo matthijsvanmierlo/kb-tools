@@ -3,6 +3,8 @@ import { sync } from './core/sync.js';
 import { router } from './router.js';
 import { store } from './state/store.js';
 import { toast } from './utils/toast.js';
+import { Sanitizer } from './core/sanitizer.js';
+import { registerServiceWorker, initLaunchHandlers } from './core/pwa.js';
 import { getTransport, setTransportConfig, RelayTransport } from './core/transport.js';
 
 // Lazy-loaded or modular controller bindings
@@ -120,6 +122,7 @@ async function bootstrapApp() {
 
     // 4. Bind Storage / Backup Toolbar Actions & Global Customizations
     bindStorageControls();
+    window.addEventListener('kb-request-backup', () => sync.exportManualBackup());
     bindHelpControls();
     initThemeSwitcher();
     updateRelayStatusIndicator();
@@ -141,12 +144,9 @@ async function bootstrapApp() {
     const { CommandPalette } = await import('./components/command-palette.js');
     CommandPalette.init();
 
-    // 7. Register PWA Service Worker (if available)
-    if ('serviceWorker' in navigator && window.location.protocol.startsWith('http')) {
-      navigator.serviceWorker.register('./sw.js').catch(err => {
-        console.debug('ServiceWorker registration skipped/failed:', err);
-      });
-    }
+    // 7. Register PWA Service Worker and OS file-launch / share-target handlers
+    registerServiceWorker();
+    initLaunchHandlers(router);
 
     // 8. Execute initial route
     await router.handleRoute();
@@ -160,10 +160,11 @@ async function bootstrapApp() {
         <div class="p-8 max-w-xl mx-auto text-center space-y-4 bg-white rounded-2xl border border-red-200 shadow-sm mt-8">
           <sl-icon name="exclamation-octagon" class="text-4xl text-red-500"></sl-icon>
           <h2 class="text-xl font-bold text-slate-800">Application Boot Failed</h2>
-          <p class="text-sm text-slate-600">${err.message}</p>
-          <sl-button variant="primary" onclick="window.location.reload()">Reload Application</sl-button>
+          <p class="text-sm text-slate-600">${Sanitizer.escapeHTML(err.message)}</p>
+          <sl-button variant="primary" id="btn-boot-reload">Reload Application</sl-button>
         </div>
       `;
+      container.querySelector('#btn-boot-reload')?.addEventListener('click', () => window.location.reload());
     }
   }
 }
@@ -193,13 +194,19 @@ function bindStorageControls() {
 
     try {
       const text = await file.text();
-      const snapshot = JSON.parse(text);
-      await storage.restoreMasterSnapshot(snapshot);
+      const { parseBackup } = await import('./core/backup.js');
+      const { counts, exportedAt } = parseBackup(text);
+      const confirmed = await confirmRestore(file.name, counts, exportedAt);
+      if (!confirmed) return;
+      if (confirmed.safetyCopy) await sync.exportManualBackup();
+      await storage.restoreMasterSnapshot(text);
       toast.success('Backup restored successfully! Refreshing view...');
       await router.handleRoute();
     } catch (err) {
       console.error('Failed to restore backup:', err);
-      toast.danger('Invalid backup file. Restore aborted.');
+      toast.danger(err?.name === 'BackupError'
+        ? `Restore aborted: ${err.message}`
+        : 'Invalid backup file. Restore aborted.');
     } finally {
       fileInput.value = '';
     }
@@ -259,6 +266,70 @@ function bindStorageControls() {
   });
 }
 
+// Relay requests blocked by the Content Security Policy surface as a generic network TypeError.
+let lastCspViolation = null;
+if (typeof document !== 'undefined') {
+  document.addEventListener('securitypolicyviolation', (e) => {
+    if (e.effectiveDirective === 'connect-src') lastCspViolation = { uri: e.blockedURI, at: Date.now() };
+  });
+}
+
+function describeRelayError(err, baseUrl) {
+  let origin = '';
+  try { origin = new URL(baseUrl).origin; } catch (_) {}
+  const blocked = lastCspViolation && Date.now() - lastCspViolation.at < 5000 && origin && String(lastCspViolation.uri).startsWith(origin);
+  if (blocked) {
+    return `${origin} is not on this installation's allow-list (Content Security Policy connect-src). Ask whoever hosts KennisBoost to add it (KB_RELAY_ORIGIN for the bundled server, or the CSP meta tag / _headers on static hosting).`;
+  }
+  return err?.message || 'Unknown error';
+}
+
+const RESTORE_LABELS = {
+  flashcards: 'Flashcard decks', timelines: 'Timelines', video_assessments: 'Video lessons',
+  gradebook_courses: 'Classes', gradebook_students: 'Students', gradebook_assignments: 'Gradebook assignments',
+  gradebook_grades: 'Grades', gradebook_rubrics: 'Rubrics', assignments: 'Assignments',
+  assignment_submissions: 'Submissions', media: 'Images & audio clips'
+};
+
+/**
+ * Restoring replaces everything on this device, so show what the file contains first.
+ * @returns {Promise<false | { safetyCopy: boolean }>}
+ */
+function confirmRestore(fileName, counts, exportedAt) {
+  return new Promise((resolve) => {
+    const esc = (v) => Sanitizer.escapeHTML(v);
+    const when = exportedAt && !Number.isNaN(Date.parse(exportedAt)) ? new Date(exportedAt).toLocaleString() : 'unknown date';
+    const rows = Object.entries(counts).filter(([, n]) => n > 0)
+      .map(([t, n]) => `<li class="flex justify-between py-0.5 border-b border-slate-100"><span>${esc(RESTORE_LABELS[t] || t)}</span><strong>${esc(n)}</strong></li>`).join('');
+    const dialog = document.createElement('sl-dialog');
+    dialog.label = 'Restore backup?';
+    dialog.innerHTML = `
+      <div class="space-y-3 text-sm">
+        <p><strong>${esc(fileName)}</strong> &mdash; exported ${esc(when)}</p>
+        <ul class="text-xs text-slate-600">${rows || '<li>No records</li>'}</ul>
+        <p class="text-rose-700 font-medium">Everything currently stored in this browser will be replaced.</p>
+        <sl-checkbox id="restore-safety-copy" checked>Download a backup of my current data first</sl-checkbox>
+      </div>
+      <div slot="footer" class="flex justify-end gap-2">
+        <sl-button id="restore-cancel">Cancel</sl-button>
+        <sl-button variant="danger" id="restore-confirm">Replace my data</sl-button>
+      </div>`;
+    let result = false;
+    dialog.querySelector('#restore-cancel').addEventListener('click', () => dialog.hide());
+    dialog.querySelector('#restore-confirm').addEventListener('click', () => {
+      result = { safetyCopy: !!dialog.querySelector('#restore-safety-copy')?.checked };
+      dialog.hide();
+    });
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target !== dialog) return;
+      dialog.remove();
+      resolve(result);
+    });
+    document.body.appendChild(dialog);
+    dialog.show();
+  });
+}
+
 export async function openRelayConfigDialog() {
   const currentConfig = (await storage.getMetadata('sync_config')) || (typeof window !== 'undefined' ? window.KB_CONFIG : null) || {};
   const dialog = document.createElement('sl-dialog');
@@ -269,9 +340,9 @@ export async function openRelayConfigDialog() {
       <p class="text-xs text-slate-500 leading-relaxed">
         Connecting to a school-hosted KennisBoost relay server unlocks short links and automatic server-assisted hand-in. All lesson payloads and student submissions remain end-to-end encrypted so the server never sees student data or answer keys.
       </p>
-      <sl-input id="input-relay-url" label="Server Base URL" placeholder="https://relay.myschool.edu or http://localhost:3000" value="${currentConfig.baseUrl || ''}"></sl-input>
-      <sl-input id="input-relay-token" type="password" password-toggle label="Teacher Bearer Token" placeholder="Paste 64-character token" value="${currentConfig.token || ''}"></sl-input>
-      <sl-input id="input-relay-teacher-id" label="Teacher ID (optional)" placeholder="e.g. T-101" value="${currentConfig.teacherId || ''}"></sl-input>
+      <sl-input id="input-relay-url" label="Server Base URL" placeholder="https://relay.myschool.edu or http://localhost:3000" value="${Sanitizer.escapeHTML(currentConfig.baseUrl)}"></sl-input>
+      <sl-input id="input-relay-token" type="password" password-toggle label="Teacher Bearer Token" placeholder="Paste 64-character token" value="${Sanitizer.escapeHTML(currentConfig.token)}"></sl-input>
+      <sl-input id="input-relay-teacher-id" label="Teacher ID (optional)" placeholder="e.g. T-101" value="${Sanitizer.escapeHTML(currentConfig.teacherId)}"></sl-input>
 
       <div id="relay-test-result" class="hidden p-3 rounded-xl text-xs space-y-1"></div>
     </div>
@@ -304,13 +375,13 @@ export async function openRelayConfigDialog() {
       if (!health.ok) throw new Error(health.error || 'Server health check failed');
       testResult.className = 'p-3 rounded-xl text-xs bg-emerald-50 border border-emerald-200 text-emerald-800 space-y-1';
       testResult.innerHTML = `
-        <div class="font-semibold flex items-center gap-1.5"><sl-icon name="check-circle-fill" class="text-emerald-600"></sl-icon> Server online! (v${health.serverVersion || '1.0.0'})</div>
-        <div class="text-[11px] text-emerald-700">Supported features: ${(health.features || ['payloads', 'drops']).join(', ')}</div>
+        <div class="font-semibold flex items-center gap-1.5"><sl-icon name="check-circle-fill" class="text-emerald-600"></sl-icon> Server online! (v${Sanitizer.escapeHTML(health.serverVersion || '1.0.0')})</div>
+        <div class="text-[11px] text-emerald-700">Supported features: ${Sanitizer.escapeHTML((Array.isArray(health.features) ? health.features : ['payloads', 'drops']).join(', '))}</div>
       `;
       testResult.classList.remove('hidden');
     } catch (err) {
       testResult.className = 'p-3 rounded-xl text-xs bg-rose-50 border border-rose-200 text-rose-800';
-      testResult.innerHTML = `<div class="font-semibold flex items-center gap-1.5"><sl-icon name="exclamation-octagon-fill" class="text-rose-600"></sl-icon> Connection error</div><div class="text-[11px] text-rose-700">${err.message}</div>`;
+      testResult.innerHTML = `<div class="font-semibold flex items-center gap-1.5"><sl-icon name="exclamation-octagon-fill" class="text-rose-600"></sl-icon> Connection error</div><div class="text-[11px] text-rose-700">${Sanitizer.escapeHTML(describeRelayError(err, urlInput.value.trim()))}</div>`;
       testResult.classList.remove('hidden');
     } finally {
       btn.loading = false;

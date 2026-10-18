@@ -49,17 +49,17 @@ export function classifyText(text) {
       if (header.kind === 'video-receipt') {
         return {
           kind: 'video_receipt',
-          assessment_id: header.assessment_id || header.assignment_id || null,
-          assignment_id: header.assignment_id || header.assessment_id || null,
-          publish_version: header.publish_version ?? null,
+          assessment_id: headerId(header.assessment_id || header.assignment_id),
+          assignment_id: headerId(header.assignment_id || header.assessment_id),
+          publish_version: headerVersion(header.publish_version),
           text: trimmed
         };
       }
-      if (header.assignment_id) {
+      if (headerId(header.assignment_id)) {
         return {
           kind: 'assignment',
           assignment_id: header.assignment_id,
-          publish_version: header.publish_version ?? null,
+          publish_version: headerVersion(header.publish_version),
           text: trimmed
         };
       }
@@ -122,7 +122,19 @@ export function classifyText(text) {
   return { kind: 'unknown', text: trimmed };
 }
 
+/** Header fields are written by the student before encryption: accept only plain values */
+function headerVersion(v) {
+  const n = Number(v);
+  return Number.isInteger(n) && n >= 0 ? n : null;
+}
+function headerId(v) {
+  return typeof v === 'string' && v.length <= 200 ? v : null;
+}
+
 const ALLOWED_EXTENSIONS = ['.kbsub', '.kbr', '.txt', '.json'];
+
+// Archive limits: an LMS bulk download of a class is a few MB; anything far beyond is hostile
+export const ZIP_LIMITS = { maxEntries: 5000, maxTotalBytes: 100 * 1024 * 1024, maxEntryBytes: 10 * 1024 * 1024, maxDepth: 3 };
 
 /**
  * Expand a list of files or file-like objects, recursively opening .zip archives.
@@ -135,13 +147,19 @@ const ALLOWED_EXTENSIONS = ['.kbsub', '.kbr', '.txt', '.json'];
 export async function expandFiles(files) {
   const fileList = Array.from(files || []);
   const results = [];
+  const budget = { entries: 0, bytes: 0 };
 
-  async function processZipData(zipData, parentName = '') {
+  async function processZipData(zipData, parentName = '', depth = 1) {
+    if (depth > ZIP_LIMITS.maxDepth) throw new Error('ZIP_TOO_DEEP');
     const zip = await JSZip.loadAsync(zipData);
     const entries = Object.entries(zip.files);
 
     for (const [relativePath, entry] of entries) {
       if (entry.dir || relativePath.endsWith('/')) continue;
+      if (++budget.entries > ZIP_LIMITS.maxEntries) throw new Error('ZIP_TOO_MANY_FILES');
+      // Declared size from the central directory; checked again after inflating below
+      const declared = entry._data?.uncompressedSize ?? 0;
+      if (declared > ZIP_LIMITS.maxEntryBytes) continue;
       if (relativePath.includes('__MACOSX')) continue;
 
       const segments = relativePath.split('/');
@@ -153,7 +171,9 @@ export async function expandFiles(files) {
 
       if (lower.endsWith('.zip')) {
         const nestedData = await entry.async('arraybuffer');
-        await processZipData(nestedData, filename);
+        budget.bytes += nestedData.byteLength;
+        if (budget.bytes > ZIP_LIMITS.maxTotalBytes) throw new Error('ZIP_TOO_LARGE');
+        await processZipData(nestedData, filename, depth + 1);
         continue;
       }
 
@@ -161,6 +181,9 @@ export async function expandFiles(files) {
       if (!isAllowed) continue;
 
       const content = await entry.async('string');
+      budget.bytes += content.length;
+      if (budget.bytes > ZIP_LIMITS.maxTotalBytes) throw new Error('ZIP_TOO_LARGE');
+      if (content.length > ZIP_LIMITS.maxEntryBytes) continue;
       const parts = splitSubmissionText(content);
       const sourceName = filename || parentName || relativePath;
 

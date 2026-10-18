@@ -140,6 +140,42 @@ export class StudyPlayer {
     }
   }
 
+  /** Card images and audio clips; built with DOM APIs so no media URL passes through HTML */
+  async _renderCardMedia(card) {
+    const { resolveMediaSrc } = await import('../../utils/media.js');
+    for (const side of ['front', 'back']) {
+      const data = card[side];
+      const slot = this.container.querySelector(`[data-card-media="${side}"]`);
+      if (!slot || !data || typeof data !== 'object') continue;
+      const [img, audio] = await Promise.all([
+        resolveMediaSrc(data.imageRef, 'image'),
+        resolveMediaSrc(data.audioRef, 'audio')
+      ]);
+      if (!slot.isConnected) return; // moved on to another card meanwhile
+      if (img) {
+        const el = document.createElement('img');
+        el.src = img;
+        el.alt = `Image on the ${side} of the card`;
+        el.className = 'kb-card-image';
+        el.draggable = false;
+        slot.appendChild(el);
+      }
+      if (audio) {
+        const player = new Audio(audio);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-slate-200 text-sm text-slate-700 hover:border-blue-400 hover:text-blue-700';
+        btn.innerHTML = '<sl-icon name="play-circle" aria-hidden="true"></sl-icon><span>Play audio</span>';
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          player.currentTime = 0;
+          player.play().catch(() => {});
+        });
+        slot.appendChild(btn);
+      }
+    }
+  }
+
   _formatInterval(days) {
     if (!days || days <= 0) return '<10m';
     if (days === 1) return '1d';
@@ -228,6 +264,7 @@ export class StudyPlayer {
                 ${frontSketch && frontSketch.length > 0 ? `
                   <canvas id="front-sketch-canvas" width="400" height="200" class="max-w-full rounded-lg border border-slate-200 bg-white mx-auto"></canvas>
                 ` : ''}
+                <div data-card-media="front"></div>
                 </div>
               </div>
 
@@ -252,6 +289,7 @@ export class StudyPlayer {
                 ${backSketch && backSketch.length > 0 ? `
                   <canvas id="back-sketch-canvas" width="400" height="200" class="max-w-full rounded-lg border border-slate-200 bg-white mx-auto"></canvas>
                 ` : ''}
+                <div data-card-media="back"></div>
                 </div>
               </div>
 
@@ -295,9 +333,11 @@ export class StudyPlayer {
       SketchCanvas.renderStrokesToCanvas(c, backSketch);
     }
 
+    this._renderCardMedia(card);
+
     // Card Click Flip
     this.container.querySelector('#study-card-box')?.addEventListener('click', (e) => {
-      if (e.target.closest('#btn-tts-front') || e.target.closest('#btn-tts-back')) return;
+      if (e.target.closest('#btn-tts-front') || e.target.closest('#btn-tts-back') || e.target.closest('[data-card-media] button')) return;
       this.flipCard();
     });
 

@@ -264,9 +264,9 @@ export class ClassSetupWizard {
                   <div class="flex-1">
                     <span class="block font-semibold text-slate-800">Copy Structure from Existing Class</span>
                     <span class="text-xs text-slate-500 block mb-2">Copies terms, categories, grading scale, rubrics, and policies.</span>
-                    <sl-select size="small" id="wiz-select-copy-course" value="${copySourceId}" class="w-full">
+                    <sl-select size="small" id="wiz-select-copy-course" value="${Sanitizer.escapeHTML(copySourceId)}" class="w-full">
                       ${existingClasses.map(c => `
-                        <sl-option value="${c.id}">${Sanitizer.escapeHTML(c.name)}${c.section ? ` (${Sanitizer.escapeHTML(c.section)})` : ''}</sl-option>
+                        <sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)}${c.section ? ` (${Sanitizer.escapeHTML(c.section)})` : ''}</sl-option>
                       `).join('')}
                     </sl-select>
                   </div>
@@ -421,7 +421,7 @@ export class ClassSetupWizard {
           }
         }
 
-        toast.success(`Class "${Sanitizer.escapeHTML(createdCourse.name)}" created!`);
+        toast.success(`Class "${createdCourse.name}" created!`);
         currentStep = 5;
         render();
         if (onDone) onDone(createdCourse);

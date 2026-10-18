@@ -93,7 +93,7 @@ export async function renderEditor(assignment, router, container) {
             <sl-switch id="asg-shuffle-o" ${a.settings.shuffle_options ? 'checked' : ''}>Shuffle answer options</sl-switch>
             <sl-switch id="asg-require-code" ${a.settings.require_access_code ? 'checked' : ''}>Check student access codes</sl-switch>
           </div>
-          ${a.publish ? `<p class="text-xs text-slate-500 pt-2 border-t border-slate-200">Published version ${a.publish.version} · ${new Date(a.publish.published_at).toLocaleString()}. Edits apply after you publish again.</p>` : ''}
+          ${a.publish ? `<p class="text-xs text-slate-500 pt-2 border-t border-slate-200">Published version ${esc(a.publish.version)} · ${new Date(a.publish.published_at).toLocaleString()}. Edits apply after you publish again.</p>` : ''}
         </aside>
 
         <!-- Questions -->
@@ -182,7 +182,7 @@ export async function renderEditor(assignment, router, container) {
           <div class="space-y-2" role="group" aria-label="Answer options">
             ${(q.options || []).map((o, i) => `
               <div class="flex items-center gap-2">
-                <button type="button" data-opt-correct="${i}" class="kb-icon-btn ${o.is_correct ? '!text-emerald-600 bg-emerald-50' : ''}" aria-pressed="${o.is_correct}" aria-label="Mark option ${i + 1} correct" title="${o.is_correct ? 'Correct answer' : 'Mark as correct'}">
+                <button type="button" data-opt-correct="${i}" class="kb-icon-btn ${o.is_correct ? '!text-emerald-600 bg-emerald-50' : ''}" aria-pressed="${!!o.is_correct}" aria-label="Mark option ${i + 1} correct" title="${o.is_correct ? 'Correct answer' : 'Mark as correct'}">
                   <sl-icon name="${o.is_correct ? (multi ? 'check-square-fill' : 'check-circle-fill') : (multi ? 'square' : 'circle')}"></sl-icon>
                 </button>
                 <sl-input size="small" class="flex-1" data-opt-text="${i}" value="${esc(o.text)}" placeholder="Option ${i + 1}"></sl-input>
@@ -295,7 +295,7 @@ export async function renderEditor(assignment, router, container) {
         <header class="flex items-center gap-3 px-5 py-3 border-b border-slate-200">
           <span class="w-8 h-8 flex-shrink-0 rounded-lg bg-amber-50 text-amber-700 flex items-center justify-center font-semibold text-sm tabular-nums">${idx + 1}</span>
           <span class="flex items-center gap-1.5 text-sm font-medium text-slate-700 min-w-0">
-            <sl-icon name="${meta.icon}" class="text-slate-500 flex-shrink-0"></sl-icon><span class="truncate">${meta.label}</span>
+            <sl-icon name="${meta.icon}" class="text-slate-500 flex-shrink-0"></sl-icon><span class="truncate">${esc(meta.label)}</span>
           </span>
           <div class="ml-auto flex items-center gap-1">
             <sl-input size="small" type="number" min="0" step="0.5" data-points value="${esc(q.points)}" class="w-20" aria-label="Points"><span slot="suffix" class="text-xs text-slate-400">pts</span></sl-input>

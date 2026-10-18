@@ -131,7 +131,7 @@ export class ProjectLibraryView {
               <sl-option value="unassigned">Unassigned</sl-option>
               <sl-divider></sl-divider>
               ${this.classes.map(c => `
-                <sl-option value="${c.id}">${Sanitizer.escapeHTML(c.name)}</sl-option>
+                <sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)}</sl-option>
               `).join('')}
             </sl-select>
           </div>
@@ -161,7 +161,7 @@ export class ProjectLibraryView {
           <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
             ${filtered.map(item => {
               const assignedClass = this.classes.find(c => c.id === item.class_id);
-              const cardAccentColor = assignedClass?.color || accentColor;
+              const cardAccentColor = Sanitizer.safeColor(assignedClass?.color, accentColor);
               const displayTitle = item.title || item.name || 'Untitled';
               const safeDisplayTitle = Sanitizer.escapeHTML(displayTitle);
               const metadataSummary = this.options.getMetadataSummary ? this.options.getMetadataSummary(item) : '';
@@ -194,26 +194,26 @@ export class ProjectLibraryView {
                             <sl-icon name="three-dots-vertical"></sl-icon>
                           </button>
                           <sl-menu>
-                            <sl-menu-item data-action="open" data-id="${item.id}">
+                            <sl-menu-item data-action="open" data-id="${Sanitizer.escapeHTML(item.id)}">
                               <sl-icon slot="prefix" name="box-arrow-up-right"></sl-icon> Open
                             </sl-menu-item>
-                            <sl-menu-item data-action="edit" data-id="${item.id}">
+                            <sl-menu-item data-action="edit" data-id="${Sanitizer.escapeHTML(item.id)}">
                               <sl-icon slot="prefix" name="pencil"></sl-icon> Edit Details
                             </sl-menu-item>
-                            <sl-menu-item data-action="rename" data-id="${item.id}">
+                            <sl-menu-item data-action="rename" data-id="${Sanitizer.escapeHTML(item.id)}">
                               <sl-icon slot="prefix" name="cursor-text"></sl-icon> Rename...
                             </sl-menu-item>
-                            <sl-menu-item data-action="assign-class" data-id="${item.id}">
+                            <sl-menu-item data-action="assign-class" data-id="${Sanitizer.escapeHTML(item.id)}">
                               <sl-icon slot="prefix" name="mortarboard"></sl-icon> Assign Class...
                             </sl-menu-item>
-                            <sl-menu-item data-action="duplicate" data-id="${item.id}">
+                            <sl-menu-item data-action="duplicate" data-id="${Sanitizer.escapeHTML(item.id)}">
                               <sl-icon slot="prefix" name="copy"></sl-icon> Duplicate
                             </sl-menu-item>
-                            <sl-menu-item data-action="share" data-id="${item.id}">
+                            <sl-menu-item data-action="share" data-id="${Sanitizer.escapeHTML(item.id)}">
                               <sl-icon slot="prefix" name="share"></sl-icon> Share Lesson...
                             </sl-menu-item>
                             <sl-divider></sl-divider>
-                            <sl-menu-item data-action="delete" data-id="${item.id}" class="text-red-600">
+                            <sl-menu-item data-action="delete" data-id="${Sanitizer.escapeHTML(item.id)}" class="text-red-600">
                               <sl-icon slot="prefix" name="trash" class="text-red-600"></sl-icon> Delete
                             </sl-menu-item>
                           </sl-menu>
@@ -235,13 +235,13 @@ export class ProjectLibraryView {
 
                   <!-- Card Footer Actions -->
                   <div class="bg-slate-50/70 border-t border-slate-100 px-5 py-3 flex items-center gap-2">
-                    <sl-button size="small" variant="primary" class="flex-1" onclick="window.location.hash='${openUrl}'">
+                    <sl-button size="small" variant="primary" class="flex-1" href="${Sanitizer.escapeHTML(openUrl)}">
                       Launch
                     </sl-button>
-                    <sl-button size="small" variant="default" onclick="window.location.hash='${editUrl}'" title="Edit">
+                    <sl-button size="small" variant="default" href="${Sanitizer.escapeHTML(editUrl)}" title="Edit">
                       <sl-icon name="pencil"></sl-icon>
                     </sl-button>
-                    <sl-button size="small" variant="default" data-action="share" data-id="${item.id}" title="Share Link">
+                    <sl-button size="small" variant="default" data-action="share" data-id="${Sanitizer.escapeHTML(item.id)}" title="Share Link">
                       <sl-icon name="share"></sl-icon>
                     </sl-button>
                   </div>
@@ -357,15 +357,15 @@ export class ProjectLibraryView {
 
   _openAssignClassDialog(item) {
     const dialog = document.createElement('sl-dialog');
-    dialog.label = `Assign to Class: ${Sanitizer.escapeHTML(item.title || item.name)}`;
+    dialog.label = `Assign to Class: ${item.title || item.name}`;
 
     dialog.innerHTML = `
       <div class="space-y-4 py-2 text-sm">
         <p class="text-xs text-slate-500">Select which course section this ${this.options.itemTypeName.toLowerCase()} belongs to:</p>
-        <sl-select id="input-assign-class" value="${item.class_id || ''}">
+        <sl-select id="input-assign-class" value="${Sanitizer.escapeHTML(item.class_id || '')}">
           <sl-option value="">None (Unassigned)</sl-option>
           ${this.classes.map(c => `
-            <sl-option value="${c.id}">${Sanitizer.escapeHTML(c.name)} (${Sanitizer.escapeHTML(c.section || 'General')})</sl-option>
+            <sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)} (${Sanitizer.escapeHTML(c.section || 'General')})</sl-option>
           `).join('')}
         </sl-select>
       </div>

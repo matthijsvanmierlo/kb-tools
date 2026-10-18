@@ -212,7 +212,8 @@ describe('Phase 2: Chemical & STEM Equation Rendering', () => {
   it('renders chemical formula with Mhchem notation \\ce{H2 + O2 -> H2O}', () => {
     const raw = 'Reaction: $$\\ce{H2 + O2 -> H2O}$$';
     const output = Sanitizer.renderSTEMMarkdown(raw);
-    expect(output).toContain('H2 + O2 -> H2O');
+    // Without KaTeX loaded the expression falls back to escaped plain text
+    expect(output).toContain('H2 + O2 -&gt; H2O');
     expect(output).not.toContain('<script>');
   });
 });

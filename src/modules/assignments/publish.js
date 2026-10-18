@@ -264,7 +264,7 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
         meter.className = 'text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200';
         meter.textContent = `${share.length.toLocaleString()} chars · share the .kbshare file if the link gets cut off`;
       }
-      dialog.querySelector('#publish-fingerprint').innerHTML = `Version ${updated.publish.version}. Submissions are encrypted to your key <strong class="font-mono">${keys.fingerprint}</strong> — students see the same code on their receipt.`;
+      dialog.querySelector('#publish-fingerprint').innerHTML = `Version ${Sanitizer.escapeHTML(updated.publish.version)}. Submissions are encrypted to your key <strong class="font-mono">${Sanitizer.escapeHTML(keys.fingerprint)}</strong> — students see the same code on their receipt.`;
 
       const mount = dialog.querySelector('#publish-instructions-mount');
       if (mount) {

@@ -187,7 +187,7 @@ function renderAttentionSection(items) {
               <span class="truncate font-medium">${Sanitizer.escapeHTML(it.text)}</span>
             </div>
             ${it.link ? `
-              <a href="${it.link}" class="font-semibold text-blue-600 hover:text-blue-800 shrink-0 hover:underline">
+              <a href="${Sanitizer.escapeHTML(Sanitizer.safeUrl(it.link))}" class="font-semibold text-blue-600 hover:text-blue-800 shrink-0 hover:underline">
                 View →
               </a>
             ` : it.action === 'backup' ? `
@@ -271,8 +271,8 @@ function renderRecentProjects(projects) {
               </h3>
             </div>
             <div class="flex items-center gap-2 pt-2 border-t border-slate-100">
-              <a href="${p._openUrl}" class="flex-1 text-center py-1 rounded-lg text-xs font-medium bg-slate-50 hover:bg-slate-100 text-slate-700">Open</a>
-              <a href="${p._editUrl}" class="px-2 py-1 rounded-lg text-xs font-medium bg-slate-50 hover:bg-slate-100 text-slate-700" title="Edit">
+              <a href="${Sanitizer.escapeHTML(p._openUrl)}" class="flex-1 text-center py-1 rounded-lg text-xs font-medium bg-slate-50 hover:bg-slate-100 text-slate-700">Open</a>
+              <a href="${Sanitizer.escapeHTML(p._editUrl)}" class="px-2 py-1 rounded-lg text-xs font-medium bg-slate-50 hover:bg-slate-100 text-slate-700" title="Edit">
                 <sl-icon name="pencil"></sl-icon>
               </a>
             </div>
@@ -318,7 +318,7 @@ function renderClassesSection(courses, students, assignments, submissions) {
           return `
             <div class="rounded-xl border border-slate-200 bg-white p-4 shadow-xs space-y-3">
               <div class="flex items-center gap-3">
-                <div class="w-3.5 h-10 rounded-full shrink-0" style="background-color: ${c.color || '#2563eb'};"></div>
+                <div class="w-3.5 h-10 rounded-full shrink-0" style="background-color: ${Sanitizer.safeColor(c.color, '#2563eb')};"></div>
                 <div class="min-w-0 flex-1">
                   <div class="flex items-center gap-2">
                     <h3 class="font-bold text-sm text-slate-900 truncate">${Sanitizer.escapeHTML(c.name)}</h3>
@@ -346,7 +346,7 @@ function renderClassesSection(courses, students, assignments, submissions) {
               <div class="flex items-center gap-2">
                 <sl-button size="small" variant="default" class="flex-1" href="#/gradebook">Gradebook</sl-button>
                 <sl-button size="small" variant="default" href="#/gradebook?view=roster">Roster</sl-button>
-                <sl-button size="small" variant="default" data-action="course-settings" data-course-id="${c.id}" title="Class Settings">
+                <sl-button size="small" variant="default" data-action="course-settings" data-course-id="${Sanitizer.escapeHTML(c.id)}" title="Class Settings">
                   <sl-icon name="gear"></sl-icon>
                 </sl-button>
               </div>
@@ -402,13 +402,9 @@ function bindHomeEvents(container, courses, router) {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const text = await file.text();
-      // If .kbsub or .kbr or .zip, route to Inbox; else ShareModal
-      if (file.name.endsWith('.kbsub') || file.name.endsWith('.kbr') || file.name.endsWith('.zip')) {
-        router.navigate('#/inbox');
-      } else {
-        await ShareModal.openImportDialog(text);
-      }
+      // Hand-in files go to the Inbox (with the file), lessons to the import dialog
+      const { openIncomingFiles } = await import('../../core/pwa.js');
+      await openIncomingFiles([file], router);
     } catch (err) {
       toast.danger('Could not open file: ' + err.message);
     } finally {

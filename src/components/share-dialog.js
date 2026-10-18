@@ -89,7 +89,11 @@ export class ShareModal {
       genBtn.setAttribute('loading', '');
       try {
         const pass = passInput?.value || '';
-        currentPayload = await CryptoShareEngine.createSharePayload(moduleType, dataObject, pass);
+        // Card images/audio live in this browser's storage; embed them so the deck works elsewhere
+        const shareable = moduleType === 'flashcards'
+          ? await (await import('../utils/media.js')).inlineDeckMedia(dataObject)
+          : dataObject;
+        currentPayload = await CryptoShareEngine.createSharePayload(moduleType, shareable, pass);
         urlInput.value = currentPayload.url;
         resultsBox.classList.remove('hidden');
 

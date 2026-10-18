@@ -23,7 +23,8 @@ export class ExportDialog {
    *   supportsAccessCodes?: boolean,
    *   supportsQuestions?: boolean,
    *   customAction?: { label: string, icon?: string, run: (opts: any) => Promise<void> },
-   *   build: (opts: { delimiter: string, decimal: string, includeAccessCodes: boolean, includeQuestions: boolean }) => Promise<{ headers: string[], rows: object[], filename?: string }>
+   *   choice?: { label: string, options: Array<{ value: string, label: string }> },
+   *   build: (opts: { delimiter: string, decimal: string, includeAccessCodes: boolean, includeQuestions: boolean, choice?: string }) => Promise<{ headers: string[], rows: object[], filename?: string }>
    * }>} params.presets
    * @param {object} [params.context]
    * @returns {Promise<void>}
@@ -36,6 +37,7 @@ export class ExportDialog {
     let decimal = delimiter === ';' ? ',' : '.';
     let includeAccessCodes = false;
     let includeQuestions = false;
+    const choices = {}; // presetId → selected value of that preset's `choice`
 
     let currentResult = { headers: [], rows: [], filename: 'export.csv' };
     let isBuilding = false;
@@ -65,6 +67,18 @@ export class ExportDialog {
       if (questionsOptionWrap) {
         questionsOptionWrap.style.display = preset.supportsQuestions ? 'block' : 'none';
       }
+      const choiceWrap = dialog.querySelector('#wrap-option-choice');
+      const choiceSelect = dialog.querySelector('#export-select-choice');
+      if (choiceWrap && choiceSelect) {
+        const opts = preset.choice?.options || [];
+        choiceWrap.style.display = opts.length ? 'block' : 'none';
+        if (opts.length) {
+          if (!opts.some(o => o.value === choices[preset.id])) choices[preset.id] = opts[0].value;
+          dialog.querySelector('#export-choice-label').textContent = preset.choice.label;
+          choiceSelect.innerHTML = opts.map(o => `<option value="${esc(o.value)}">${esc(o.label)}</option>`).join('');
+          choiceSelect.value = choices[preset.id];
+        }
+      }
 
       if (customActionBtn) {
         if (preset.customAction) {
@@ -83,7 +97,8 @@ export class ExportDialog {
           delimiter,
           decimal,
           includeAccessCodes: preset.supportsAccessCodes ? includeAccessCodes : false,
-          includeQuestions: preset.supportsQuestions ? includeQuestions : false
+          includeQuestions: preset.supportsQuestions ? includeQuestions : false,
+          choice: choices[preset.id]
         });
 
         const rows = currentResult.rows || [];
@@ -189,6 +204,13 @@ export class ExportDialog {
               </label>
             </div>
 
+            <div id="wrap-option-choice" style="display: none;">
+              <label class="flex flex-col gap-1 text-xs text-slate-700">
+                <span class="font-medium" id="export-choice-label"></span>
+                <select id="export-select-choice" class="text-xs rounded-lg border-slate-300 py-1.5"></select>
+              </label>
+            </div>
+
             <div id="wrap-option-questions" style="display: none;">
               <label class="flex items-center gap-2 cursor-pointer text-xs text-slate-700">
                 <input type="checkbox" id="check-include-questions" class="rounded text-blue-600">
@@ -271,6 +293,11 @@ export class ExportDialog {
 
     dialog.querySelector('#check-include-access-codes')?.addEventListener('change', (e) => {
       includeAccessCodes = e.target.checked;
+      updatePreviewAndCounts();
+    });
+
+    dialog.querySelector('#export-select-choice')?.addEventListener('change', (e) => {
+      choices[selectedPresetId] = e.target.value;
       updatePreviewAndCounts();
     });
 

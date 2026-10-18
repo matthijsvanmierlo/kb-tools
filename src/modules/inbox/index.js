@@ -108,9 +108,12 @@ export async function renderInboxView(params, router, container) {
               <p class="text-xs text-slate-500">Collect submissions, video receipts, and batch LMS downloads in one place.</p>
             </div>
           </div>
-          <div class="flex items-center gap-2">
+          <div class="flex flex-wrap items-center gap-2">
             <sl-button size="small" id="btn-check-server">
               <sl-icon slot="prefix" name="cloud-download"></sl-icon> Check server
+            </sl-button>
+            <sl-button size="small" id="btn-scan-qr">
+              <sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Scan QR codes
             </sl-button>
             <sl-button size="small" id="btn-paste-codes">
               <sl-icon slot="prefix" name="clipboard-plus"></sl-icon> Paste codes
@@ -125,7 +128,7 @@ export async function renderInboxView(params, router, container) {
         <!-- Drop Zone -->
         <div id="inbox-dropzone" class="border-2 border-dashed border-slate-300 hover:border-amber-400 bg-slate-50/60 hover:bg-amber-50/20 transition-all rounded-2xl p-8 text-center cursor-pointer space-y-2">
           <sl-icon name="cloud-arrow-up" class="text-4xl text-slate-400 mx-auto block"></sl-icon>
-          <div class="font-semibold text-slate-800">Drop .kbsub, .kbr, .txt or .zip files here</div>
+          <div class="font-semibold text-slate-800">Drop .kbsub, .kbr, .txt or .zip files here — or scan students' QR codes</div>
           <div class="text-xs text-slate-500 max-w-md mx-auto">
             Drop bulk ZIP exports from Canvas, Google Classroom, or Brightspace. Nested archives, LMS-prepended filenames, and multi-code files are unpacked automatically.
           </div>
@@ -172,7 +175,7 @@ export async function renderInboxView(params, router, container) {
                       </td>
                       <td class="px-4 py-3">
                         <div class="font-medium text-slate-800">${esc(item.targetTitle)}</div>
-                        ${item.classification.publish_version ? `<div class="text-[11px] text-slate-400">Version ${item.classification.publish_version}</div>` : ''}
+                        ${item.classification.publish_version ? `<div class="text-[11px] text-slate-400">Version ${esc(item.classification.publish_version)}</div>` : ''}
                       </td>
                       <td class="px-4 py-3 text-xs font-mono text-slate-600">${esc(item.studentClaim)}</td>
                       <td class="px-4 py-3">
@@ -323,10 +326,7 @@ export async function renderInboxView(params, router, container) {
         e.preventDefault();
         dropzone.classList.remove('border-amber-500', 'bg-amber-50/50');
         const files = Array.from(e.dataTransfer?.files || []);
-        if (files.length) {
-          const expanded = await expandFiles(files);
-          await classifyAndStage(expanded);
-        }
+        if (files.length) await ingestFiles(files);
       });
       dropzone.addEventListener('click', () => fileInput?.click());
     }
@@ -334,14 +334,19 @@ export async function renderInboxView(params, router, container) {
     browseBtn?.addEventListener('click', () => fileInput?.click());
     fileInput?.addEventListener('change', async (e) => {
       const files = Array.from(e.target.files || []);
-      if (files.length) {
-        const expanded = await expandFiles(files);
-        await classifyAndStage(expanded);
-      }
+      if (files.length) await ingestFiles(files);
       fileInput.value = '';
     });
 
     pasteBtn?.addEventListener('click', () => openPasteCodesDialog());
+
+    container.querySelector('#btn-scan-qr')?.addEventListener('click', async () => {
+      const { openQrScanner } = await import('../../components/qr-handoff.js');
+      let n = 0;
+      await openQrScanner({
+        onSubmission: (text) => classifyAndStage([{ source: `QR scan #${++n}`, text }])
+      });
+    });
 
     clearBtn?.addEventListener('click', () => {
       staged = [];
@@ -563,12 +568,27 @@ export async function renderInboxView(params, router, container) {
     }
   }
 
+  // Unpack (zip) and classify any number of files at once; archive limits surface as a toast
+  async function ingestFiles(files) {
+    try {
+      await classifyAndStage(await expandFiles(files));
+    } catch (err) {
+      const reasons = {
+        ZIP_TOO_LARGE: 'That archive is too large to open safely (over 100 MB unpacked).',
+        ZIP_TOO_MANY_FILES: 'That archive contains too many files (over 5,000).',
+        ZIP_TOO_DEEP: 'That archive nests zip files too deeply.'
+      };
+      console.error('Inbox import failed:', err);
+      toast.danger(reasons[err.message] || 'Could not read those files. Are they KennisBoost submissions?');
+      render();
+    }
+  }
+
   // Handle files passed via global drop (store.getState('inboxDrop'))
   const dropped = store.getState('inboxDrop');
   if (dropped) {
     store.setState('inboxDrop', null);
-    const expanded = await expandFiles(dropped);
-    await classifyAndStage(expanded);
+    await ingestFiles(dropped);
   } else {
     render();
   }

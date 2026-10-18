@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import { loadServiceWorker } from './helpers/load-sw.js';
 import { Sanitizer } from '../src/core/sanitizer.js';
 
 describe('Phase 6: Defensive Engineering & XSS Injection Neutralization', () => {
@@ -89,14 +90,19 @@ describe('Phase 6: PWA Offline Packaging & Service Worker Audit', () => {
   });
 
   it('validates sw.js pre-caches core application shell and modules', () => {
-    const swPath = path.resolve(process.cwd(), 'sw.js');
-    expect(fs.existsSync(swPath)).toBe(true);
-
-    const swContent = fs.readFileSync(swPath, 'utf-8');
-    expect(swContent).toContain('CACHE_NAME');
-    expect(swContent).toContain('./index.html');
-    expect(swContent).toContain('./src/main.js');
-    expect(swContent).toContain('./css/app.css');
-    expect(swContent).toContain('caches.match');
+    const { self } = loadServiceWorker();
+    const precache = self.KB_PRECACHE;
+    expect(self.KB_CACHE_VERSION).toMatch(/^[0-9a-f]{12}$/);
+    for (const asset of ['./index.html', './src/main.js', './css/app.css', './vendor/dexie.mjs', './vendor/katex/katex.min.js']) {
+      expect(precache).toContain(asset);
+    }
+    // Every application module is precached, so the whole app works offline
+    const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e =>
+      e.isDirectory() ? walk(path.join(dir, e.name)) : [path.join(dir, e.name)]);
+    const modules = walk(path.resolve(process.cwd(), 'src'))
+      .filter(f => f.endsWith('.js'))
+      .map(f => './' + path.relative(process.cwd(), f).split(path.sep).join('/'));
+    const missing = modules.filter(m => !precache.includes(m));
+    expect(missing, 'run `npm run build:sw`').toEqual([]);
   });
 });

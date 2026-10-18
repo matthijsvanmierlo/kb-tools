@@ -10,6 +10,7 @@ import { Sanitizer } from '../../core/sanitizer.js';
  */
 
 const esc = (v) => Sanitizer.escapeHTML(v ?? '');
+const num = (v) => esc(Sanitizer.safeNumber(v));
 
 const STATUS_LABEL = {
   submitted: null,
@@ -26,7 +27,7 @@ function levelFor(levels, value) {
 
 function levelChip(levels, value) {
   const lvl = levelFor(levels, value);
-  return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold text-white tabular-nums" style="background:${lvl?.color || '#64748b'}">${Number(value)}${lvl ? ` <span class="font-medium text-white/90">${esc(lvl.label)}</span>` : ''}</span>`;
+  return `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold text-white tabular-nums" style="background:${Sanitizer.safeColor(lvl?.color)}">${num(value)}${lvl ? ` <span class="font-medium text-white/90">${esc(lvl.label)}</span>` : ''}</span>`;
 }
 
 export async function renderStudentReportView(params, router, container) {
@@ -63,7 +64,7 @@ export async function renderStudentReportView(params, router, container) {
         <div class="flex items-center gap-4 sm:text-right">
           <div>
             <div class="text-xs font-semibold uppercase tracking-wider text-slate-500">${isSbg ? 'Average mastery' : 'Current grade'}</div>
-            <div class="text-3xl font-bold text-slate-900 tabular-nums">${isSbg ? Number(p.summary.mastery).toFixed(1) : (p.summary.score !== null && p.summary.score !== undefined ? `${p.summary.score}%` : '—')}</div>
+            <div class="text-3xl font-bold text-slate-900 tabular-nums">${isSbg ? Sanitizer.safeNumber(p.summary.mastery).toFixed(1) : (p.summary.score !== null && p.summary.score !== undefined ? `${num(p.summary.score)}%` : '—')}</div>
           </div>
           <div class="w-16 h-16 rounded-2xl bg-blue-600 text-white flex items-center justify-center text-2xl font-bold">${esc(p.summary.letter || '—')}</div>
         </div>
@@ -86,7 +87,7 @@ export async function renderStudentReportView(params, router, container) {
                   ${s.mastery !== null ? levelChip(levels, s.mastery) : '<span class="text-xs text-slate-400">No evidence yet</span>'}
                 </div>
                 <p class="text-xs text-slate-600 leading-relaxed">${esc(s.description)}</p>
-                ${s.evidence.length ? `<p class="text-[11px] text-slate-400">Based on: ${s.evidence.map(e => `${esc(e.title)} (${e.level})`).join(' · ')}</p>` : ''}
+                ${s.evidence.length ? `<p class="text-[11px] text-slate-400">Based on: ${s.evidence.map(e => `${esc(e.title)} (${esc(e.level)})`).join(' · ')}</p>` : ''}
               </div>`).join('')}
           </div>
         </section>` : ''}
@@ -101,7 +102,7 @@ export async function renderStudentReportView(params, router, container) {
               ? '<span class="text-slate-400">Not graded</span>'
               : a.scoring === 'proficiency'
                 ? levelChip(levels, g.raw_score)
-                : `<span class="font-semibold text-slate-900 tabular-nums">${g.raw_score} / ${a.max_score}</span>`;
+                : `<span class="font-semibold text-slate-900 tabular-nums">${num(g.raw_score)} / ${num(a.max_score)}</span>`;
             const stdScores = g ? Object.entries(g.standard_scores || {}) : [];
             const hasDetails = g && (g.feedback || a.rubric || stdScores.length);
             return `
@@ -112,7 +113,7 @@ export async function renderStudentReportView(params, router, container) {
                     <p class="text-xs text-slate-500">${[a.category, a.due_date ? `due ${a.due_date}` : '', a.standards.length ? a.standards.join(', ') : ''].filter(Boolean).map(esc).join(' · ')}</p>
                   </div>
                   <div class="flex items-center gap-2">
-                    ${status ? `<span class="text-xs font-semibold px-2 py-0.5 rounded-md border ${status.cls}">${status.text}${g.status === 'late' && g.days_late ? ` · ${g.days_late}d` : ''}</span>` : ''}
+                    ${status ? `<span class="text-xs font-semibold px-2 py-0.5 rounded-md border ${status.cls}">${status.text}${g.status === 'late' && g.days_late ? ` · ${num(g.days_late)}d` : ''}</span>` : ''}
                     ${scoreText}
                   </div>
                 </div>
@@ -128,11 +129,11 @@ export async function renderStudentReportView(params, router, container) {
                       </div>` : ''}
                     ${a.rubric ? `
                       <div class="rounded-lg bg-slate-50 p-3 space-y-2">
-                        <p class="text-xs font-semibold text-slate-700">${esc(a.rubric.title)} · ${a.rubric.earned} / ${a.rubric.possible}</p>
+                        <p class="text-xs font-semibold text-slate-700">${esc(a.rubric.title)} · ${num(a.rubric.earned)} / ${num(a.rubric.possible)}</p>
                         ${a.rubric.criteria.map(c => `
                           <div class="text-xs">
                             <span class="font-medium text-slate-800">${esc(c.name)}:</span>
-                            <span class="text-slate-600">${c.level ? `${esc(c.level)}${c.points !== null ? ` (${c.points})` : ''}` : 'not scored'}</span>
+                            <span class="text-slate-600">${c.level ? `${esc(c.level)}${c.points !== null ? ` (${num(c.points)})` : ''}` : 'not scored'}</span>
                             ${c.descriptor ? `<span class="text-slate-500"> — ${esc(c.descriptor)}</span>` : ''}
                             ${c.comment ? `<div class="mt-0.5 text-slate-700 italic">“${esc(c.comment)}”</div>` : ''}
                           </div>`).join('')}
@@ -140,7 +141,7 @@ export async function renderStudentReportView(params, router, container) {
                     ${g.feedback ? `<div class="text-sm text-slate-700 whitespace-pre-line rounded-lg border-l-4 border-blue-300 bg-blue-50/60 px-3 py-2">${esc(g.feedback)}</div>` : ''}
                     ${(g.feedback_link || g.extra?.feedback_link) ? `
                       <div class="pt-1">
-                        <a href="${esc(g.feedback_link || g.extra?.feedback_link)}" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors">
+                        <a href="${esc(Sanitizer.safeUrl(g.feedback_link || g.extra?.feedback_link))}" rel="noopener noreferrer" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors">
                           <sl-icon name="box-arrow-up-right"></sl-icon> View your answers and comments
                         </a>
                       </div>` : ''}
@@ -167,7 +168,7 @@ function renderLegacy(p, container) {
           const g = grades[a.id];
           return `<div class="flex items-center justify-between gap-3 px-5 py-3">
             <span class="text-sm font-medium text-slate-800">${esc(a.title)}</span>
-            <span class="text-sm tabular-nums text-slate-700">${g && g.raw_score !== null && g.raw_score !== undefined ? `${g.raw_score} / ${a.max_score}` : (g?.status === 'missing' ? 'Missing' : '—')}</span>
+            <span class="text-sm tabular-nums text-slate-700">${g && g.raw_score !== null && g.raw_score !== undefined ? `${num(g.raw_score)} / ${num(a.max_score)}` : (g?.status === 'missing' ? 'Missing' : '—')}</span>
           </div>`;
         }).join('')}
       </section>

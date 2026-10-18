@@ -1,0 +1,159 @@
+/**
+ * PWA integration (KB-CORE-PWA)
+ *  - Service worker registration with a user-confirmed update (no mid-session cache swaps).
+ *  - File Handling API: files double-clicked in the OS arrive through `launchQueue`.
+ *  - Web Share Target: the service worker stashes shared files/links in a private cache that is
+ *    drained here.
+ * Every entry point funnels into openIncomingFiles(), the same path as the Home "Open file" button.
+ */
+import { store } from '../state/store.js';
+import { toast } from '../utils/toast.js';
+
+const SHARE_CACHE = 'kennisboost-share-inbox';
+const HANDIN_EXTENSIONS = ['.kbsub', '.kbr', '.zip'];
+
+/** Extract the `#/share?...` part of a KennisBoost link, or null */
+export function extractShareHash(text, origin = (typeof window !== 'undefined' ? window.location.origin : '')) {
+  const match = String(text || '').match(/https?:\/\/\S+?#\/share\?\S+|#\/share\?\S+/);
+  if (!match) return null;
+  const candidate = match[0];
+  if (candidate.startsWith('#')) return candidate;
+  try {
+    const u = new URL(candidate);
+    // Only follow links to this installation; a foreign origin could be a look-alike
+    if (origin && u.origin !== origin) return null;
+    return u.hash;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Decide where an incoming file belongs */
+export function classifyIncomingFile(name = '') {
+  const lower = name.toLowerCase();
+  if (HANDIN_EXTENSIONS.some(ext => lower.endsWith(ext))) return 'inbox';
+  return 'share';
+}
+
+function goToInbox(router, files) {
+  store.setState('inboxDrop', files);
+  // Re-render when the inbox is already showing (navigating to the same hash fires no event)
+  if (window.location.hash === '#/inbox') router.handleRoute();
+  else router.navigate('#/inbox');
+}
+
+/**
+ * Open files that came from outside the app (OS launch, share sheet, file picker).
+ * @param {File[]} files
+ * @param {{ navigate: Function }} router
+ */
+export async function openIncomingFiles(files, router) {
+  const list = Array.from(files || []).filter(Boolean);
+  if (!list.length) return;
+
+  const handin = list.filter(f => classifyIncomingFile(f.name) === 'inbox');
+  const others = list.filter(f => classifyIncomingFile(f.name) !== 'inbox');
+
+  if (handin.length) {
+    goToInbox(router, handin);
+    if (!others.length) return;
+  }
+
+  for (const file of others) {
+    const text = await file.text();
+    const shareHash = extractShareHash(text);
+    if (shareHash) {
+      router.navigate(shareHash);
+      return;
+    }
+    // A shared lesson file, or student work saved as .txt/.json → let the inbox classify it
+    if (/KBSUB1\./.test(text)) {
+      goToInbox(router, [file]);
+      continue;
+    }
+    await router.openShareFile(text);
+  }
+}
+
+/** Drain files the service worker stored from a Web Share Target POST */
+export async function takeSharedFiles() {
+  if (typeof caches === 'undefined') return [];
+  const cache = await caches.open(SHARE_CACHE);
+  const requests = await cache.keys();
+  const files = [];
+  for (const req of requests) {
+    const res = await cache.match(req);
+    if (res) {
+      const blob = await res.blob();
+      const name = decodeURIComponent(res.headers.get('X-Filename') || 'shared-file');
+      files.push(new File([blob], name, { type: blob.type }));
+    }
+    await cache.delete(req);
+  }
+  return files;
+}
+
+export function initLaunchHandlers(router) {
+  if (typeof window === 'undefined') return;
+
+  if ('launchQueue' in window && typeof window.launchQueue.setConsumer === 'function') {
+    window.launchQueue.setConsumer(async (params) => {
+      if (!params?.files?.length) return;
+      try {
+        const files = await Promise.all(params.files.map(h => h.getFile()));
+        await openIncomingFiles(files, router);
+      } catch (err) {
+        console.error('Could not open launched file:', err);
+        toast.danger('Could not open that file.');
+      }
+    });
+  }
+
+  const hash = window.location.hash || '';
+  if (hash.startsWith('#/inbox') && hash.includes('shared=1')) {
+    takeSharedFiles()
+      .then(files => (files.length ? openIncomingFiles(files, router) : null))
+      .catch(err => console.error('Could not read shared files:', err));
+  }
+}
+
+export function registerServiceWorker() {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+  if (!window.location.protocol.startsWith('http')) return;
+
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading) return;
+    reloading = true;
+    window.location.reload();
+  });
+
+  const offerUpdate = (worker) => {
+    if (!worker || !navigator.serviceWorker.controller) return; // first install: nothing to update
+    const alert = Object.assign(document.createElement('sl-alert'), {
+      variant: 'primary',
+      closable: true,
+      duration: Infinity
+    });
+    alert.innerHTML = `
+      <sl-icon slot="icon" name="arrow-repeat"></sl-icon>
+      <strong>A new version of KennisBoost is ready.</strong><br>
+      Save your work, then reload to update.
+      <div class="mt-2"><sl-button size="small" variant="primary">Reload now</sl-button></div>`;
+    alert.querySelector('sl-button').addEventListener('click', () => worker.postMessage('SKIP_WAITING'));
+    document.body.append(alert);
+    alert.toast?.();
+  };
+
+  navigator.serviceWorker.register('./sw.js').then((reg) => {
+    if (reg.waiting) offerUpdate(reg.waiting);
+    reg.addEventListener('updatefound', () => {
+      const worker = reg.installing;
+      worker?.addEventListener('statechange', () => {
+        if (worker.state === 'installed') offerUpdate(worker);
+      });
+    });
+  }).catch(err => {
+    console.debug('ServiceWorker registration skipped/failed:', err);
+  });
+}

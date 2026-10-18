@@ -61,7 +61,10 @@ export async function renderTakeView(params, router, container) {
   }
 
   const { payload, preview, teacherAssignment } = resolved;
-  const questions = payload.questions || [];
+  // The payload comes from a link anyone could craft: points must be plain numbers before they
+  // are summed (a string would concatenate) or rendered
+  const questions = (Array.isArray(payload.questions) ? payload.questions : [])
+    .map(q => ({ ...q, points: Math.max(0, Sanitizer.safeNumber(q?.points, 0)) }));
   const feedback = payload.settings?.feedback_mode || 'after_submit';
   const shareParams = store.getState('shareParams') || {};
   const initialSid = params.sid || shareParams.sid || '';
@@ -350,7 +353,7 @@ export async function renderTakeView(params, router, container) {
         <section class="bg-white rounded-2xl border border-slate-200 shadow-sm p-5 sm:p-7 space-y-5" aria-labelledby="take-q-title">
           <div class="flex items-center justify-between gap-3 text-xs text-slate-500">
             <span id="take-q-title" class="font-semibold uppercase tracking-wider">Question ${state.index + 1} of ${questions.length}</span>
-            <span class="flex items-center gap-1.5"><sl-icon name="${meta.icon || 'question'}"></sl-icon>${esc(meta.label || '')} · ${q.points} pt${q.points === 1 ? '' : 's'}</span>
+            <span class="flex items-center gap-1.5"><sl-icon name="${esc(meta.icon || 'question')}"></sl-icon>${esc(meta.label || '')} · ${q.points} pt${q.points === 1 ? '' : 's'}</span>
           </div>
           <div class="kb-prose text-lg text-slate-900 leading-relaxed">${promptHtml(q)}</div>
           <div class="space-y-3" id="take-input">${inputFor(q)}</div>
@@ -577,7 +580,7 @@ export async function renderTakeView(params, router, container) {
             <p class="text-slate-600">Auto-checked score: <strong class="text-slate-900 text-lg tabular-nums">${r.clientScore.earned} / ${r.clientScore.checkable}</strong>${pct !== null ? ` <span class="text-slate-400">(${pct}%)</span>` : ''}</p>
             <p class="text-sm text-slate-500 max-w-md mx-auto">Your teacher's grade is final and may add partial credit${r.clientScore.checkable < r.clientScore.possible ? ` and points for answers they review (${r.clientScore.possible - r.clientScore.checkable} pts)` : ''}.</p>
           ` : '<p class="text-slate-600">Your teacher will share your grade after reviewing your work.</p>'}
-          ${r.teacherGrade ? `<p class="text-sm text-amber-700">Teacher re-grade from the answer key: <strong>${r.teacherGrade.earned} / ${r.teacherGrade.possible}</strong>${r.teacherGrade.needs_manual ? ` (+ ${r.teacherGrade.needs_manual} for manual review)` : ''}</p>` : ''}
+          ${r.teacherGrade ? `<p class="text-sm text-amber-700">Teacher re-grade from the answer key: <strong>${esc(r.teacherGrade.earned)} / ${esc(r.teacherGrade.possible)}</strong>${r.teacherGrade.needs_manual ? ` (+ ${esc(r.teacherGrade.needs_manual)} for manual review)` : ''}</p>` : ''}
         </div>
 
         ${!preview ? `
@@ -613,6 +616,7 @@ export async function renderTakeView(params, router, container) {
                 <div class="mt-2 flex flex-wrap gap-2">
                   <sl-button variant="primary" size="medium" id="res-download"><sl-icon slot="prefix" name="download"></sl-icon> Download submission file (.kbsub)</sl-button>
                   <sl-button size="medium" id="res-copy"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy submission code</sl-button>
+                  <sl-button size="medium" id="res-qr"><sl-icon slot="prefix" name="qr-code"></sl-icon> Show QR code</sl-button>
                 </div>
               </li>
               <li>
@@ -705,6 +709,11 @@ export async function renderTakeView(params, router, container) {
       link.click();
       setTimeout(() => { link.remove(); URL.revokeObjectURL(url); }, 100);
       toast.success('Submission file downloaded. Now hand it in.');
+    });
+
+    container.querySelector('#res-qr')?.addEventListener('click', async () => {
+      const { showSubmissionQr } = await import('../../components/qr-handoff.js');
+      await showSubmissionQr(r.text, { title: payload.title, studentName: state.student.name });
     });
 
     container.querySelector('#res-copy')?.addEventListener('click', async () => {

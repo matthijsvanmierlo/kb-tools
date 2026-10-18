@@ -219,9 +219,10 @@ export async function renderAboutView(params, router, container) {
         <h3 class="font-bold text-slate-700 uppercase tracking-wider text-[11px]">Open Source Components &amp; Licences</h3>
         <p class="leading-relaxed">
           KennisBoost Tools is engineered using peer-reviewed, open-source libraries:
-          Shoelace 2.15 (MIT), Dexie.js (Apache-2.0), KaTeX (MIT), DOMPurify (Apache-2.0 / MPL),
+          Shoelace 2.20 (MIT), Dexie.js (Apache-2.0), KaTeX (MIT), DOMPurify (Apache-2.0 / MPL),
           marked (MIT), PapaParse (MIT), lz-string (MIT), jsPDF &amp; AutoTable (MIT),
-          JSZip (MIT / GPL-3.0 dual), Zod (MIT), and Inter Font (OFL).
+          JSZip (MIT / GPL-3.0 dual), Zod (MIT), qrcode-generator (MIT), jsQR (Apache-2.0),
+          and Inter Font (OFL). Every library is served from this site; nothing loads from a CDN.
         </p>
       </section>
     </div>

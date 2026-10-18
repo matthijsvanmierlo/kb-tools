@@ -11,7 +11,7 @@ const esc = (v) => Sanitizer.escapeHTML(v ?? '');
 function chip(course, value) {
   if (value === null || value === undefined) return '<span class="text-slate-300">—</span>';
   const lvl = levelInfo(course, value);
-  return `<span class="inline-flex items-center justify-center min-w-[40px] px-2 py-1 rounded-lg text-xs font-bold text-white tabular-nums" style="background-color:${lvl?.color || '#64748b'}" title="${esc(lvl?.label || '')}">${Number(value).toFixed(1)}</span>`;
+  return `<span class="inline-flex items-center justify-center min-w-[40px] px-2 py-1 rounded-lg text-xs font-bold text-white tabular-nums" style="background-color:${Sanitizer.safeColor(lvl?.color)}" title="${esc(lvl?.label || '')}">${Sanitizer.safeNumber(value).toFixed(1)}</span>`;
 }
 
 export function renderStandardsView(mount, { course, students, aggregates, onOpenSettings }) {
@@ -38,7 +38,7 @@ export function renderStandardsView(mount, { course, students, aggregates, onOpe
     <div class="space-y-3">
       <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500">
         <span class="font-medium text-slate-700">${esc(SBG_CALCULATION_METHODS[cfg.calculation]?.name || '')}</span>
-        ${levels.map(l => `<span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm" style="background:${l.color}"></span>${l.value} ${esc(l.label)}</span>`).join('')}
+        ${levels.map(l => `<span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm" style="background:${Sanitizer.safeColor(l.color)}"></span>${esc(l.value)} ${esc(l.label)}</span>`).join('')}
       </div>
       <div class="overflow-auto rounded-xl border border-slate-200 bg-white shadow-xs" style="max-height: min(640px, calc(100vh - 260px));">
         <table class="text-sm border-separate border-spacing-0">
@@ -69,7 +69,7 @@ export function renderStandardsView(mount, { course, students, aggregates, onOpe
                   ${standards.map(s => {
                     const b = agg.standards?.get(s.id);
                     return `<td class="${zebra} border-b border-r border-slate-200 px-3 py-2 text-center">
-                      ${b && b.evidence.length ? `<button type="button" class="kb-sv-cell rounded-lg hover:ring-2 hover:ring-blue-200 focus-visible:ring-2" data-student="${esc(st.student_id)}" data-std="${s.id}" aria-label="${esc(st.full_name)}, ${esc(s.code)}: evidence">${chip(course, b.mastery)}</button>` : '<span class="text-slate-300">—</span>'}
+                      ${b && b.evidence.length ? `<button type="button" class="kb-sv-cell rounded-lg hover:ring-2 hover:ring-blue-200 focus-visible:ring-2" data-student="${esc(st.student_id)}" data-std="${esc(s.id)}" aria-label="${esc(st.full_name)}, ${esc(s.code)}: evidence">${chip(course, b.mastery)}</button>` : '<span class="text-slate-300">—</span>'}
                     </td>`;
                   }).join('')}
                 </tr>`;
@@ -96,7 +96,7 @@ export function renderStandardsView(mount, { course, students, aggregates, onOpe
             const lvl = levelInfo(course, ev.level);
             return `<li class="flex items-center justify-between gap-3 rounded-lg border border-slate-200 px-3 py-2">
               <div class="min-w-0"><div class="text-sm font-medium text-slate-800 truncate">${esc(ev.title)}</div><div class="text-[11px] text-slate-400">${esc(ev.date || '')}</div></div>
-              <span class="text-xs font-semibold px-2 py-0.5 rounded-md text-white" style="background:${lvl?.color || '#64748b'}">${ev.level} ${esc(lvl?.label || '')}</span>
+              <span class="text-xs font-semibold px-2 py-0.5 rounded-md text-white" style="background:${Sanitizer.safeColor(lvl?.color)}">${esc(ev.level)} ${esc(lvl?.label || '')}</span>
             </li>`;
           }).join('')}
         </ol>

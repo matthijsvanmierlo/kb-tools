@@ -1045,3 +1045,46 @@ body[data-mode="student"] .kb-storage-menu,
 body[data-mode="student"] .kb-footer-tags { display: none !important; }
 body[data-mode="student"] .kb-brand-name span::after { content: ' · Student'; }
 
+
+/* file:// guard rendered by src/boot/preboot.js (plain CSS: Tailwind classes may not be built yet) */
+.kb-file-guard { max-width: 640px; margin: 40px auto; padding: 32px 24px; background: #fff; border: 2px solid #3b82f6; border-radius: 16px; box-shadow: 0 10px 25px -5px rgba(0,0,0,.1); font-family: system-ui, -apple-system, sans-serif; text-align: center; color: #475569; font-size: 14px; line-height: 1.6; }
+.kb-file-guard h2 { font-size: 22px; font-weight: 700; color: #0f172a; margin: 0 0 8px; }
+.kb-file-guard p { margin: 0 0 16px; }
+.kb-file-guard-icon { width: 56px; height: 56px; border-radius: 50%; background: #eff6ff; display: flex; align-items: center; justify-content: center; margin: 0 auto 16px; font-size: 28px; }
+.kb-file-guard-cmd { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 16px; text-align: left; margin-bottom: 24px; font-family: monospace; font-size: 13px; }
+.kb-file-guard-cmd p { margin: 0 0 6px; color: #0f172a; }
+.kb-file-guard a { display: inline-block; padding: 12px 28px; background: #2563eb; color: #fff; text-decoration: none; font-weight: 600; border-radius: 8px; font-size: 15px; }
+
+/* Guest / ephemeral profile warning (src/core/storage.js) */
+.kb-temp-session-banner { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; padding: .5rem 1rem; background: #fef3c7; border-bottom: 1px solid #f59e0b; color: #78350f; font-size: .8125rem; }
+.kb-temp-session-banner > span { flex: 1 1 16rem; }
+.kb-temp-session-banner button { font-weight: 600; border-radius: .375rem; padding: .25rem .75rem; }
+.kb-temp-session-banner button[data-action="backup"] { background: #b45309; color: #fff; }
+.kb-temp-session-banner button[data-action="backup"]:hover { background: #92400e; }
+.kb-temp-session-banner button[data-action="dismiss"] { background: transparent; color: inherit; }
+.sl-theme-dark .kb-temp-session-banner { background: #422006; border-color: #b45309; color: #fde68a; }
+
+/* QR hand-in (src/components/qr-handoff.js). Always black-on-white so cameras can read it in dark mode. */
+.kb-qr-frame { background: #fff; border-radius: 12px; padding: 8px; margin: 0 auto; width: min(420px, 82vw); aspect-ratio: 1; }
+.kb-qr-frame svg { width: 100%; height: 100%; display: block; }
+.kb-qr-frame svg path, .kb-qr-frame svg rect[fill="black"] { fill: #000; }
+.kb-qr-scanner { position: relative; background: #0f172a; border-radius: 12px; overflow: hidden; aspect-ratio: 4 / 3; }
+.kb-qr-scanner video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.kb-qr-scanner-target { position: absolute; inset: 15%; border: 3px solid rgba(255,255,255,.85); border-radius: 16px; box-shadow: 0 0 0 9999px rgba(15,23,42,.35); }
+
+/* Flashcard media (src/modules/flashcards/editor.js, study-player.js) */
+.kb-card-media-item { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-top: .5rem; }
+.kb-card-media-item audio { height: 36px; max-width: 100%; }
+.kb-card-image { display: block; max-width: 100%; max-height: 220px; margin: .75rem auto 0; border-radius: .5rem; }
+
+/* FSRS 7-day forecast (src/modules/flashcards/study-planner.js). Single series: no legend. */
+.kb-forecast { --kb-forecast-bar: #2563eb; display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 2px; height: 140px; align-items: end; border-bottom: 1px solid #e2e8f0; }
+.sl-theme-dark .kb-forecast { --kb-forecast-bar: #3b82f6; border-bottom-color: #334155; }
+.kb-forecast-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 0; padding-top: 1rem; position: relative; cursor: default; }
+.kb-forecast-col:hover .kb-forecast-bar { filter: brightness(1.15); }
+.kb-forecast-bar { width: min(24px, 70%); background: var(--kb-forecast-bar); border-radius: 4px 4px 0 0; transition: height .2s ease; }
+.kb-forecast-value { font-size: .75rem; font-weight: 600; color: #334155; min-height: 1rem; }
+.sl-theme-dark .kb-forecast-value { color: #cbd5e1; }
+.kb-forecast-day { position: absolute; bottom: -1.35rem; font-size: .6875rem; color: #64748b; white-space: nowrap; }
+.kb-forecast + table + p { margin-top: 1.75rem; }
+@media (prefers-reduced-motion: reduce) { .kb-forecast-bar { transition: none; } }

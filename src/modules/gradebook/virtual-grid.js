@@ -194,7 +194,7 @@ export class VirtualGradebookGrid {
           </div>
           <span class="text-[10px] font-medium text-slate-400 tabular-nums truncate">${a.scoring === 'proficiency'
             ? `Proficiency${this._standardCodes(a) ? ` · ${this._standardCodes(a)}` : ''}`
-            : `out of ${a.max_score}${this._standardCodes(a) ? ` · ${this._standardCodes(a)}` : ''}`}</span>
+            : `out of ${Sanitizer.escapeHTML(Sanitizer.safeNumber(a.max_score))}${this._standardCodes(a) ? ` · ${this._standardCodes(a)}` : ''}`}</span>
         </div>
       `;
     });
@@ -315,9 +315,9 @@ export class VirtualGradebookGrid {
           </div>
           <div class="flex items-center gap-1.5 flex-shrink-0 tabular-nums">
             <span class="font-semibold text-xs ${agg.score !== null || agg.mastery != null ? 'text-slate-800' : 'text-slate-400'}" ${agg.mastery != null ? 'title="Average mastery across standards"' : ''}>
-              ${agg.mastery != null ? `${agg.mastery.toFixed(1)}` : agg.score !== null ? `${agg.score}%` : '—'}
+              ${agg.mastery != null ? `${Sanitizer.safeNumber(agg.mastery).toFixed(1)}` : agg.score !== null ? `${Sanitizer.escapeHTML(Sanitizer.safeNumber(agg.score))}%` : '—'}
             </span>
-            <span class="inline-flex items-center justify-center min-w-[26px] px-1 py-0.5 rounded text-[10px] font-bold ${letterPill}">${agg.letter}</span>
+            <span class="inline-flex items-center justify-center min-w-[26px] px-1 py-0.5 rounded text-[10px] font-bold ${letterPill}">${Sanitizer.escapeHTML(agg.letter)}</span>
           </div>
         </div>
       `;
@@ -360,12 +360,12 @@ export class VirtualGradebookGrid {
         } else if (record.status === 'exempt') {
           badgeHtml = '<span class="px-1 py-0.5 rounded text-[9px] font-bold bg-slate-100 text-slate-600">EX</span>';
         } else if (record.status === 'late') {
-          const daysLate = record.days_late ? `${record.days_late}d ` : '';
+          const daysLate = record.days_late ? `${Sanitizer.escapeHTML(Sanitizer.safeNumber(record.days_late))}d ` : '';
           badgeHtml = `<span class="px-1 py-0.5 rounded text-[9px] font-bold bg-amber-100 text-amber-700">${daysLate}LATE</span>`;
           if (record.raw_score !== null) displayVal = String(record.raw_score);
         } else if (record.raw_score !== null && assignment.scoring === 'proficiency') {
           const lvl = levelInfo(this.course, record.raw_score);
-          badgeHtml = `<span class="inline-flex items-center justify-center min-w-[28px] px-1.5 py-0.5 rounded-md text-xs font-bold text-white tabular-nums" style="background-color:${lvl?.color || '#64748b'}" title="${Sanitizer.escapeHTML(lvl?.label || '')}">${record.raw_score}</span>`;
+          badgeHtml = `<span class="inline-flex items-center justify-center min-w-[28px] px-1.5 py-0.5 rounded-md text-xs font-bold text-white tabular-nums" style="background-color:${Sanitizer.safeColor(lvl?.color)}" title="${Sanitizer.escapeHTML(lvl?.label || '')}">${Sanitizer.escapeHTML(Sanitizer.safeNumber(record.raw_score))}</span>`;
         } else if (record.raw_score !== null) {
           displayVal = String(record.raw_score);
           // Extra credit badge if score exceeds max score
@@ -387,14 +387,14 @@ export class VirtualGradebookGrid {
         const hasFeedback = !!(record.feedback || (record.rubric_comments && Object.keys(record.rubric_comments).length) || (record.standard_comments && Object.keys(record.standard_comments).length));
 
         cellsHtml += `
-          <div data-cell-key="${key}" data-r="${r}" data-c="${c}"
+          <div data-cell-key="${Sanitizer.escapeHTML(key)}" data-r="${r}" data-c="${c}"
                class="kb-grid-cell absolute border-b border-r border-slate-200 flex items-center justify-center cursor-pointer select-none transition-colors ${cellBg} ${isFocused ? 'ring-2 ring-blue-500 z-10' : ''}"
                style="transform: translate3d(${xPos}px, ${yPos}px, 0); width: ${this.CELL_WIDTH}px; height: ${this.ROW_HEIGHT}px;">
             ${isFocused ? '' : `
               ${hasFeedback ? '<span class="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-blue-500" title="Has feedback"></span>' : ''}
               <div class="flex items-center gap-1.5 tabular-nums text-sm w-full px-2 justify-center">
                 ${badgeHtml}
-                <span class="${record.raw_score === null && !badgeHtml ? 'text-slate-300' : 'text-slate-800 font-semibold'}">${displayVal || (badgeHtml ? '' : '—')}</span>
+                <span class="${record.raw_score === null && !badgeHtml ? 'text-slate-300' : 'text-slate-800 font-semibold'}">${Sanitizer.escapeHTML(displayVal) || (badgeHtml ? '' : '—')}</span>
                 ${hasRubric ? `<sl-icon name="grid-3x3" class="text-[10px] ${hasRubricEval ? 'text-violet-600' : 'text-slate-300'} ml-0.5" title="${hasRubricEval ? 'Scored with rubric' : 'Rubric not scored yet'}"></sl-icon>` : ''}
               </div>
             `}
@@ -495,9 +495,9 @@ export class VirtualGradebookGrid {
     const maxHint = assignment?.scoring === 'proficiency' ? `0–${getMaxLevel(this.course)}` : `0–${assignment?.max_score ?? ''}`;
 
     cellEl.innerHTML = `
-      <input type="text" id="active-cell-input" aria-label="Score ${maxHint}. M missing, L late, E excused. Ctrl+Enter for details."
+      <input type="text" id="active-cell-input" aria-label="Score ${Sanitizer.escapeHTML(maxHint)}. M missing, L late, E excused. Ctrl+Enter for details."
              class="w-full h-full text-center tabular-nums text-sm border-0 outline-none focus:ring-0 p-0 pr-6 m-0 bg-blue-50 font-semibold text-slate-900"
-             value="${initialValue}" />
+             value="${Sanitizer.escapeHTML(initialValue)}" />
       ${typeof this.onOpenDetails === 'function' ? `
         <button type="button" class="kb-cell-details-btn absolute right-0.5 top-1/2 -translate-y-1/2 w-6 h-6 flex items-center justify-center rounded-md text-blue-600 hover:bg-blue-100" tabindex="-1" title="Details, rubric & feedback (Ctrl+Enter)" aria-label="Open grade details">
           <sl-icon name="arrows-angle-expand" class="text-xs"></sl-icon>
