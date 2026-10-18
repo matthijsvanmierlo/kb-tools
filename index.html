@@ -122,9 +122,37 @@
           <sl-icon name="search"></sl-icon>
         </button>
 
-        <a href="#/guide" data-route-link="#/guide" class="kb-icon-btn kb-guide-link" title="Teacher guide" aria-label="Teacher guide: recommended workflows">
-          <sl-icon name="signpost-split"></sl-icon>
-        </a>
+        <!-- Help Dropdown -->
+        <sl-dropdown placement="bottom-end" distance="6" class="kb-guide-link">
+          <button slot="trigger" type="button" class="kb-icon-btn" aria-label="Help and resources" title="Help">
+            <sl-icon name="question-circle"></sl-icon>
+          </button>
+          <sl-menu id="kb-help-menu">
+            <sl-menu-label>Help &amp; Resources</sl-menu-label>
+            <sl-menu-item value="guide">
+              <sl-icon slot="prefix" name="book"></sl-icon>
+              Teacher guide
+            </sl-menu-item>
+            <sl-menu-item value="about">
+              <sl-icon slot="prefix" name="info-circle"></sl-icon>
+              About KennisBoost
+            </sl-menu-item>
+            <sl-menu-item value="shortcuts">
+              <sl-icon slot="prefix" name="keyboard"></sl-icon>
+              Keyboard shortcuts
+              <span slot="suffix" class="kb-kbd">?</span>
+            </sl-menu-item>
+            <sl-divider></sl-divider>
+            <sl-menu-item value="load-sample">
+              <sl-icon slot="prefix" name="box-arrow-in-down"></sl-icon>
+              Load sample workspace
+            </sl-menu-item>
+            <sl-menu-item value="remove-sample">
+              <sl-icon slot="prefix" name="trash"></sl-icon>
+              Remove sample data
+            </sl-menu-item>
+          </sl-menu>
+        </sl-dropdown>
 
         <!-- Theme Switcher -->
         <sl-dropdown placement="bottom-end" distance="6">
@@ -149,7 +177,7 @@
         </sl-dropdown>
 
         <!-- Storage / Backup Menu -->
-        <sl-dropdown placement="bottom-end" distance="6">
+        <sl-dropdown class="kb-storage-menu" placement="bottom-end" distance="6">
           <button slot="trigger" type="button" class="kb-icon-btn" aria-label="Backup and storage options" title="Backup &amp; storage">
             <sl-icon name="hdd-stack"></sl-icon>
           </button>
@@ -168,6 +196,11 @@
               Restore JSON backup&hellip;
             </sl-menu-item>
             <sl-divider></sl-divider>
+            <sl-menu-item id="menu-btn-relay-connect">
+              <sl-icon slot="prefix" name="cloud-arrow-up"></sl-icon>
+              Connect to a school server&hellip;
+            </sl-menu-item>
+            <sl-divider></sl-divider>
             <sl-menu-item id="menu-btn-storage-info">
               <sl-icon slot="prefix" name="info-circle"></sl-icon>
               Storage quota &amp; info
@@ -179,6 +212,9 @@
             </sl-menu-item>
           </sl-menu>
         </sl-dropdown>
+
+        <!-- Sync / Relay status indicator -->
+        <span id="sync-status-indicator" class="inline-flex items-center text-xs text-slate-500"></span>
 
         <input type="file" id="input-backup-file" accept=".json" class="hidden" aria-hidden="true" />
       </div>
@@ -196,7 +232,11 @@
       <div>
         <strong class="text-slate-700">KennisBoost Tools</strong> &mdash; everything stays on this device. No accounts, no cloud.
       </div>
-      <a href="#/guide" class="font-medium text-blue-600 hover:underline">Teacher guide &amp; recommended workflows</a>
+      <div class="flex items-center gap-2">
+        <a href="#/about" class="font-medium text-blue-600 hover:underline">About</a>
+        <span class="text-slate-300">·</span>
+        <a href="#/guide" class="font-medium text-blue-600 hover:underline">Teacher guide</a>
+      </div>
       <div class="kb-footer-tags">
         <span>WCAG 2.1 AA</span>
         <span>AES-256 sharing</span>
@@ -236,6 +276,9 @@
       });
     }
   </script>
+
+  <!-- Optional Server Relay Configuration -->
+  <script src="config.js" onerror="void 0"></script>
 
   <!-- Application Bootloader -->
   <script type="module" src="src/main.js"></script>

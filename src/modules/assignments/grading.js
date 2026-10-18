@@ -255,6 +255,24 @@ export function totalPoints(assignment) {
   return round2((assignment.questions || []).reduce((s, q) => s + pts(q), 0));
 }
 
+/**
+ * Summarize overall and question-level feedback into a concise plain text block.
+ * @param {object} assignment
+ * @param {object} sub
+ * @returns {string}
+ */
+export function feedbackSummary(assignment, sub) {
+  const s = finalScore(assignment, sub);
+  const lines = [];
+  if (sub?.feedback && sub.feedback.trim()) lines.push(sub.feedback.trim());
+  (assignment?.questions || []).forEach((q, i) => {
+    const fb = sub?.manual?.[q.id]?.feedback;
+    if (fb && fb.trim()) lines.push(`Q${i + 1}: ${fb.trim()}`);
+  });
+  lines.push(`Assignment: ${s.earned}/${s.possible} pts${s.pending ? ` (${s.pending} awaiting review)` : ''}.`);
+  return lines.join('\n');
+}
+
 // -----------------------------------------------------------------------------
 // Student payload (answer key removed)
 // -----------------------------------------------------------------------------
@@ -293,6 +311,24 @@ export function describeCorrectAnswer(q) {
       return (q.pairs || []).map(p => `${p.left} → ${p.right}`).join('; ');
     default:
       return '';
+  }
+}
+
+/**
+ * Convert student answer value to readable text.
+ * Used by review drawer, feedback payload, PDFs, and exports.
+ */
+export function answerToText(q, v) {
+  if (v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length)) return 'No answer';
+  switch (q.type) {
+    case 'single_choice': return q.options?.find(o => o.id === v)?.text ?? '(removed option)';
+    case 'multi_choice': return (q.options || []).filter(o => (Array.isArray(v) ? v : [v]).includes(o.id)).map(o => o.text).join('; ') || '—';
+    case 'true_false': return v === true || v === 'true' ? 'True' : 'False';
+    case 'fill_blank': return Array.isArray(v) ? v.map((x, i) => `${i + 1}. ${x || '—'}`).join('   ') : String(v);
+    case 'ordering': return (Array.isArray(v) ? v : []).map(id => q.items?.find(i => i.id === id)?.text || '?').join(' → ');
+    case 'matching': return (q.pairs || []).map(p => `${p.left} → ${v?.[p.id] || '—'}`).join('; ');
+    case 'long_text': return String(v);
+    default: return String(v);
   }
 }
 

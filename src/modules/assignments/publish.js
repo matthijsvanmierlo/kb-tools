@@ -32,11 +32,23 @@ export async function getRosterStatus(assignment) {
   };
 }
 
+import { HandinInstructions } from '../../components/handin-instructions.js';
+import { LinkBuilder } from '../../core/links.js';
+import { toCSV, downloadCSV } from '../../core/csv.js';
+import { splitName, joinName } from '../../core/names.js';
+import { getTransport } from '../../core/transport.js';
+
 /**
  * Bump the publish version and build the student payload.
+ * @param {object} assignment
+ * @param {object} roster
+ * @param {object} [opts]
+ * @param {string} [opts.handinEmail]
+ * @param {object} [opts.transport]
  * @returns {Promise<{ assignment: object, payload: object, keys: object }>}
  */
-export async function publishAssignment(assignment, roster) {
+export async function publishAssignment(assignment, roster, { handinEmail = '', transport = null } = {}) {
+  const activeTransport = transport || await getTransport();
   const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
   const next = {
     ...assignment,
@@ -58,6 +70,24 @@ export async function publishAssignment(assignment, roster) {
   }
 
   const payload = await buildStudentPayload(next, { teacherKeys: keys, rosterChecks });
+  if (handinEmail) {
+    payload.handin = { email: handinEmail };
+  }
+
+  if (activeTransport?.capabilities?.collectSubmissions) {
+    try {
+      const drop = await activeTransport.createDrop({
+        assignmentId: next.id,
+        publishVersion: next.publish.version,
+        expiresAt: new Date(Date.now() + 180 * 86400000).toISOString()
+      });
+      payload.relay = { base_url: activeTransport.baseUrl, drop_id: drop.dropId };
+      next.publish.relay = payload.relay;
+    } catch (e) {
+      console.warn('Could not create drop on relay:', e);
+    }
+  }
+
   await storage.table('assignments').put(next);
   return { assignment: next, payload, keys };
 }
@@ -69,7 +99,10 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
   const existing = document.getElementById('kb-assignment-publish-dialog');
   if (existing) existing.remove();
 
+  const transport = await getTransport();
+  const hasShortLinks = Boolean(transport?.capabilities?.hostPayload);
   const roster = await getRosterStatus(assignment);
+  const teacherProfile = (await storage.getMetadata('teacher_profile')) || {};
   const issues = (assignment.questions || []).map((q, i) => ({ i, issues: validateQuestion(q) })).filter(x => x.issues.length);
   const settings = assignment.settings || {};
   const feedbackText = { immediate: 'Instant feedback per question', after_submit: 'Score shown after submitting', none: 'No feedback until you return grades' }[settings.feedback_mode || 'after_submit'];
@@ -78,7 +111,7 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
   const dialog = document.createElement('sl-dialog');
   dialog.id = 'kb-assignment-publish-dialog';
   dialog.label = 'Publish & share';
-  dialog.style.setProperty('--width', '620px');
+  dialog.style.setProperty('--width', '640px');
   dialog.innerHTML = `
     <div class="space-y-5">
       <div class="flex items-start gap-3">
@@ -131,11 +164,24 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
         </div>
       </div>
 
+      ${hasShortLinks ? `
+        <div class="rounded-xl border border-blue-200 p-3 space-y-1 bg-blue-50/60 text-sm">
+          <sl-checkbox id="chk-publish-short-link" checked>Short link (hosted on school server)</sl-checkbox>
+          <p class="text-[11px] text-slate-500">Creates a compact link (~60 chars). Payload is encrypted client-side; server cannot read it.</p>
+        </div>
+      ` : ''}
+
+      <div class="rounded-xl border border-slate-200 p-3 space-y-2 text-sm bg-slate-50">
+        <sl-checkbox id="chk-include-email" ${teacherProfile.email ? 'checked' : ''}>Include my email as a hand-in method</sl-checkbox>
+        <sl-input id="input-teacher-email" type="email" placeholder="teacher@school.edu" size="small" value="${Sanitizer.escapeHTML(teacherProfile.email || '')}" ${teacherProfile.email ? '' : 'disabled'}></sl-input>
+        <p class="text-[11px] text-slate-500">Students get an "Email to teacher" button on the submission screen with instructions to attach their file.</p>
+      </div>
+
       <sl-input id="input-publish-passphrase" type="password" password-toggle label="Optional link password" help-text="Leave empty for a link anyone in your class can open." size="medium">
         <sl-icon slot="prefix" name="key"></sl-icon>
       </sl-input>
 
-      <div id="publish-result" class="hidden space-y-3 pt-4 border-t border-slate-200">
+      <div id="publish-result" class="hidden space-y-4 pt-4 border-t border-slate-200">
         <div class="flex items-center justify-between gap-2 text-sm">
           <span class="font-semibold text-slate-800">Student link</span>
           <span id="publish-meter" class="text-[11px] px-2 py-0.5 rounded-full"></span>
@@ -143,9 +189,11 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
         <sl-input id="input-publish-url" readonly></sl-input>
         <div class="flex flex-wrap gap-2 justify-end">
           <sl-button size="small" id="btn-publish-download"><sl-icon slot="prefix" name="file-earmark-arrow-down"></sl-icon> Download .kbshare</sl-button>
+          <sl-button size="small" id="btn-publish-per-student-csv" ${!roster.students.length ? 'disabled' : ''}><sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Per-student links (CSV)</sl-button>
           <sl-button size="small" variant="primary" id="btn-publish-copy"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy link</sl-button>
         </div>
         <p class="text-xs text-slate-500" id="publish-fingerprint"></p>
+        <div id="publish-instructions-mount" class="pt-2"></div>
       </div>
     </div>
     <div slot="footer" class="flex justify-end gap-2">
@@ -160,19 +208,56 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
   dialog.show();
 
   let share = null;
+  let activeUrl = '';
   const close = () => dialog.hide();
   dialog.querySelector('#btn-publish-close').addEventListener('click', close);
+
+  const emailChk = dialog.querySelector('#chk-include-email');
+  const emailInput = dialog.querySelector('#input-teacher-email');
+  emailChk?.addEventListener('sl-change', () => {
+    if (emailInput) emailInput.disabled = !emailChk.checked;
+  });
 
   dialog.querySelector('#btn-publish-go').addEventListener('click', async () => {
     const btn = dialog.querySelector('#btn-publish-go');
     btn.setAttribute('loading', '');
     try {
-      const { assignment: updated, payload, keys } = await publishAssignment(assignment, roster);
+      const includeEmail = emailChk?.checked;
+      const teacherEmail = emailInput?.value.trim() || '';
+      if (teacherEmail) {
+        await storage.setMetadata('teacher_profile', { ...teacherProfile, email: teacherEmail });
+      }
+
+      const { assignment: updated, payload, keys } = await publishAssignment(assignment, roster, {
+        handinEmail: includeEmail ? teacherEmail : '',
+        transport
+      });
       Object.assign(assignment, updated);
       share = await CryptoShareEngine.createSharePayload('assignment', payload, dialog.querySelector('#input-publish-passphrase').value || '');
-      dialog.querySelector('#input-publish-url').value = share.url;
+
+      activeUrl = share.url;
+      const chkShortLink = dialog.querySelector('#chk-publish-short-link');
+      if (chkShortLink?.checked && transport?.capabilities?.hostPayload) {
+        try {
+          const wrapped = await CryptoShareEngine.wrapForHosting(share.rawFileContent);
+          const pub = await transport.publishPayload({
+            kind: 'assignment',
+            ciphertext: wrapped.ciphertext,
+            expiresAt: new Date(Date.now() + 180 * 86400000).toISOString(),
+            meta: { title: assignment.title }
+          });
+          activeUrl = LinkBuilder.hosted(pub.ref, wrapped.key);
+        } catch (e) {
+          console.warn('Failed to publish short link to relay:', e);
+        }
+      }
+
+      dialog.querySelector('#input-publish-url').value = activeUrl;
       const meter = dialog.querySelector('#publish-meter');
-      if (share.length <= 2048) {
+      if (activeUrl !== share.url) {
+        meter.className = 'text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200';
+        meter.textContent = `${activeUrl.length} chars · short link via school server`;
+      } else if (share.length <= 2048) {
         meter.className = 'text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200';
         meter.textContent = `${share.length.toLocaleString()} chars · fits in any LMS`;
       } else {
@@ -180,6 +265,18 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
         meter.textContent = `${share.length.toLocaleString()} chars · share the .kbshare file if the link gets cut off`;
       }
       dialog.querySelector('#publish-fingerprint').innerHTML = `Version ${updated.publish.version}. Submissions are encrypted to your key <strong class="font-mono">${keys.fingerprint}</strong> — students see the same code on their receipt.`;
+
+      const mount = dialog.querySelector('#publish-instructions-mount');
+      if (mount) {
+        mount.innerHTML = '';
+        mount.appendChild(HandinInstructions.render({
+          assignment: updated,
+          link: activeUrl,
+          dueDate: updated.settings?.due_date,
+          teacherEmail: includeEmail ? teacherEmail : ''
+        }));
+      }
+
       dialog.querySelector('#publish-result').classList.remove('hidden');
       btn.innerHTML = '<sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Publish again';
       toast.success(`Published version ${updated.publish.version}.`);
@@ -194,7 +291,7 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
 
   dialog.querySelector('#btn-publish-copy').addEventListener('click', async () => {
     try {
-      await navigator.clipboard.writeText(share.url);
+      await navigator.clipboard.writeText(activeUrl || share?.url || '');
       toast.success('Link copied.');
     } catch (_) {
       toast.warning('Copy failed — select the link and copy it manually.');
@@ -205,5 +302,29 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
     if (!share) return;
     const name = (assignment.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_').toLowerCase();
     CryptoShareEngine.downloadKbShareFile(share.rawFileContent, `${name}.kbshare`);
+  });
+
+  dialog.querySelector('#btn-publish-per-student-csv')?.addEventListener('click', () => {
+    if ((!activeUrl && !share) || !roster.students?.length) return;
+    const targetUrl = activeUrl || share.url;
+    const rows = roster.students.map(s => {
+      const nameParts = splitName(s.full_name || `${s.given_name || ''} ${s.family_name || ''}`.trim());
+      const firstName = s.given_name || nameParts.given || '';
+      const lastName = s.family_name || nameParts.family || '';
+      const fullName = s.full_name || joinName({ given: firstName, family: lastName });
+      const link = LinkBuilder.withParams(targetUrl, { sid: s.student_id, sname: fullName });
+      return {
+        Email: s.email || '',
+        FirstName: firstName,
+        LastName: lastName,
+        FullName: fullName,
+        StudentID: s.student_id,
+        Link: link
+      };
+    });
+    const cols = ['Email', 'FirstName', 'LastName', 'FullName', 'StudentID', 'Link'];
+    const text = toCSV(rows, cols);
+    downloadCSV(`${(assignment.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_')}_student_links.csv`, text);
+    toast.success(`Exported ${rows.length} per-student links.`);
   });
 }

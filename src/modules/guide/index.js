@@ -18,6 +18,7 @@ const SECTIONS = [
   { id: 'guide-report', label: 'Report back', icon: 'send' },
   { id: 'guide-defaults', label: 'Recommended settings', icon: 'check2-square' },
   { id: 'guide-safety', label: 'Keep data safe', icon: 'shield-lock' },
+  { id: 'guide-server', label: 'Connect to a school server', icon: 'cloud-arrow-up' },
   { id: 'guide-help', label: 'Troubleshooting', icon: 'life-preserver' }
 ];
 
@@ -330,14 +331,34 @@ export async function renderGuideView(params, router, container) {
             </div>
           </section>
 
-          <!-- 12. Troubleshooting -->
+          <!-- 12. Connect to a school server -->
+          <section id="guide-server" class="kb-guide-section bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-4 scroll-mt-24">
+            <div class="flex items-start gap-4">
+              <span class="w-11 h-11 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center text-xl flex-shrink-0"><sl-icon name="cloud-arrow-up"></sl-icon></span>
+              <div>
+                <h2 class="text-xl font-bold text-slate-900">Connect to a school server</h2>
+                <p class="text-sm text-slate-500 mt-1">Optional: when your school hosts a KennisBoost relay server for short links and automatic hand-in.</p>
+              </div>
+            </div>
+            ${steps([
+              { title: 'Open server settings', text: 'Go to Backup & storage (top right) → <strong>Connect to a school server…</strong>.' },
+              { title: 'Enter your credentials', text: 'Enter your server base URL (e.g. <code>https://relay.myschool.edu</code>) and your 64-character teacher bearer token provided by your school administrator.' },
+              { title: 'Test and save', text: 'Click <strong>Test connection</strong> to verify server health and feature capabilities, then click <strong>Save</strong>.' },
+              { title: 'What stays private', text: 'Zero-knowledge encryption is preserved. The server never sees lesson plaintext, student answers, or student names. Lessons are encrypted with random keys stored only in URL fragments, and student submissions are encrypted to your teacher key before transmission.' }
+            ])}
+            <div class="flex flex-wrap gap-2 pt-4 border-t border-slate-100">
+              <sl-button size="small" href="#/about"><sl-icon slot="prefix" name="info-circle"></sl-icon> About KennisBoost</sl-button>
+            </div>
+          </section>
+
+          <!-- 13. Troubleshooting -->
           <section id="guide-help" class="kb-guide-section space-y-3 scroll-mt-24">
             <h2 class="text-xl font-bold text-slate-900">Troubleshooting</h2>
             ${[
               ['“Encrypted for a different teacher key”', 'The file was made from a link you shared in another browser or device. Open it there, or restore that backup here.'],
               ['A student forgot their access code', 'Click the student → Access code → <strong>New code</strong>, give them the new code, and send fresh grade report links.'],
               ['A submission shows “Code mismatch”', 'It wasn\'t signed with that student\'s current code. Check with the student before importing; it may have been handed in by someone else.'],
-              ['The link is very long', 'Some LMSs cut off long links. Use the <strong>.kbshare file</strong> from the share dialog instead; students open it from the home page with <strong>Open shared file</strong>.'],
+              ['The link is very long', 'Standard links pack the lesson into the URL. If your LMS or email client cuts off long links, use a <strong>short link</strong> (hosted on a school relay server via Backup & storage → Connect to a school server) or share the <strong>.kbshare file</strong> instead.'],
               ['A video won\'t play', 'Check the link plays in a normal browser tab. Some YouTube videos disable embedding; pick another video or one of the samples.']
             ].map(([q, a]) => `
               <details class="group bg-white rounded-xl border border-slate-200 px-5 py-4">

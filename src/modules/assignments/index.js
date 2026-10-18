@@ -19,8 +19,6 @@ export async function renderAssignmentsView(params, router, container) {
     return renderTakeView(params, router, container);
   }
 
-  await ensureSampleAssignment();
-
   if (hash.startsWith('#/assignments/edit')) {
     let assignment = params.id ? await storage.table('assignments').get(params.id) : null;
     if (params.id && !assignment) {

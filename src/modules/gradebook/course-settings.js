@@ -392,18 +392,7 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
   };
 
   const printCodeSlips = () => {
-    const w = window.open('', '_blank');
-    if (!w) { toast.warning('Allow pop-ups to print code slips.'); return; }
-    const slips = students.filter(s => s.access_code).map(s => `
-      <div class="slip"><div class="cls">${esc(draft.name)}${draft.section ? ` · ${esc(draft.section)}` : ''}</div>
-      <div class="name">${esc(s.full_name)}</div><div class="id">Student ID: ${esc(s.student_id)}</div>
-      <div class="code">${esc(s.access_code)}</div><div class="hint">Keep this code private. You need it to view your grades and hand in assignments.</div></div>`).join('');
-    w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Access codes — ${esc(draft.name)}</title>
-      <style>body{font-family:system-ui,sans-serif;margin:24px;color:#0f172a}.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
-      .slip{border:1px dashed #94a3b8;border-radius:10px;padding:14px;break-inside:avoid}.cls{font-size:11px;color:#64748b}.name{font-weight:700;font-size:16px;margin-top:4px}
-      .id{font-size:12px;color:#475569}.code{font-family:ui-monospace,monospace;font-size:22px;letter-spacing:.12em;margin:8px 0;font-weight:700}.hint{font-size:10px;color:#64748b}</style>
-      </head><body><div class="grid">${slips}</div><script>window.onload=()=>window.print()<\/script></body></html>`);
-    w.document.close();
+    AccessCodes.printSlips(students, draft);
   };
 
   // ---------------------------------------------------------------------------

@@ -151,6 +151,79 @@ export class CryptoShareEngine {
       URL.revokeObjectURL(url);
     }, 100);
   }
+
+  /**
+   * Wrap rawFileContent for relay hosting (short links).
+   * Encrypts with a random 256-bit AES-GCM key and returns base64url ciphertext and key.
+   *
+   * @param {string|object} rawFileContent
+   * @returns {Promise<{ ciphertext: string, key: string }>}
+   */
+  static async wrapForHosting(rawFileContent) {
+    const subtle = typeof crypto !== 'undefined' ? crypto.subtle : globalThis.crypto?.subtle;
+    if (!subtle) throw new Error('Web Crypto API is not available');
+
+    const text = typeof rawFileContent === 'string' ? rawFileContent : JSON.stringify(rawFileContent);
+    const rawKey = crypto.getRandomValues(new Uint8Array(32));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+
+    const cryptoKey = await subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['encrypt']);
+    const ciphertextBuf = await subtle.encrypt({ name: 'AES-GCM', iv }, cryptoKey, new TextEncoder().encode(text));
+
+    const packed = new Uint8Array(12 + ciphertextBuf.byteLength);
+    packed.set(iv, 0);
+    packed.set(new Uint8Array(ciphertextBuf), 12);
+
+    return {
+      ciphertext: bytesToB64Url(packed),
+      key: bytesToB64Url(rawKey)
+    };
+  }
+
+  /**
+   * Decrypt hosted ciphertext using the key from the URL fragment.
+   *
+   * @param {string} ciphertext
+   * @param {string} key
+   * @returns {Promise<string>} Plain rawFileContent string
+   */
+  static async unwrapHosted(ciphertext, key) {
+    const subtle = typeof crypto !== 'undefined' ? crypto.subtle : globalThis.crypto?.subtle;
+    if (!subtle) throw new Error('Web Crypto API is not available');
+
+    try {
+      const rawKey = b64UrlToBytes(key);
+      const packed = b64UrlToBytes(ciphertext);
+
+      if (packed.byteLength < 13) throw new Error('CORRUPTED_CIPHERTEXT');
+
+      const iv = packed.slice(0, 12);
+      const data = packed.slice(12);
+
+      const cryptoKey = await subtle.importKey('raw', rawKey, { name: 'AES-GCM' }, false, ['decrypt']);
+      const decryptedBuf = await subtle.decrypt({ name: 'AES-GCM', iv }, cryptoKey, data);
+
+      return new TextDecoder().decode(decryptedBuf);
+    } catch (err) {
+      throw new Error('DECRYPTION_FAILED');
+    }
+  }
 }
 
+function bytesToB64Url(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64UrlToBytes(str) {
+  let b64 = String(str || '').replace(/-/g, '+').replace(/_/g, '/');
+  while (b64.length % 4) b64 += '=';
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes;
+}
+
+export { bytesToB64Url, b64UrlToBytes };
 export default CryptoShareEngine;

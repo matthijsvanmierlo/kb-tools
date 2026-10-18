@@ -1,7 +1,11 @@
 import { z } from 'zod';
 import papaLib from 'papaparse';
+import { Sanitizer } from './sanitizer.js';
+import { defaultAcademicYear } from './academic-year.js';
 
 const Papa = papaLib.parse ? papaLib : (papaLib.default || papaLib);
+
+const blank = (v) => (v === null || v === undefined || String(v).trim() === '' ? undefined : String(v).trim());
 
 // --- 1. Zod Domain Schemas ---
 
@@ -119,8 +123,11 @@ export const GradebookCourseSchema = z.object({
   section: z.string().optional(),
   color: z.string().default('#2563eb'),
   updated_at: z.string().optional(),
-  academic_year: z.string().default('2026-2027'),
+  created_at: z.string().optional(),
+  academic_year: z.string().default(() => defaultAcademicYear()),
   grading_scale: z.enum(['traditional', 'sbg']).default('traditional'),
+  archived_at: z.string().nullable().optional(),
+  is_demo: z.boolean().optional(),
   terms: z.array(z.object({
     id: z.string(),
     name: z.string(),
@@ -145,12 +152,35 @@ export const GradebookCourseSchema = z.object({
 });
 
 export const GradebookStudentSchema = z.object({
-  id: z.string().uuid(),
-  course_id: z.string().uuid(),
-  student_id: z.string().min(1),
-  full_name: z.string().min(1),
-  email: z.string().email().optional(),
-  notes: z.string().optional()
+  id: z.string().uuid().optional(),
+  course_id: z.string().uuid().optional(),
+  student_id: z.preprocess(blank, z.string().min(1, 'Student ID is required')),
+  full_name: z.preprocess(blank, z.string().min(1, 'Full name is required')),
+  given_name: z.preprocess(blank, z.string().optional()),
+  family_name: z.preprocess(blank, z.string().optional()),
+  email: z.preprocess(blank, z.string().email('Invalid email').optional()),
+  access_code: z.preprocess(blank, z.string().optional()),
+  notes: z.preprocess(blank, z.string().optional()),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+  sis: z.object({
+    source: z.string().optional(),
+    sourced_id: z.string().optional()
+  }).optional(),
+  is_demo: z.boolean().optional()
+});
+
+export const RosterRowSchema = z.object({
+  student_id: z.preprocess(blank, z.string().min(1, 'Student ID is required')),
+  full_name: z.preprocess(blank, z.string().optional()),
+  given_name: z.preprocess(blank, z.string().optional()),
+  family_name: z.preprocess(blank, z.string().optional()),
+  email: z.preprocess(blank, z.string().email('Invalid email').optional()),
+  access_code: z.preprocess(blank, z.string().optional()),
+  notes: z.preprocess(blank, z.string().optional())
+}).refine(r => r.full_name || r.given_name || r.family_name, {
+  message: 'A name is required',
+  path: ['full_name']
 });
 
 export const GradebookAssignmentSchema = z.object({
@@ -161,10 +191,14 @@ export const GradebookAssignmentSchema = z.object({
   title: z.string().min(1),
   due_date: z.string(),
   max_score: z.number().positive().default(100),
-  rubric_id: z.string().optional()
+  rubric_id: z.string().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+  is_demo: z.boolean().optional()
 });
 
 export const GradebookGradeSchema = z.object({
+  id: z.string().uuid().optional(),
   course_id: z.string().uuid(),
   student_id: z.string(),
   assignment_id: z.string(),
@@ -172,20 +206,15 @@ export const GradebookGradeSchema = z.object({
   status: z.enum(['submitted', 'missing', 'late', 'exempt']).default('submitted'),
   days_late: z.number().nonnegative().default(0),
   rubric_eval: z.record(z.string(), z.string()).optional(), // criterion_id -> tier_id
-  feedback: z.string().optional()
+  feedback: z.string().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional(),
+  is_demo: z.boolean().optional()
 });
 
 // --- 2. CSV Header Normalization ---
 
 export const HEADER_ALIASES = {
-  'student_name': 'fullName',
-  'student name': 'fullName',
-  'fullname': 'fullName',
-  'name': 'fullName',
-  'student_id': 'studentId',
-  'student id': 'studentId',
-  'id': 'studentId',
-  'sis_id': 'studentId',
   'start_date': 'start_date',
   'start date': 'start_date',
   'begin': 'start_date',
@@ -200,6 +229,49 @@ export const HEADER_ALIASES = {
   'definition': 'back'
 };
 
+export const ROSTER_HEADER_ALIASES = {
+  'studentid': 'student_id',
+  'id': 'student_id',
+  'sisid': 'student_id',
+  'sisuserid': 'student_id',
+  'sisloginid': 'student_id',
+  'studentnumber': 'student_id',
+  'number': 'student_id',
+  'leerlingnummer': 'student_id',
+  'leerlingnr': 'student_id',
+  'stamnummer': 'student_id',
+  'identifier': 'student_id',
+  'sourcedid': 'student_id',
+  'username': 'student_id',
+  'studentname': 'full_name',
+  'fullname': 'full_name',
+  'name': 'full_name',
+  'student': 'full_name',
+  'naam': 'full_name',
+  'leerling': 'full_name',
+  'firstname': 'given_name',
+  'first': 'given_name',
+  'givenname': 'given_name',
+  'voornaam': 'given_name',
+  'roepnaam': 'given_name',
+  'lastname': 'family_name',
+  'last': 'family_name',
+  'surname': 'family_name',
+  'familyname': 'family_name',
+  'achternaam': 'family_name',
+  'email': 'email',
+  'emailaddress': 'email',
+  'mail': 'email',
+  'studentemail': 'email',
+  'accesscode': 'access_code',
+  'code': 'access_code',
+  'toegangscode': 'access_code',
+  'notes': 'notes',
+  'note': 'notes',
+  'comments': 'notes',
+  'opmerkingen': 'notes'
+};
+
 /**
  * Universal CSV Import Pipeline with deterministic schema validation and error reporting
  * @param {string} csvString
@@ -208,15 +280,26 @@ export const HEADER_ALIASES = {
  * @returns {{ success: boolean, data?: any[], errors?: Array<{ rowNumber: number, fieldPath: string, message: string, receivedValue: any }> }}
  */
 export function parseCSVWithValidation(csvString, schema, options = {}) {
+  const { aliases, dynamicTyping, ...papaOpts } = options;
+
+  const activeAliases = aliases || (schema === RosterRowSchema ? ROSTER_HEADER_ALIASES : HEADER_ALIASES);
+  const effectiveDynamicTyping = dynamicTyping !== undefined
+    ? dynamicTyping
+    : (schema === RosterRowSchema ? false : true);
+
   const parsed = Papa.parse(csvString, {
     header: true,
-    dynamicTyping: true,
+    dynamicTyping: effectiveDynamicTyping,
     skipEmptyLines: 'greedy',
     transformHeader: (h) => {
-      const trimmed = h.trim().toLowerCase();
-      return HEADER_ALIASES[trimmed] || trimmed;
+      const raw = (h || '').trim();
+      const normalized = raw.toLowerCase().replace(/[\s_\-\.]+/g, '');
+      if (activeAliases[normalized]) return activeAliases[normalized];
+      const lower = raw.toLowerCase();
+      if (activeAliases[lower]) return activeAliases[lower];
+      return raw;
     },
-    ...options
+    ...papaOpts
   });
 
   if (parsed.errors && parsed.errors.length > 0) {
@@ -294,9 +377,9 @@ export function showImportErrorsDialog(errors) {
   const rowsHtml = errors.slice(0, 50).map(err => `
     <tr class="border-b text-xs">
       <td class="p-2 font-mono text-center">${err.rowNumber}</td>
-      <td class="p-2 font-mono text-blue-600">${Sanitizer.escapeHtml(err.fieldPath)}</td>
-      <td class="p-2 text-red-600">${Sanitizer.escapeHtml(err.message)}</td>
-      <td class="p-2 font-mono text-slate-500 truncate max-w-xs">${Sanitizer.escapeHtml(String(err.receivedValue ?? ''))}</td>
+      <td class="p-2 font-mono text-blue-600">${Sanitizer.escapeHTML(err.fieldPath)}</td>
+      <td class="p-2 text-red-600">${Sanitizer.escapeHTML(err.message)}</td>
+      <td class="p-2 font-mono text-slate-500 truncate max-w-xs">${Sanitizer.escapeHTML(String(err.receivedValue ?? ''))}</td>
     </tr>
   `).join('');
 
@@ -329,8 +412,12 @@ export function showImportErrorsDialog(errors) {
   document.body.appendChild(dialog);
   dialog.show();
 
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target === dialog) dialog.remove();
+  });
+
   const closeBtn = dialog.querySelector('#btn-close-error-dialog');
-  if (closeBtn) closeBtn.addEventListener('click', () => dialog.remove());
+  if (closeBtn) closeBtn.addEventListener('click', () => dialog.hide());
 }
 
 // --- 3. Universal Exporter Factory ---

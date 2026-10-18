@@ -4,6 +4,19 @@ import { storage } from './core/storage.js';
 import { toast } from './utils/toast.js';
 import { Sanitizer } from './core/sanitizer.js';
 import { normalizeAccessCode } from './core/access-codes.js';
+import { getTransport } from './core/transport.js';
+
+/**
+ * Extract student share params from URL query parameters.
+ * @param {Record<string, string>} [params]
+ * @returns {{ sid: string|null, sname: string|null }}
+ */
+export function extractShareParams(params = {}) {
+  return {
+    sid: params?.sid || null,
+    sname: params?.sname || null
+  };
+}
 
 /**
  * Hash-based Single Page App Router
@@ -82,6 +95,24 @@ export class Router {
 
     // Update navigation bar active states
     this._updateNavUI(path);
+
+    // Update student mode chrome
+    const eph = store.getState('ephemeralData');
+    const isStudentFacing = (eph && (eph.type === 'assignment' || (eph.type === 'video' && eph.payload?.secure) || eph.type === 'student_grade_report' || eph.type === 'assignment_feedback'))
+      || (path === '#/assignments/take' && !params?.preview)
+      || (path === '#/report')
+      || (path === '#/feedback');
+
+    if (typeof document !== 'undefined' && document.body) {
+      const brand = document.querySelector('.kb-brand');
+      if (isStudentFacing) {
+        document.body.dataset.mode = 'student';
+        if (brand) brand.setAttribute('href', path);
+      } else {
+        delete document.body.dataset.mode;
+        if (brand) brand.setAttribute('href', '#/');
+      }
+    }
 
     // Handle share route specially
     if (path === '#/share') {
@@ -178,8 +209,33 @@ export class Router {
   }
 
   async _handleShareRoute(params) {
-    const isEncrypted = params.enc === '1';
-    const dParam = params.d;
+    const shareParams = extractShareParams(params);
+    store.setState('shareParams', shareParams);
+
+    let effectiveParams = { ...params };
+
+    if (effectiveParams.ref) {
+      try {
+        const transport = await getTransport();
+        const hosted = await transport.fetchPayload(effectiveParams.ref);
+        const rawJsonStr = await CryptoShareEngine.unwrapHosted(hosted.ciphertext, effectiveParams.k);
+        const parsed = JSON.parse(rawJsonStr);
+        if (parsed.d) {
+          effectiveParams.d = parsed.d;
+          effectiveParams.enc = (parsed.enc === 1 || parsed.enc === '1' || parsed.enc === true) ? '1' : '0';
+        } else {
+          this._activateSharedPayload(parsed);
+          return;
+        }
+      } catch (err) {
+        toast.danger('Failed to load shared lesson from server: ' + (err.message || 'not found.'));
+        this.navigate('#/flashcards');
+        return;
+      }
+    }
+
+    const isEncrypted = effectiveParams.enc === '1';
+    const dParam = effectiveParams.d;
 
     if (!dParam) {
       toast.danger('Invalid share link: missing data payload.');
@@ -293,6 +349,15 @@ export class Router {
     const { type, payload } = unpacked;
     store.setState('ephemeralData', { type, payload });
 
+    const isStudent = type === 'assignment' || (type === 'video' && payload?.secure) || type === 'student_grade_report' || type === 'assignment_feedback';
+    if (typeof document !== 'undefined' && document.body) {
+      if (isStudent) {
+        document.body.dataset.mode = 'student';
+      } else {
+        delete document.body.dataset.mode;
+      }
+    }
+
     this._renderEphemeralBanner(type, payload);
 
     // Route to appropriate module
@@ -308,6 +373,8 @@ export class Router {
     } else if (type === 'student_grade_report') {
       // Read-only student view; never touches the teacher's gradebook state
       this.navigate('#/report');
+    } else if (type === 'assignment_feedback') {
+      this.navigate('#/feedback');
     } else if (type === 'assignment') {
       this.navigate('#/assignments/take');
     } else if (type === 'gradebook') {
@@ -322,7 +389,7 @@ export class Router {
     if (typeof document === 'undefined') return;
     // Grade reports and assignments are for viewing/answering only, never for copying into a library
     // (Video links are student copies without answer keys, so saving them as a project makes no sense)
-    if (type === 'assignment' || type === 'student_grade_report' || (type === 'video' && payload?.secure)) {
+    if (type === 'assignment' || type === 'student_grade_report' || type === 'assignment_feedback' || (type === 'video' && payload?.secure)) {
       document.getElementById('kb-ephemeral-banner')?.remove();
       return;
     }
@@ -397,6 +464,9 @@ export class Router {
         '#/flashcards/game': 'Tower Defense Study Game',
         '#/timeline': 'Interactive Timeline Engine',
         '#/video': 'Video Assessment Platform',
+        '#/about': 'About KennisBoost Tools',
+        '#/inbox': 'Student Work Inbox',
+        '#/feedback': 'Assignment Feedback',
         '#/gradebook': 'Browser Gradebook',
         '#/assignments': 'Assignments',
         '#/assignments/edit': 'Assignment Editor',

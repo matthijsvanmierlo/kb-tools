@@ -1,4 +1,163 @@
 import Dexie from 'dexie';
+import { splitName } from './names.js';
+
+const DATA_TABLES = new Set([
+  'flashcards',
+  'timelines',
+  'video_assessments',
+  'gradebook_courses',
+  'gradebook_students',
+  'gradebook_assignments',
+  'gradebook_grades',
+  'gradebook_rubrics',
+  'assignments',
+  'assignment_submissions'
+]);
+
+/**
+ * Wrap a Dexie table with stamping (created_at, updated_at, id) and outbox logging.
+ */
+function wrapDexieTable(rawTable, tableName, storageManager) {
+  if (!DATA_TABLES.has(tableName)) return rawTable;
+
+  return new Proxy(rawTable, {
+    get(target, prop, receiver) {
+      if (prop === 'put') {
+        return async (record, ...rest) => {
+          const now = new Date().toISOString();
+          record.updated_at = now;
+          record.created_at = record.created_at || now;
+          if (!record.id) {
+            record.id = crypto.randomUUID();
+          }
+
+          if (storageManager._outboxEnabled && target.db.outbox) {
+            const key = tableName === 'gradebook_grades'
+              ? [record.student_id, record.assignment_id]
+              : (record.id || record.key);
+            return target.db.transaction('rw', [target, target.db.outbox], async () => {
+              const res = await target.put(record, ...rest);
+              await target.db.outbox.add({
+                table: tableName,
+                key,
+                op: 'put',
+                record,
+                created_at: now,
+                pushed_at: null,
+                device_id: storageManager.deviceId || null
+              });
+              return res;
+            });
+          }
+          return target.put(record, ...rest);
+        };
+      }
+
+      if (prop === 'bulkPut') {
+        return async (records, ...rest) => {
+          const now = new Date().toISOString();
+          for (const r of records) {
+            r.updated_at = now;
+            r.created_at = r.created_at || now;
+            if (!r.id) {
+              r.id = crypto.randomUUID();
+            }
+          }
+
+          if (storageManager._outboxEnabled && target.db.outbox) {
+            return target.db.transaction('rw', [target, target.db.outbox], async () => {
+              const res = await target.bulkPut(records, ...rest);
+              for (const r of records) {
+                const key = tableName === 'gradebook_grades'
+                  ? [r.student_id, r.assignment_id]
+                  : (r.id || r.key);
+                await target.db.outbox.add({
+                  table: tableName,
+                  key,
+                  op: 'put',
+                  record: r,
+                  created_at: now,
+                  pushed_at: null,
+                  device_id: storageManager.deviceId || null
+                });
+              }
+              return res;
+            });
+          }
+          return target.bulkPut(records, ...rest);
+        };
+      }
+
+      if (prop === 'delete') {
+        return async (key, ...rest) => {
+          if (storageManager._outboxEnabled && target.db.outbox) {
+            const now = new Date().toISOString();
+            return target.db.transaction('rw', [target, target.db.outbox], async () => {
+              const res = await target.delete(key, ...rest);
+              await target.db.outbox.add({
+                table: tableName,
+                key,
+                op: 'delete',
+                created_at: now,
+                pushed_at: null,
+                device_id: storageManager.deviceId || null
+              });
+              return res;
+            });
+          }
+          return target.delete(key, ...rest);
+        };
+      }
+
+      if (prop === 'bulkDelete') {
+        return async (keys, ...rest) => {
+          if (storageManager._outboxEnabled && target.db.outbox) {
+            const now = new Date().toISOString();
+            return target.db.transaction('rw', [target, target.db.outbox], async () => {
+              const res = await target.bulkDelete(keys, ...rest);
+              for (const key of keys) {
+                await target.db.outbox.add({
+                  table: tableName,
+                  key,
+                  op: 'delete',
+                  created_at: now,
+                  pushed_at: null,
+                  device_id: storageManager.deviceId || null
+                });
+              }
+              return res;
+            });
+          }
+          return target.bulkDelete(keys, ...rest);
+        };
+      }
+
+      if (prop === 'clear') {
+        return async (...rest) => {
+          if (storageManager._outboxEnabled && target.db.outbox) {
+            const now = new Date().toISOString();
+            return target.db.transaction('rw', [target, target.db.outbox], async () => {
+              const res = await target.clear(...rest);
+              await target.db.outbox.add({
+                table: tableName,
+                key: '*',
+                op: 'clear',
+                created_at: now,
+                pushed_at: null,
+                device_id: storageManager.deviceId || null
+              });
+              return res;
+            });
+          }
+          return target.clear(...rest);
+        };
+      }
+
+      const val = Reflect.get(target, prop, receiver);
+      return typeof val === 'function' ? val.bind(target) : val;
+    }
+  });
+}
 
 /**
  * StorageManager - KB-CORE-001
@@ -12,6 +171,8 @@ export class StorageManager {
     this.memoryStore = new Map();
     this.objectUrls = new Set();
     this.mutationListeners = new Set();
+    this._outboxEnabled = true;
+    this.deviceId = null;
 
     this.db.version(1).stores({
       flashcards: 'id, title, updated_at',
@@ -38,7 +199,6 @@ export class StorageManager {
       app_metadata: 'key',
       binary_blobs: 'id, mime_type, size_bytes'
     }).upgrade(async tx => {
-      // Normalize legacy flashcard items where front/back were plain strings
       await tx.table('flashcards').toCollection().modify(deck => {
         deck.class_id = deck.class_id || null;
         if (Array.isArray(deck.cards)) {
@@ -68,10 +228,49 @@ export class StorageManager {
       });
     });
 
-    // v3: Assignments module (auto-graded question sets) and encrypted student submissions
+    // v3: Assignments module and submissions
     this.db.version(3).stores({
       assignments: 'id, title, class_id, updated_at',
       assignment_submissions: 'id, assignment_id, student_id, submitted_at'
+    });
+
+    // v4: Data model upgrade with timestamps, archived_at, sis, stable id for grades, outbox
+    this.db.version(4).stores({
+      gradebook_courses:      'id, name, section, academic_year, updated_at, archived_at',
+      gradebook_students:     'id, course_id, student_id, full_name, email, updated_at, [course_id+student_id]',
+      gradebook_assignments:  'id, course_id, term_id, category_id, due_date, updated_at',
+      gradebook_grades:       '[student_id+assignment_id], id, course_id, student_id, assignment_id, status, updated_at',
+      gradebook_rubrics:      'id, course_id, title, updated_at',
+      assignments:            'id, title, class_id, updated_at',
+      assignment_submissions: 'id, assignment_id, student_id, submitted_at, synced_at, updated_at, [assignment_id+student_id]',
+      flashcards:             'id, title, class_id, updated_at',
+      timelines:              'id, title, class_id, updated_at',
+      video_assessments:      'id, title, class_id, updated_at',
+      outbox:                 '++seq, table, op, created_at, pushed_at'
+    }).upgrade(async (tx) => {
+      const now = new Date().toISOString();
+      const stamp = (r) => {
+        r.created_at = r.created_at || r.updated_at || now;
+        r.updated_at = r.updated_at || now;
+      };
+      for (const name of [
+        'gradebook_courses', 'gradebook_students', 'gradebook_assignments',
+        'gradebook_rubrics', 'assignments', 'assignment_submissions',
+        'flashcards', 'timelines', 'video_assessments'
+      ]) {
+        await tx.table(name).toCollection().modify(stamp);
+      }
+      await tx.table('gradebook_grades').toCollection().modify((g) => {
+        g.id = g.id || crypto.randomUUID();
+        stamp(g);
+      });
+      await tx.table('gradebook_students').toCollection().modify((s) => {
+        if (!s.given_name && !s.family_name && s.full_name) {
+          const n = splitName(s.full_name);
+          s.given_name = n.given;
+          s.family_name = n.family;
+        }
+      });
     });
 
     // Initialize in-memory tables for ephemeral mode
@@ -79,7 +278,7 @@ export class StorageManager {
       'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
       'gradebook_students', 'gradebook_assignments', 'gradebook_grades',
       'gradebook_rubrics', 'assignments', 'assignment_submissions',
-      'app_metadata', 'binary_blobs'
+      'app_metadata', 'binary_blobs', 'outbox'
     ];
     for (const t of tables) {
       this.memoryStore.set(t, new Map());
@@ -89,7 +288,6 @@ export class StorageManager {
   }
 
   _hookMutations() {
-    // Notify mutation listeners whenever writes happen
     const notifyMutation = (tableName, action, key, obj) => {
       for (const listener of this.mutationListeners) {
         try {
@@ -116,19 +314,11 @@ export class StorageManager {
     }
   }
 
-  /**
-   * Subscribe to database write mutations (used by auto-sync daemon)
-   * @param {(mutation: {tableName: string, action: string, key: any, obj: any}) => void} callback
-   * @returns {() => void} unsubscribe function
-   */
   onMutation(callback) {
     this.mutationListeners.add(callback);
     return () => this.mutationListeners.delete(callback);
   }
 
-  /**
-   * Initialize database and perform quota/persistence checks
-   */
   async init() {
     try {
       await this.db.open();
@@ -138,8 +328,16 @@ export class StorageManager {
       this._renderIncognitoWarning();
     }
 
+    // Initialize device_id and schema_version
+    let devId = await this.getMetadata('device_id');
+    if (!devId) {
+      devId = crypto.randomUUID();
+      await this.setMetadata('device_id', devId);
+    }
+    this.deviceId = devId;
+    await this.setMetadata('schema_version', 4);
+
     if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
-      // 1. One-time gesture listener for navigator.storage.persist()
       const requestPersistence = async () => {
         if (navigator.storage && navigator.storage.persist) {
           try {
@@ -155,7 +353,6 @@ export class StorageManager {
       window.addEventListener('pointerdown', requestPersistence, { once: true });
       window.addEventListener('keydown', requestPersistence, { once: true });
 
-      // 2. Storage estimate & quota warning
       await this.checkStorageQuota();
     }
 
@@ -205,7 +402,6 @@ export class StorageManager {
     dialog.show();
 
     dialog.addEventListener('sl-request-close', (e) => {
-      // Prevent closing unless acknowledged
       e.preventDefault();
     });
 
@@ -236,7 +432,7 @@ export class StorageManager {
   async getMetadata(key) {
     if (this.ephemeralMode) {
       const table = this.memoryStore.get('app_metadata');
-      const row = table.get(key);
+      const row = table?.get(key);
       return row ? row.value : null;
     }
     const item = await this.db.app_metadata.get(key);
@@ -246,22 +442,15 @@ export class StorageManager {
   async setMetadata(key, value) {
     if (this.ephemeralMode) {
       const table = this.memoryStore.get('app_metadata');
-      table.set(key, { key, value });
+      table?.set(key, { key, value });
       return;
     }
     await this.db.app_metadata.put({ key, value });
   }
 
   // --- Binary Asset Routing (64KB Rule) ---
-  /**
-   * Save a binary asset (Blob/File). If >64KB and OPFS is available, routes to OPFS.
-   * Otherwise stores in IndexedDB binary_blobs.
-   * @param {string} id
-   * @param {Blob} blob
-   * @returns {Promise<string>} URI reference (opfs://assets/{id} or idb-blob://{id})
-   */
   async saveBinaryAsset(id, blob) {
-    const isLarge = blob.size > 65536; // 64KB threshold
+    const isLarge = blob.size > 65536;
 
     if (isLarge && typeof navigator !== 'undefined' && navigator.storage && navigator.storage.getDirectory) {
       try {
@@ -277,7 +466,6 @@ export class StorageManager {
       }
     }
 
-    // IDB or Memory fallback
     if (this.ephemeralMode) {
       const table = this.memoryStore.get('binary_blobs');
       table.set(id, { id, mime_type: blob.type, size_bytes: blob.size, data: blob });
@@ -293,11 +481,6 @@ export class StorageManager {
     return `idb-blob://${id}`;
   }
 
-  /**
-   * Resolve an asset URI into an Object URL
-   * @param {string} uri - opfs://assets/{id} or idb-blob://{id} or standard url
-   * @returns {Promise<string>} Blob Object URL
-   */
   async loadBinaryAsset(uri) {
     if (!uri) return '';
     if (uri.startsWith('blob:') || uri.startsWith('data:') || uri.startsWith('http://') || uri.startsWith('https://')) {
@@ -321,7 +504,7 @@ export class StorageManager {
       const id = uri.replace('idb-blob://', '');
       let record;
       if (this.ephemeralMode) {
-        record = this.memoryStore.get('binary_blobs').get(id);
+        record = this.memoryStore.get('binary_blobs')?.get(id);
       } else {
         record = await this.db.binary_blobs.get(id);
       }
@@ -336,9 +519,6 @@ export class StorageManager {
     return uri;
   }
 
-  /**
-   * Revoke an active Object URL created by loadBinaryAsset
-   */
   revokeObjectURL(url) {
     if (this.objectUrls.has(url)) {
       URL.revokeObjectURL(url);
@@ -346,9 +526,6 @@ export class StorageManager {
     }
   }
 
-  /**
-   * Revoke all managed Object URLs on view unmount
-   */
   revokeAllObjectURLs() {
     for (const url of this.objectUrls) {
       URL.revokeObjectURL(url);
@@ -356,43 +533,230 @@ export class StorageManager {
     this.objectUrls.clear();
   }
 
+  // --- Outbox API (used for Phase 6 sync) ---
+  // Merge rules for Option B (per-teacher state sync):
+  // - Last-writer-wins (LWW) on updated_at with device_id tiebreak per record.
+  // - gradebook_grades is per-cell so LWW is natural.
+  // - assignment_submissions are append-only (never conflict).
+  // - course settings are whole-record LWW.
+  get outbox() {
+    return {
+      since: async (seq = 0, limit = 100) => {
+        if (this.ephemeralMode) {
+          const rows = Array.from((this.memoryStore.get('outbox') || new Map()).values());
+          return rows.filter(r => r.seq > seq).slice(0, limit);
+        }
+        return await this.db.outbox.where('seq').above(seq).limit(limit).toArray();
+      },
+      markPushed: async (seqs) => {
+        const now = new Date().toISOString();
+        if (this.ephemeralMode) {
+          const mem = this.memoryStore.get('outbox');
+          if (mem) {
+            for (const s of seqs) {
+              const r = mem.get(s);
+              if (r) r.pushed_at = now;
+            }
+          }
+          return;
+        }
+        await this.db.transaction('rw', this.db.outbox, async () => {
+          for (const s of seqs) {
+            await this.db.outbox.update(s, { pushed_at: now });
+          }
+        });
+      },
+      prune: async (olderThanDays = 30, onlyPushed = true) => {
+        const cutoff = new Date(Date.now() - olderThanDays * 86400000).toISOString();
+        if (this.ephemeralMode) {
+          const mem = this.memoryStore.get('outbox');
+          if (mem) {
+            for (const [k, v] of mem.entries()) {
+              if (v.created_at < cutoff && (!onlyPushed || v.pushed_at)) {
+                mem.delete(k);
+              }
+            }
+          }
+          return;
+        }
+        await this.db.transaction('rw', this.db.outbox, async () => {
+          const toDelete = await this.db.outbox
+            .where('created_at')
+            .below(cutoff)
+            .and(r => !onlyPushed || r.pushed_at !== null)
+            .primaryKeys();
+          await this.db.outbox.bulkDelete(toDelete);
+        });
+      }
+    };
+  }
+
   // --- Generic Table Interface for CRUD with Ephemeral Mode Support ---
   table(tableName) {
     if (this.ephemeralMode) {
       const memTable = this.memoryStore.get(tableName) || new Map();
+      this.memoryStore.set(tableName, memTable);
+
+      const resolveKey = (id) => {
+        if (Array.isArray(id)) return id.join('+');
+        return String(id);
+      };
+
+      const recordKey = (item) => {
+        if (item.student_id && item.assignment_id && tableName === 'gradebook_grades') {
+          return `${item.student_id}+${item.assignment_id}`;
+        }
+        if (item.id) {
+          return Array.isArray(item.id) ? item.id.join('+') : String(item.id);
+        }
+        if (item.key) return String(item.key);
+        return crypto.randomUUID();
+      };
+
+      const stampRecord = (item) => {
+        const now = new Date().toISOString();
+        item.updated_at = now;
+        item.created_at = item.created_at || now;
+        if (!item.id && DATA_TABLES.has(tableName)) {
+          item.id = crypto.randomUUID();
+        }
+      };
+
       return {
-        get: async (id) => memTable.get(id),
+        get: async (id) => {
+          const k = resolveKey(id);
+          return memTable.get(k);
+        },
         put: async (item) => {
-          const key = item.id || (item.key ? item.key : `${item.student_id}+${item.assignment_id}`);
+          stampRecord(item);
+          const key = recordKey(item);
           memTable.set(key, item);
+
+          if (this._outboxEnabled) {
+            const outboxMem = this.memoryStore.get('outbox');
+            if (outboxMem) {
+              const seq = outboxMem.size + 1;
+              outboxMem.set(seq, {
+                seq,
+                table: tableName,
+                key: tableName === 'gradebook_grades' ? [item.student_id, item.assignment_id] : key,
+                op: 'put',
+                record: item,
+                created_at: item.updated_at,
+                pushed_at: null,
+                device_id: this.deviceId || null
+              });
+            }
+          }
           return key;
         },
         bulkPut: async (items) => {
           for (const it of items) {
-            const key = it.id || (it.key ? it.key : `${it.student_id}+${it.assignment_id}`);
+            stampRecord(it);
+            const key = recordKey(it);
             memTable.set(key, it);
+
+            if (this._outboxEnabled) {
+              const outboxMem = this.memoryStore.get('outbox');
+              if (outboxMem) {
+                const seq = outboxMem.size + 1;
+                outboxMem.set(seq, {
+                  seq,
+                  table: tableName,
+                  key: tableName === 'gradebook_grades' ? [it.student_id, it.assignment_id] : key,
+                  op: 'put',
+                  record: it,
+                  created_at: it.updated_at,
+                  pushed_at: null,
+                  device_id: this.deviceId || null
+                });
+              }
+            }
           }
         },
         delete: async (id) => {
-          memTable.delete(id);
+          const key = resolveKey(id);
+          memTable.delete(key);
+
+          if (this._outboxEnabled) {
+            const outboxMem = this.memoryStore.get('outbox');
+            if (outboxMem) {
+              const seq = outboxMem.size + 1;
+              outboxMem.set(seq, {
+                seq,
+                table: tableName,
+                key: id,
+                op: 'delete',
+                created_at: new Date().toISOString(),
+                pushed_at: null,
+                device_id: this.deviceId || null
+              });
+            }
+          }
+        },
+        bulkDelete: async (keys) => {
+          for (const k of keys) {
+            const key = resolveKey(k);
+            memTable.delete(key);
+
+            if (this._outboxEnabled) {
+              const outboxMem = this.memoryStore.get('outbox');
+              if (outboxMem) {
+                const seq = outboxMem.size + 1;
+                outboxMem.set(seq, {
+                  seq,
+                  table: tableName,
+                  key: k,
+                  op: 'delete',
+                  created_at: new Date().toISOString(),
+                  pushed_at: null,
+                  device_id: this.deviceId || null
+                });
+              }
+            }
+          }
         },
         clear: async () => {
           memTable.clear();
         },
+        count: async () => memTable.size,
         toArray: async () => Array.from(memTable.values()),
-        where: (field) => ({
-          equals: (val) => ({
-            toArray: async () => Array.from(memTable.values()).filter(x => x[field] === val),
+        where: (field) => {
+          const createClause = (predicate) => ({
+            toArray: async () => Array.from(memTable.values()).filter(predicate),
+            count: async () => Array.from(memTable.values()).filter(predicate).length,
             delete: async () => {
-              for (const [k, v] of memTable.entries()) {
-                if (v[field] === val) memTable.delete(k);
+              for (const [k, v] of Array.from(memTable.entries())) {
+                if (predicate(v)) memTable.delete(k);
               }
+            },
+            primaryKeys: async () => {
+              const pks = [];
+              for (const [k, v] of memTable.entries()) {
+                if (predicate(v)) {
+                  pks.push(k.includes('+') ? k.split('+') : k);
+                }
+              }
+              return pks;
+            },
+            and: (subPred) => createClause(item => predicate(item) && subPred(item))
+          });
+
+          return {
+            equals: (val) => createClause(item => item[field] === val)
+          };
+        },
+        toCollection: () => ({
+          modify: async (fn) => {
+            for (const item of memTable.values()) {
+              fn(item);
             }
-          })
+          }
         })
       };
     }
-    return this.db[tableName];
+
+    return wrapDexieTable(this.db[tableName], tableName, this);
   }
 
   /**
@@ -422,14 +786,42 @@ export class StorageManager {
    * Restore all database tables from a master JSON snapshot
    */
   async restoreMasterSnapshot(snapshot) {
-    if (!snapshot || !snapshot.data) {
+    if (!snapshot || !snapshot.data || typeof snapshot.data !== 'object') {
       throw new Error('Invalid snapshot data');
     }
 
-    for (const [tbl, records] of Object.entries(snapshot.data)) {
-      if (Array.isArray(records)) {
+    const tables = [
+      'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
+      'gradebook_students', 'gradebook_assignments', 'gradebook_grades',
+      'gradebook_rubrics', 'assignments', 'assignment_submissions', 'app_metadata'
+    ];
+
+    const validTables = tables.filter(t => Array.isArray(snapshot.data[t]));
+
+    if (this.ephemeralMode) {
+      for (const tbl of validTables) {
         await this.table(tbl).clear();
-        await this.table(tbl).bulkPut(records);
+        await this.table(tbl).bulkPut(snapshot.data[tbl]);
+      }
+    } else {
+      const dbTables = validTables.map(t => this.db[t]);
+      await this.db.transaction('rw', dbTables, async () => {
+        for (const tbl of validTables) {
+          await this.db[tbl].clear();
+          await this.db[tbl].bulkPut(snapshot.data[tbl]);
+        }
+      });
+    }
+
+    // Post-restore stamping on records lacking metadata
+    const now = new Date().toISOString();
+    for (const tbl of validTables) {
+      if (DATA_TABLES.has(tbl)) {
+        await this.table(tbl).toCollection().modify((r) => {
+          r.created_at = r.created_at || r.updated_at || now;
+          r.updated_at = r.updated_at || now;
+          if (!r.id) r.id = crypto.randomUUID();
+        });
       }
     }
   }

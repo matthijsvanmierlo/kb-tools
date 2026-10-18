@@ -84,6 +84,8 @@ export class CommandPalette {
     // Build searchable catalog
     const staticActions = [
       { category: 'Navigation', title: 'Go to Home Hub', icon: 'house-door', run: () => router.navigate('#/') },
+      { category: 'Navigation', title: 'About KennisBoost Tools', icon: 'info-circle', run: () => router.navigate('#/about') },
+      { category: 'Navigation', title: 'Open Inbox (Collect Student Work)', icon: 'inbox', run: () => router.navigate('#/inbox') },
       { category: 'Navigation', title: 'Open Flashcards Library', icon: 'stack', run: () => router.navigate('#/flashcards') },
       { category: 'Navigation', title: 'Open Timeline Maker', icon: 'bar-chart-steps', run: () => router.navigate('#/timeline') },
       { category: 'Navigation', title: 'Open Video Assessments', icon: 'play-circle', run: () => router.navigate('#/video') },
@@ -93,6 +95,8 @@ export class CommandPalette {
       { category: 'Navigation', title: 'Open Gradebook Spreadsheet', icon: 'journal-check', run: () => router.navigate('#/gradebook') },
       { category: 'Actions', title: 'Create New Flashcard Deck', icon: 'plus-circle', run: () => router.navigate('#/flashcards/edit') },
       { category: 'Actions', title: 'Manage Classes & Rosters', icon: 'mortarboard', run: () => ClassManager.openClassManagerModal() },
+      { category: 'Actions', title: 'Load sample workspace', icon: 'box-arrow-in-down', run: async () => { const { loadDemoWorkspace } = await import('../core/demo.js'); await loadDemoWorkspace(); router.handleRoute(); } },
+      { category: 'Actions', title: 'Remove sample data', icon: 'trash', run: async () => { const { removeDemoData } = await import('../core/demo.js'); await removeDemoData(); router.handleRoute(); } },
       { category: 'Actions', title: 'Export JSON Backup File', icon: 'download', run: () => sync.exportManualBackup() },
       { category: 'Actions', title: 'Keyboard Shortcuts Cheat Sheet', icon: 'question-circle', run: () => this.openShortcutsModal() }
     ];

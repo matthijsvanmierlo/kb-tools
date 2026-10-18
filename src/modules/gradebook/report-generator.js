@@ -189,8 +189,8 @@ export class GradebookReportGenerator {
    * @param {Map<string, object>} gradesMap
    * @returns {Promise<{ url: string, exceedsUrlLimit: boolean }>}
    */
-  static async createStudentShareLink(student, course, assignments, gradesMap, rubrics = []) {
-    const payload = this.buildStudentReportPayload(student, course, assignments, gradesMap, rubrics);
+  static async createStudentShareLink(student, course, assignments, gradesMap, rubrics = [], options = {}) {
+    const payload = this.buildStudentReportPayload(student, course, assignments, gradesMap, rubrics, options);
     const result = await CryptoShareEngine.createSharePayload('student_grade_report', payload, AccessCodes.reportPassphrase(student));
     return { ...result, usesAccessCode: !AccessCodes.isWeak(student) };
   }
@@ -199,7 +199,8 @@ export class GradebookReportGenerator {
    * Build the isolated, read-only report a student receives. Contains only this student's data:
    * scores, statuses, feedback, rubric results and comments, and standards mastery.
    */
-  static buildStudentReportPayload(student, course, assignments, gradesMap, rubrics = []) {
+  static buildStudentReportPayload(student, course, assignments, gradesMap, rubrics = [], options = {}) {
+    const isCompact = !!options.compact;
     const map = gradesMap.get ? gradesMap : new Map(Object.entries(gradesMap));
     const summary = computeStudentSummary(student, course, assignments, map);
     const standards = getStandards(course);
@@ -224,7 +225,7 @@ export class GradebookReportGenerator {
               name: c.name,
               level: tier?.label || null,
               points: cell ? (cell.points ?? tier?.default_points ?? 0) : null,
-              descriptor: cell?.descriptor || '',
+              descriptor: isCompact ? '' : (cell?.descriptor || ''),
               comment: rec.rubric_comments?.[c.id] || ''
             };
           })
@@ -242,6 +243,7 @@ export class GradebookReportGenerator {
           status: rec.status || 'submitted',
           days_late: rec.days_late || null,
           feedback: rec.feedback || '',
+          feedback_link: rec.extra?.feedback_link || rec.feedback_link || null,
           standard_scores: Object.fromEntries(Object.entries(rec.standard_scores || {}).map(([id, v]) => [codeOf(id), v])),
           standard_comments: Object.fromEntries(Object.entries(rec.standard_comments || {}).map(([id, v]) => [codeOf(id), v]))
         } : null,
@@ -274,7 +276,7 @@ export class GradebookReportGenerator {
               mastery: b?.mastery ?? null,
               level_label: lvl?.label || null,
               color: lvl?.color || null,
-              evidence: (b?.evidence || []).map(e => ({ title: e.title, level: e.level, date: e.date }))
+              evidence: isCompact ? [] : (b?.evidence || []).map(e => ({ title: e.title, level: e.level, date: e.date }))
             };
           })
         : [],

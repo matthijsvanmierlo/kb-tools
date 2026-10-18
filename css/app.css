@@ -1032,3 +1032,16 @@ html.kb-theme-projector .kb-nav-link {
   .print-only { display: block !important; }
   .page-break { page-break-after: always; }
 }
+
+/* ------------------------------------------------------------------ */
+/* 10. Student Mode Chrome (§2.4)                                      */
+/* ------------------------------------------------------------------ */
+body[data-mode="student"] .kb-nav,
+body[data-mode="student"] #kb-nav-class-selector,
+body[data-mode="student"] #btn-open-cmd-palette,
+body[data-mode="student"] #btn-open-cmd-palette-mobile,
+body[data-mode="student"] .kb-guide-link,
+body[data-mode="student"] .kb-storage-menu,
+body[data-mode="student"] .kb-footer-tags { display: none !important; }
+body[data-mode="student"] .kb-brand-name span::after { content: ' · Student'; }
+

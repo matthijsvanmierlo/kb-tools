@@ -138,6 +138,12 @@ export async function renderStudentReportView(params, router, container) {
                           </div>`).join('')}
                       </div>` : ''}
                     ${g.feedback ? `<div class="text-sm text-slate-700 whitespace-pre-line rounded-lg border-l-4 border-blue-300 bg-blue-50/60 px-3 py-2">${esc(g.feedback)}</div>` : ''}
+                    ${(g.feedback_link || g.extra?.feedback_link) ? `
+                      <div class="pt-1">
+                        <a href="${esc(g.feedback_link || g.extra?.feedback_link)}" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition-colors">
+                          <sl-icon name="box-arrow-up-right"></sl-icon> View your answers and comments
+                        </a>
+                      </div>` : ''}
                   </div>` : ''}
               </article>`;
           }).join('')}

@@ -6,7 +6,8 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { VirtualGradebookGrid } from './virtual-grid.js';
 import { RubricDesigner } from './rubric-builder.js';
 import { GradebookReportGenerator } from './report-generator.js';
-import { parseCSVWithValidation, GradebookStudentSchema, showImportErrorsDialog } from '../../core/validator.js';
+import { parseCSVWithValidation, GradebookStudentSchema, RosterRowSchema, ROSTER_HEADER_ALIASES, showImportErrorsDialog } from '../../core/validator.js';
+import { splitName, joinName } from '../../core/names.js';
 import { openReceipt, IDENTITY_LABELS } from '../video/secure.js';
 import { GradebookBridge } from './bridge.js';
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
@@ -17,7 +18,19 @@ import { GradeDetailsDrawer } from './grade-drawer.js';
 import { openCourseSettingsDialog } from './course-settings.js';
 import { openAssignmentDialog } from './assignment-dialog.js';
 import { renderStandardsView } from './standards-view.js';
+import { renderRosterView } from './roster-view.js';
+import { RosterImportDialog } from '../../components/roster-import-dialog.js';
+import { ClassSetupWizard } from '../../components/class-setup-wizard.js';
 import { AccessCodes } from '../../core/access-codes.js';
+import { importVideoReceipts } from '../video/receipt-import.js';
+import { ExportDialog } from '../../components/export-dialog.js';
+import { GradesImportDialog } from '../../components/grades-import-dialog.js';
+import {
+  buildGradebookMailMergeRows,
+  buildGradebookWideRows,
+  buildCanvasExportRows,
+  buildOneRosterExportZip
+} from './gradebook-csv.js';
 
 /**
  * Multi-Class Gradebook Module Controller & Virtual Grid Manager
@@ -25,102 +38,55 @@ import { AccessCodes } from '../../core/access-codes.js';
 export async function renderGradebookView(params, router, container) {
   let courses = await storage.table('gradebook_courses').toArray();
 
-  // If no courses exist, seed initial AP Chemistry course with sample data
+  // If no courses exist, show friendly empty state
   if (courses.length === 0) {
-    const initialCourse = {
-      id: generateUUID(),
-      name: 'AP Chemistry',
-      section: 'Period 2 • Lab Room 304',
-      academic_year: '2026-2027',
-      color: '#2563eb',
-      grading_scale: 'traditional', // 'traditional' | 'sbg'
-      terms: [
-        { id: 'term-1', name: 'Fall Semester', start_date: '2026-09-01', end_date: '2026-12-20', weight_pct: 50 },
-        { id: 'term-2', name: 'Spring Semester', start_date: '2027-01-10', end_date: '2027-05-30', weight_pct: 50 }
-      ],
-      categories: [
-        { id: 'cat-tests', name: 'Unit Exams', weight_pct: 50, drop_lowest: 1, policy: { late_mode: 'fixed', late_deduct_pct: 10 } },
-        { id: 'cat-labs', name: 'Lab Reports', weight_pct: 30, drop_lowest: 0, policy: { late_mode: 'daily', late_daily_pct: 5, max_late_cap_pct: 20 } },
-        { id: 'cat-hw', name: 'Homework & Quizzes', weight_pct: 20, drop_lowest: 2, policy: { missing_floor_pct: 50 } }
-      ],
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    await storage.table('gradebook_courses').put(initialCourse);
-
-    // Seed 5 sample students
-    const sampleStudents = [
-      { id: generateUUID(), course_id: initialCourse.id, student_id: 'S101', full_name: 'Emma Watson', email: 'ewatson@school.edu', notes: 'Excellent lab partner. Preparing for AP exam.' },
-      { id: generateUUID(), course_id: initialCourse.id, student_id: 'S102', full_name: 'Liam Chen', email: 'lchen@school.edu', notes: 'Excels in thermodynamics calculations.' },
-      { id: generateUUID(), course_id: initialCourse.id, student_id: 'S103', full_name: 'Sophia Patel', email: 'spatel@school.edu', notes: 'Needs extra review on balancing redox equations.' },
-      { id: generateUUID(), course_id: initialCourse.id, student_id: 'S104', full_name: 'Noah Rodriguez', email: 'nrodriguez@school.edu', notes: 'Active classroom contributor.' },
-      { id: generateUUID(), course_id: initialCourse.id, student_id: 'S105', full_name: 'Ava Johnson', email: 'ajohnson@school.edu', notes: 'Strong scientific writing skills.' }
-    ];
-    await storage.table('gradebook_students').bulkPut(sampleStudents);
-
-    // Seed sample Rubric
-    const sampleRubric = {
-      id: generateUUID(),
-      course_id: initialCourse.id,
-      title: 'Formal Lab Report Rubric',
-      tiers: [
-        { id: 't1', label: 'Developing', default_points: 10 },
-        { id: 't2', label: 'Proficient', default_points: 20 },
-        { id: 't3', label: 'Mastery', default_points: 25 }
-      ],
-      criteria: [
-        {
-          id: 'c1',
-          name: 'Hypothesis & Method',
-          weight: 1.0,
-          cells: {
-            't1': { points: 10, descriptor: 'Vague hypothesis, incomplete procedure.' },
-            't2': { points: 20, descriptor: 'Testable hypothesis, standard procedure.' },
-            't3': { points: 25, descriptor: 'Precise hypothesis, rigorous control variables.' }
+    container.innerHTML = `
+      <div class="max-w-4xl mx-auto px-4 py-16 text-center">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-blue-50 text-blue-600 mb-4">
+          <sl-icon name="journal-bookmark" style="font-size: 2rem;"></sl-icon>
+        </div>
+        <h2 class="text-2xl font-bold text-slate-900 mb-2">No Classes Yet</h2>
+        <p class="text-slate-600 max-w-md mx-auto mb-6 text-sm">
+          Set up your first class or load a sample workspace to explore the gradebook.
+        </p>
+        <div class="flex items-center justify-center gap-3">
+          <sl-button variant="primary" id="btn-empty-new-class">
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Class
+          </sl-button>
+          <sl-button variant="default" id="btn-empty-load-sample">
+            <sl-icon slot="prefix" name="box-arrow-in-down"></sl-icon> Load Sample Workspace
+          </sl-button>
+        </div>
+      </div>
+    `;
+    container.querySelector('#btn-empty-new-class')?.addEventListener('click', () => {
+      ClassSetupWizard.open({
+        onDone: (newCourse) => {
+          if (newCourse) {
+            store.setState('activeCourse', newCourse);
+            ClassManager.setActiveFilter(newCourse.id);
           }
-        },
-        {
-          id: 'c2',
-          name: 'Data & Analysis',
-          weight: 1.0,
-          cells: {
-            't1': { points: 10, descriptor: 'Data recorded with arithmetic errors.' },
-            't2': { points: 20, descriptor: 'Accurate tables with units and graphs.' },
-            't3': { points: 25, descriptor: 'Thorough statistical error analysis and graphs.' }
-          }
+          renderGradebookView(params, router, container);
         }
-      ]
-    };
-    await storage.table('gradebook_rubrics').put(sampleRubric);
-
-    // Seed 4 sample assignments
-    const sampleAssignments = [
-      { id: generateUUID(), course_id: initialCourse.id, term_id: 'term-1', category_id: 'cat-tests', title: 'Atomic Structure Exam', max_score: 100, due_date: '2026-09-25' },
-      { id: generateUUID(), course_id: initialCourse.id, term_id: 'term-1', category_id: 'cat-labs', rubric_id: sampleRubric.id, title: 'Stoichiometry Lab', max_score: 50, due_date: '2026-10-05' },
-      { id: generateUUID(), course_id: initialCourse.id, term_id: 'term-1', category_id: 'cat-hw', title: 'Mole Concept HW', max_score: 20, due_date: '2026-10-10' },
-      { id: generateUUID(), course_id: initialCourse.id, term_id: 'term-1', category_id: 'cat-tests', title: 'Chemical Bonding Exam', max_score: 100, due_date: '2026-10-28' }
-    ];
-    await storage.table('gradebook_assignments').bulkPut(sampleAssignments);
-
-    // Seed sample grades
-    const sampleGrades = [
-      { course_id: initialCourse.id, student_id: 'S101', assignment_id: sampleAssignments[0].id, raw_score: 95, status: 'submitted' },
-      { course_id: initialCourse.id, student_id: 'S101', assignment_id: sampleAssignments[1].id, raw_score: 48, status: 'submitted' },
-      { course_id: initialCourse.id, student_id: 'S102', assignment_id: sampleAssignments[0].id, raw_score: 82, status: 'submitted' },
-      { course_id: initialCourse.id, student_id: 'S102', assignment_id: sampleAssignments[1].id, raw_score: 40, status: 'late', days_late: 2 },
-      { course_id: initialCourse.id, student_id: 'S103', assignment_id: sampleAssignments[0].id, raw_score: 74, status: 'submitted' },
-      { course_id: initialCourse.id, student_id: 'S103', assignment_id: sampleAssignments[2].id, raw_score: 0, status: 'missing' }
-    ];
-    await storage.table('gradebook_grades').bulkPut(sampleGrades);
-
-    courses = [initialCourse];
+      });
+    });
+    container.querySelector('#btn-empty-load-sample')?.addEventListener('click', async () => {
+      const { loadDemoWorkspace } = await import('../../core/demo.js');
+      await loadDemoWorkspace();
+      toast.success('Sample workspace loaded!');
+      renderGradebookView(params, router, container);
+    });
+    return;
   }
 
   // Determine active course
   const activeClassFilter = ClassManager.getActiveFilter();
   let activeCourse = store.getState('activeCourse');
 
-  if (activeClassFilter && activeClassFilter !== 'unassigned') {
+  if (params?.courseId) {
+    const matched = courses.find(c => c.id === params.courseId);
+    if (matched) activeCourse = matched;
+  } else if (activeClassFilter && activeClassFilter !== 'unassigned') {
     const matched = courses.find(c => c.id === activeClassFilter);
     if (matched) activeCourse = matched;
   }
@@ -132,8 +98,13 @@ export async function renderGradebookView(params, router, container) {
 
   // Term filtering state
   let selectedTermId = 'all';
-  // 'assignments' grid or 'standards' mastery table (standards-based classes)
-  let viewMode = store.getState('gradebookViewMode') === 'standards' && activeCourse.grading_scale === 'sbg' ? 'standards' : 'assignments';
+  // Determine view mode: 'assignments', 'standards', or 'roster'
+  let viewMode = 'assignments';
+  if (params?.view === 'roster' || store.getState('gradebookViewMode') === 'roster') {
+    viewMode = 'roster';
+  } else if ((params?.view === 'standards' || store.getState('gradebookViewMode') === 'standards') && activeCourse.grading_scale === 'sbg') {
+    viewMode = 'standards';
+  }
 
   // Fetch course data
   let [students, allAssignments, gradesList, rubrics] = await Promise.all([
@@ -216,6 +187,13 @@ export async function renderGradebookView(params, router, container) {
                 <sl-icon slot="prefix" name="grid-3x3"></sl-icon> Rubrics Designer...
               </sl-menu-item>
               <sl-divider></sl-divider>
+              <sl-menu-item id="menu-export-gradebook">
+                <sl-icon slot="prefix" name="download"></sl-icon> Export Gradebook...
+              </sl-menu-item>
+              <sl-menu-item id="menu-import-scores-csv">
+                <sl-icon slot="prefix" name="upload"></sl-icon> Import Scores from CSV...
+              </sl-menu-item>
+              <sl-divider></sl-divider>
               <sl-menu-item id="menu-batch-zip">
                 <sl-icon slot="prefix" name="file-earmark-zip"></sl-icon> Export Roster Batch ZIP
               </sl-menu-item>
@@ -243,18 +221,18 @@ export async function renderGradebookView(params, router, container) {
               </sl-menu-item>
             </sl-menu>
           </sl-dropdown>
-          <input type="file" id="input-roster-csv" accept=".csv" class="hidden" />
           <input type="file" id="input-kbr-batch" accept=".kbr" multiple class="hidden" />
           </div>
         </div>
 
         <div class="flex flex-wrap items-center gap-2 px-4 py-2.5 border-t border-slate-100 bg-slate-50/60 rounded-b-xl">
-          ${activeCourse.grading_scale === 'sbg' ? `
-            <div class="flex items-center bg-slate-200/60 p-0.5 rounded-lg text-xs" role="group" aria-label="View">
-              <button id="btn-view-assignments" class="px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${viewMode === 'assignments' ? 'bg-white text-slate-900 shadow-xs font-semibold' : 'text-slate-500 hover:text-slate-800'}"><sl-icon name="table"></sl-icon> Assignments</button>
+          <div class="flex items-center bg-slate-200/60 p-0.5 rounded-lg text-xs" role="group" aria-label="View">
+            <button id="btn-view-assignments" class="px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${viewMode === 'assignments' ? 'bg-white text-slate-900 shadow-xs font-semibold' : 'text-slate-500 hover:text-slate-800'}"><sl-icon name="table"></sl-icon> Assignments</button>
+            ${activeCourse.grading_scale === 'sbg' ? `
               <button id="btn-view-standards" class="px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${viewMode === 'standards' ? 'bg-white text-slate-900 shadow-xs font-semibold' : 'text-slate-500 hover:text-slate-800'}"><sl-icon name="bullseye"></sl-icon> Standards</button>
-            </div>
-          ` : ''}
+            ` : ''}
+            <button id="btn-view-roster" class="px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${viewMode === 'roster' ? 'bg-white text-slate-900 shadow-xs font-semibold' : 'text-slate-500 hover:text-slate-800'}"><sl-icon name="people"></sl-icon> Roster</button>
+          </div>
           ${(activeCourse.terms || []).length > 1 ? `
             <sl-select id="select-term-filter" size="small" value="${selectedTermId}" class="w-40" aria-label="Term">
               <sl-icon slot="prefix" name="calendar3"></sl-icon>
@@ -269,11 +247,14 @@ export async function renderGradebookView(params, router, container) {
         </div>
       </div>
 
+      <!-- Roster View -->
+      <div id="roster-view-mount" class="${viewMode === 'roster' ? '' : 'hidden'}"></div>
+
       <!-- Standards mastery table (standards-based classes) -->
       <div id="standards-view-mount" class="${viewMode === 'standards' ? '' : 'hidden'}"></div>
 
       <!-- 2D Virtualized Grid Viewport -->
-      <div class="flex flex-col lg:flex-row gap-4 items-start ${viewMode === 'standards' ? 'hidden' : ''}" id="grid-section">
+      <div class="flex flex-col lg:flex-row gap-4 items-start ${viewMode === 'assignments' ? '' : 'hidden'}" id="grid-section">
         <div id="grid-mount-container" class="min-w-0 ${assignments.length === 0 ? '' : 'w-full'}"></div>
         ${assignments.length === 0 ? `
           <div class="flex-1 self-stretch min-h-[180px] flex flex-col items-center justify-center text-center gap-3 p-8 bg-white rounded-xl border border-dashed border-slate-300">
@@ -292,7 +273,7 @@ export async function renderGradebookView(params, router, container) {
       </div>
 
       ${assignments.length && students.length ? `
-        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500 no-print ${viewMode === 'standards' ? 'hidden' : ''}" id="grid-hint-bar">
+        <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-500 no-print ${viewMode === 'assignments' ? '' : 'hidden'}" id="grid-hint-bar">
           <span class="font-medium text-slate-600 flex items-center gap-1.5"><sl-icon name="keyboard"></sl-icon> In a cell:</span>
           <span>type a score</span>
           <span><kbd class="kb-kbd">M</kbd> missing</span>
@@ -324,6 +305,44 @@ export async function renderGradebookView(params, router, container) {
     const mount = container.querySelector('#standards-view-mount');
     if (mount && viewMode === 'standards') {
       renderStandardsView(mount, { course: activeCourse, students, aggregates: computeAggregates(), onOpenSettings: openSettings });
+    }
+  };
+
+  const renderRoster = () => {
+    const mount = container.querySelector('#roster-view-mount');
+    if (mount && viewMode === 'roster') {
+      renderRosterView({
+        container: mount,
+        course: activeCourse,
+        students,
+        allAssignments,
+        gradesMap,
+        studentAggregates: computeAggregates(),
+        onRefresh: () => renderGradebookView(params, router, container),
+        onOpenStudentDrawer: (s) => openStudentDrawer({
+          student: s,
+          course: activeCourse,
+          assignments: allAssignments,
+          gradesMap,
+          rubrics,
+          onOpenAccess: () => openSettings('access'),
+          onUpdateStudent: async (updated) => {
+            await storage.table('gradebook_students').put(updated);
+            renderGradebookView(params, router, container);
+          },
+          onDeleteStudent: async () => {
+            renderGradebookView(params, router, container);
+          }
+        }),
+        onOpenAccess: () => openSettings('access'),
+        onAddStudent: () => {
+          openAddStudentModal(activeCourse, async (newStudent) => {
+            await storage.table('gradebook_students').put(newStudent);
+            toast.success(`Student ${newStudent.full_name} added!`);
+            renderGradebookView(params, router, container);
+          });
+        }
+      });
     }
   };
 
@@ -364,7 +383,31 @@ export async function renderGradebookView(params, router, container) {
         },
         onDeleteStudent: async (deletedId) => {
           await storage.table('gradebook_students').delete(deletedId);
-          await storage.table('gradebook_grades').where('student_id').equals(student.student_id).delete();
+          const gradeKeys = await storage.table('gradebook_grades')
+            .where('course_id').equals(activeCourse.id)
+            .and(g => g.student_id === student.student_id)
+            .primaryKeys();
+          if (gradeKeys.length > 0) {
+            await storage.table('gradebook_grades').bulkDelete(gradeKeys);
+          }
+
+          // Delete submissions for assignments linked to this course
+          const courseAssignments = await storage.table('assignments').toArray();
+          const linkedAssignmentIds = new Set(
+            courseAssignments
+              .filter(a => a.gradebook?.course_id === activeCourse.id || a.class_id === activeCourse.id)
+              .map(a => a.id)
+          );
+          if (linkedAssignmentIds.size > 0) {
+            const subs = await storage.table('assignment_submissions').toArray();
+            const toDeleteSubs = subs
+              .filter(s => s.student_id === student.student_id && linkedAssignmentIds.has(s.assignment_id))
+              .map(s => s.id);
+            if (toDeleteSubs.length > 0) {
+              await storage.table('assignment_submissions').bulkDelete(toDeleteSubs);
+            }
+          }
+
           toast.info('Student removed.');
           renderGradebookView(params, router, container);
         }
@@ -475,7 +518,9 @@ export async function renderGradebookView(params, router, container) {
   };
   container.querySelector('#btn-view-assignments')?.addEventListener('click', () => setViewMode('assignments'));
   container.querySelector('#btn-view-standards')?.addEventListener('click', () => setViewMode('standards'));
+  container.querySelector('#btn-view-roster')?.addEventListener('click', () => setViewMode('roster'));
   renderStandards();
+  renderRoster();
 
   // Term Filter
   container.querySelector('#select-term-filter')?.addEventListener('sl-change', (e) => {
@@ -513,6 +558,167 @@ export async function renderGradebookView(params, router, container) {
   container.querySelector('#menu-gradebook-rubrics')?.addEventListener('click', () => {
     RubricDesigner.openManagerModal(activeCourse, () => {
       renderGradebookView(params, router, container);
+    });
+  });
+
+  // Export Gradebook Dialog
+  container.querySelector('#menu-export-gradebook')?.addEventListener('click', async () => {
+    const cleanCourseName = (activeCourse.name || 'class').replace(/[^a-z0-9_-]+/gi, '_').slice(0, 30);
+    const presets = [
+      {
+        id: 'mail_merge',
+        label: 'Mail-merge CSV (with report links)',
+        description: 'One row per student: overall grade, letter, missing counts, and private encrypted report links.',
+        supportsAccessCodes: true,
+        build: async (opts) => {
+          const { headers, rows } = await buildGradebookMailMergeRows({
+            course: activeCourse,
+            students,
+            assignments: allAssignments,
+            gradesMap,
+            rubrics,
+            includeAccessCodes: opts.includeAccessCodes
+          });
+          return { headers, rows, filename: `${cleanCourseName}_mail_merge.csv` };
+        }
+      },
+      {
+        id: 'wide_grades',
+        label: 'Grades (Wide, round-trippable CSV)',
+        description: 'One row per student with columns for every assignment. Fully editable in spreadsheets and re-importable.',
+        build: async () => {
+          const { headers, rows } = buildGradebookWideRows({
+            course: activeCourse,
+            students,
+            assignments: allAssignments,
+            gradesMap
+          });
+          return { headers, rows, filename: `${cleanCourseName}_grades_wide.csv` };
+        }
+      },
+      {
+        id: 'canvas',
+        label: 'Canvas Gradebook format',
+        description: 'Standard Canvas LMS CSV export format with Points Possible second header row.',
+        build: async () => {
+          const { headers, rows } = buildCanvasExportRows({
+            course: activeCourse,
+            students,
+            assignments: allAssignments,
+            gradesMap
+          });
+          return { headers, rows, filename: `${cleanCourseName}_canvas_grades.csv` };
+        }
+      },
+      {
+        id: 'oneroster',
+        label: 'OneRoster 1.1 Results (ZIP)',
+        description: 'Generates lineItems.csv and results.csv according to OneRoster 1.1 specification.',
+        customAction: {
+          label: 'Download ZIP',
+          icon: 'file-earmark-zip',
+          run: async () => {
+            toast.info('Generating OneRoster bundle...');
+            const { blob, filename } = await buildOneRosterExportZip({
+              course: activeCourse,
+              students,
+              assignments: allAssignments,
+              gradesMap
+            });
+            const url = URL.createObjectURL(blob);
+            const dl = document.createElement('a');
+            dl.href = url;
+            dl.download = filename;
+            document.body.appendChild(dl);
+            dl.click();
+            document.body.removeChild(dl);
+            URL.revokeObjectURL(url);
+            toast.success('Downloaded OneRoster bundle.');
+          }
+        },
+        build: async () => {
+          const rows = students.map(s => ({
+            StudentID: s.student_id,
+            FullName: s.full_name,
+            AssignmentsCount: allAssignments.length
+          }));
+          return { headers: ['StudentID', 'FullName', 'AssignmentsCount'], rows, filename: 'oneroster_summary.csv' };
+        }
+      },
+      {
+        id: 'roster',
+        label: 'Roster CSV',
+        description: 'Class roster list with student IDs, names, emails, and notes.',
+        supportsAccessCodes: true,
+        build: async (opts) => {
+          const rows = students.map(s => {
+            const parsedName = splitName(s.full_name);
+            const row = {
+              StudentID: s.student_id,
+              FullName: s.full_name,
+              FirstName: s.given_name || parsedName.given,
+              LastName: s.family_name || parsedName.family,
+              Email: s.email || '',
+              Class: activeCourse.name,
+              Section: activeCourse.section || '',
+              AcademicYear: activeCourse.academic_year || '',
+              HasAccessCode: s.access_code ? 'Yes' : 'No',
+              Notes: s.notes || ''
+            };
+            if (opts.includeAccessCodes) row.AccessCode = s.access_code || '';
+            return row;
+          });
+          const headers = ['StudentID', 'FullName', 'FirstName', 'LastName', 'Email', 'Class', 'Section', 'AcademicYear', 'HasAccessCode'];
+          if (opts.includeAccessCodes) headers.push('AccessCode');
+          headers.push('Notes');
+          return { headers, rows, filename: `${cleanCourseName}_roster.csv` };
+        }
+      }
+    ];
+
+    await ExportDialog.open({
+      title: `Export Gradebook · ${activeCourse.name}`,
+      presets
+    });
+  });
+
+  // Import scores from CSV
+  container.querySelector('#menu-import-scores-csv')?.addEventListener('click', async () => {
+    await GradesImportDialog.open({
+      course: activeCourse,
+      students,
+      assignments: allAssignments,
+      gradesMap,
+      onApply: async (changes) => {
+        const now = new Date().toISOString();
+        for (const change of changes) {
+          const currentRec = gradesMap.get(`${change.student_id}+${change.assignment_id}`) || null;
+          const updatedRec = {
+            ...(currentRec || {}),
+            id: currentRec?.id || generateUUID(),
+            course_id: activeCourse.id,
+            student_id: change.student_id,
+            assignment_id: change.assignment_id,
+            raw_score: change.after.raw_score,
+            status: change.after.status,
+            days_late: change.after.extra?.days_late ?? currentRec?.days_late ?? null,
+            updated_at: now
+          };
+
+          if (virtualGrid) {
+            virtualGrid.undoStack.push({
+              studentId: change.student_id,
+              assignmentId: change.assignment_id,
+              previous: currentRec ? JSON.parse(JSON.stringify(currentRec)) : null,
+              next: JSON.parse(JSON.stringify(updatedRec))
+            });
+          }
+
+          await storage.table('gradebook_grades').put(updatedRec);
+          gradesMap.set(`${change.student_id}+${change.assignment_id}`, updatedRec);
+        }
+        renderGradebookView(params, router, container);
+      }
     });
   });
 
@@ -568,41 +774,23 @@ export async function renderGradebookView(params, router, container) {
 
   // New Course Action
   container.querySelector('#menu-new-course')?.addEventListener('click', () => {
-    ClassManager.openClassManagerModal();
+    ClassSetupWizard.open({
+      onDone: (newCourse) => {
+        if (newCourse) {
+          store.setState('activeCourse', newCourse);
+          ClassManager.setActiveFilter(newCourse.id);
+        }
+        renderGradebookView(params, router, container);
+      }
+    });
   });
 
-  // Import Roster CSV
-  const fileInput = container.querySelector('#input-roster-csv');
+  // Import Roster Dialog
   container.querySelector('#menu-import-roster-csv')?.addEventListener('click', () => {
-    fileInput?.click();
-  });
-
-  fileInput?.addEventListener('change', async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const text = await file.text();
-      const res = parseCSVWithValidation(text, GradebookStudentSchema);
-      if (!res.success) {
-        showImportErrorsDialog(res.errors);
-        return;
-      }
-
-      for (const st of res.data) {
-        st.id = st.id || generateUUID();
-        st.course_id = activeCourse.id;
-        await storage.table('gradebook_students').put(st);
-      }
-
-      toast.success(`Imported ${res.data.length} students!`);
-      renderGradebookView(params, router, container);
-    } catch (err) {
-      console.error('Import roster error:', err);
-      toast.danger('Import failed.');
-    } finally {
-      fileInput.value = '';
-    }
+    RosterImportDialog.open({
+      course: activeCourse,
+      onDone: () => renderGradebookView(params, router, container)
+    });
   });
 
   // Batch .kbr Receipt Importer
@@ -624,90 +812,44 @@ export async function renderGradebookView(params, router, container) {
     if (!autoColumns && !chosenColumn) return;
     let createdColumns = false;
 
-    // Open every receipt with this device's teacher key; v2 receipts are re-graded from the
-    // local answer key, so the score written into the gradebook never comes from the student.
     const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
-    const ctx = {
-      teacherPrivateJwk: keys.privateJwk,
-      getAssessment: (id) => storage.table('video_assessments').get(id),
-      getStudents: (courseId) => storage.table('gradebook_students').where('course_id').equals(courseId).toArray()
-    };
     const opened = [];
     for (const file of files) {
       try {
-        opened.push({ file: file.name, result: await openReceipt(await file.text(), ctx) });
+        opened.push({ file: file.name, text: await file.text() });
       } catch (err) {
-        opened.push({ file: file.name, result: { ok: false, error: 'CORRUPTED_RECEIPT' } });
+        opened.push({ file: file.name, text: '' });
       }
     }
 
-    const legacy = opened.filter(o => o.result.ok && o.result.format === 'legacy');
+    const hasLegacy = opened.some(o => {
+      try {
+        const p = JSON.parse(o.text);
+        return p && p.receipt && !p.kbsub;
+      } catch (_) { return false; }
+    });
+
     let includeLegacy = false;
-    if (legacy.length) {
+    if (hasLegacy) {
       includeLegacy = await ConfirmDialog.show({
         title: 'Old-format receipts',
-        message: `${legacy.length} receipt${legacy.length === 1 ? '' : 's'} use the old format, where the score inside the file can be edited by the student and can't be verified. Import ${legacy.length === 1 ? 'it' : 'them'} anyway?`,
+        message: 'Some receipts use the old format, where the score inside the file can be edited by the student and can\'t be verified. Import them anyway?',
         confirmText: 'Import anyway',
         cancelText: 'Skip old receipts'
       });
     }
 
-    const problems = [];
-    let successCount = 0;
-    for (const { file, result: r } of opened) {
-      if (!r.ok) { problems.push(`${file}: ${receiptErrorText(r.error)}`); continue; }
-      if (r.format === 'legacy' && !includeLegacy) continue;
-      if (autoColumns && r.format === 'legacy') { problems.push(`${file}: old-format receipts need a specific column — import again and choose one`); continue; }
-
-      // Target column: the chosen one, or a column linked to this video (created on first import)
-      let targetAssignment = chosenColumn;
-      if (autoColumns) {
-        targetAssignment = allAssignments.find(a => a.source?.type === 'video' && a.source.id === r.assessment.id);
-        if (!targetAssignment) {
-          targetAssignment = await GradebookBridge.upsertLinkedColumn({
-            courseId: activeCourse.id,
-            source: { type: 'video', id: r.assessment.id },
-            title: r.assessment.title,
-            maxScore: r.max
-          });
-          allAssignments.push(targetAssignment);
-          createdColumns = true;
-        }
-      }
-      if (r.format === 'v2' && targetAssignment.source?.type === 'video' && targetAssignment.source.id !== r.assessment?.id) {
-        problems.push(`${file}: receipt is for "${r.assessment?.title}", not this column`);
-        continue;
-      }
-
-      // Match by student ID first; fall back to name only for legacy receipts without IDs
-      const matchedStudent = students.find(s => r.studentId && s.student_id.toLowerCase() === String(r.studentId).toLowerCase())
-        || (r.format === 'legacy' ? students.find(s => s.full_name && s.full_name.toLowerCase() === (r.studentName || '').toLowerCase()) : null);
-      if (!matchedStudent) { problems.push(`${file}: ${r.studentName || 'unknown student'} is not in this class`); continue; }
-      if (r.identity === 'code_mismatch') { problems.push(`${file}: not signed with ${matchedStudent.full_name}'s access code — skipped`); continue; }
-
-      // Scale the video score onto this column's points
-      const max = Number(targetAssignment.max_score) || r.max || 1;
-      const raw = r.max > 0 ? Math.round((r.earned / r.max) * max * 10) / 10 : 0;
-      const key = `${matchedStudent.student_id}+${targetAssignment.id}`;
-      const existing = gradesMap.get(key) || {};
-      const identityNote = r.format === 'legacy' ? 'old-format receipt, unverified' : (IDENTITY_LABELS[r.identity]?.text || r.identity).toLowerCase();
-      const gradeRec = {
-        ...existing,
-        course_id: activeCourse.id,
-        student_id: matchedStudent.student_id,
-        assignment_id: targetAssignment.id,
-        raw_score: raw,
-        status: existing.status === 'late' ? 'late' : 'submitted',
-        feedback: existing.feedback || `Video assessment: ${r.earned} / ${r.max} (${r.percent}%) — ${identityNote}.`,
-        receipt: { format: r.format, identity: r.identity, completed_at: r.completedAt, earned: r.earned, max: r.max }
-      };
-      gradesMap.set(key, gradeRec);
-      await storage.table('gradebook_grades').put(gradeRec);
-      successCount++;
-      if (r.identity && !['verified', 'legacy'].includes(r.identity)) {
-        problems.push(`${file}: imported, but identity is "${IDENTITY_LABELS[r.identity]?.text || r.identity}"`);
-      }
-    }
+    const { imported: successCount, createdColumns: newCols, problems } = await importVideoReceipts({
+      texts: opened,
+      course: activeCourse,
+      students,
+      assignments: allAssignments,
+      gradesMap,
+      mode: assignmentId,
+      allowLegacy: includeLegacy,
+      keys
+    });
+    if (newCols) createdColumns = true;
 
     virtualGrid.studentAggregates = computeAggregates();
     virtualGrid.renderWindow();
@@ -743,7 +885,7 @@ export async function renderGradebookView(params, router, container) {
 /**
  * Student Detail & Edit Drawer (Individual Performance & Actions)
  */
-function openStudentDrawer({ student, course, assignments, gradesMap, rubrics = [], onOpenAccess, onUpdateStudent, onDeleteStudent }) {
+async function openStudentDrawer({ student, course, assignments, gradesMap, rubrics = [], onOpenAccess, onUpdateStudent, onDeleteStudent }) {
   const existing = document.getElementById('sl-student-detail-drawer');
   if (existing) existing.remove();
 
@@ -767,6 +909,23 @@ function openStudentDrawer({ student, course, assignments, gradesMap, rubrics = 
     }
   });
 
+  // Query other classes and submissions
+  let otherCourses = [];
+  let studentSubs = [];
+  try {
+    const [allStudents, allCourses, allSubs] = await Promise.all([
+      storage.table('gradebook_students').where('student_id').equals(student.student_id).toArray(),
+      storage.table('gradebook_courses').toArray(),
+      storage.table('assignment_submissions').where('student_id').equals(student.student_id).toArray()
+    ]);
+    otherCourses = allCourses.filter(c => c.id !== course.id && allStudents.some(s => s.course_id === c.id));
+    const courseAssignmentIds = new Set(assignments.map(a => a.id));
+    studentSubs = allSubs.filter(sub => courseAssignmentIds.has(sub.assignment_id));
+  } catch (_) {}
+
+  const split = splitName(student.full_name || '');
+  const givenName = student.given_name || split.given_name || '';
+  const familyName = student.family_name || split.family_name || '';
   const safeName = Sanitizer.escapeHTML(student.full_name || '');
   const safeId = Sanitizer.escapeHTML(student.student_id || '');
   const safeEmail = Sanitizer.escapeHTML(student.email || '');
@@ -791,6 +950,20 @@ function openStudentDrawer({ student, course, assignments, gradesMap, rubrics = 
         </div>
       </div>
 
+      ${otherCourses.length > 0 ? `
+        <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600">
+          <span class="font-semibold text-slate-800 flex items-center gap-1.5 mb-1.5">
+            <sl-icon name="info-circle" class="text-blue-500"></sl-icon> Appears in ${otherCourses.length + 1} classes:
+          </span>
+          <div class="flex flex-wrap gap-1.5">
+            <span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-semibold">${Sanitizer.escapeHTML(course.name)} (Current)</span>
+            ${otherCourses.map(c => `
+              <span class="px-2 py-0.5 rounded-full bg-slate-200 text-slate-700">${Sanitizer.escapeHTML(c.name)}${c.section ? ` (${Sanitizer.escapeHTML(c.section)})` : ''}</span>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+
       <!-- Quick Badges -->
       <div class="grid grid-cols-2 gap-3 text-center">
         <div class="p-3 border rounded-xl bg-slate-50">
@@ -805,11 +978,38 @@ function openStudentDrawer({ student, course, assignments, gradesMap, rubrics = 
 
       <!-- Editable Student Information -->
       <div class="space-y-3 pt-2">
-        <sl-input id="input-drawer-name" label="Student Full Name" value="${safeName}"></sl-input>
+        <div class="grid grid-cols-2 gap-3">
+          <sl-input id="input-drawer-given" label="First / Given Name" value="${Sanitizer.escapeHTML(givenName)}"></sl-input>
+          <sl-input id="input-drawer-family" label="Last / Family Name" value="${Sanitizer.escapeHTML(familyName)}"></sl-input>
+        </div>
+        <sl-input id="input-drawer-name" label="Full Name" value="${safeName}"></sl-input>
         <sl-input id="input-drawer-id" label="Student ID / SIS ID" value="${safeId}" readonly></sl-input>
         <sl-input id="input-drawer-email" label="Email Address" type="email" value="${safeEmail}"></sl-input>
         <sl-textarea id="input-drawer-notes" label="Teacher Private Notes" rows="3" placeholder="Notes, IEP accommodations, or parent contact history..." value="${safeNotes}"></sl-textarea>
       </div>
+
+      <!-- Collected Submissions for this course -->
+      ${studentSubs.length > 0 ? `
+        <div class="space-y-1.5 pt-2 border-t">
+          <h4 class="text-xs font-semibold uppercase text-slate-500">Collected Submissions (${studentSubs.length})</h4>
+          <div class="max-h-36 overflow-y-auto divide-y divide-slate-100 border rounded-xl bg-white text-xs">
+            ${studentSubs.map(sub => {
+              const a = assignments.find(x => x.id === sub.assignment_id);
+              const title = a ? Sanitizer.escapeHTML(a.title) : 'Assignment';
+              const subDate = sub.submitted_at ? new Date(sub.submitted_at).toLocaleDateString() : '';
+              return `
+                <div class="p-2.5 flex items-center justify-between">
+                  <div>
+                    <span class="font-medium text-slate-800">${title}</span>
+                    <span class="text-[11px] text-slate-400 ml-1.5">${subDate}</span>
+                  </div>
+                  <span class="font-mono text-slate-600">${sub.status || 'submitted'}</span>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      ` : ''}
 
       <!-- Student access code -->
       <div class="rounded-xl border ${student.access_code ? 'border-slate-200' : 'border-amber-200 bg-amber-50'} p-4 space-y-2">
@@ -852,9 +1052,23 @@ function openStudentDrawer({ student, course, assignments, gradesMap, rubrics = 
   drawer.show();
 
   drawer.querySelector('#btn-save-drawer')?.addEventListener('click', () => {
-    student.full_name = drawer.querySelector('#input-drawer-name').value.trim() || student.full_name;
-    student.email = drawer.querySelector('#input-drawer-email').value.trim() || undefined;
-    student.notes = drawer.querySelector('#input-drawer-notes').value.trim() || undefined;
+    const givenVal = drawer.querySelector('#input-drawer-given')?.value?.trim() || '';
+    const familyVal = drawer.querySelector('#input-drawer-family')?.value?.trim() || '';
+    let nameVal = drawer.querySelector('#input-drawer-name')?.value?.trim() || '';
+    if (!nameVal && (givenVal || familyVal)) {
+      nameVal = joinName(givenVal, familyVal);
+    }
+    const emailVal = drawer.querySelector('#input-drawer-email')?.value?.trim() || '';
+    if (emailVal && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailVal)) {
+      toast.danger('Please provide a valid email address.');
+      return;
+    }
+
+    student.full_name = nameVal || student.full_name;
+    student.given_name = givenVal || undefined;
+    student.family_name = familyVal || undefined;
+    student.email = emailVal || undefined;
+    student.notes = drawer.querySelector('#input-drawer-notes')?.value?.trim() || undefined;
     drawer.remove();
     onUpdateStudent(student);
     toast.success('Student information updated.');
@@ -910,7 +1124,8 @@ function openStudentDrawer({ student, course, assignments, gradesMap, rubrics = 
     }
   });
 
-  drawer.querySelector('#btn-close-drawer')?.addEventListener('click', () => drawer.remove());
+  drawer.querySelector('#btn-close-drawer')?.addEventListener('click', () => drawer.hide());
+  drawer.addEventListener('sl-after-hide', (e) => { if (e.target === drawer) drawer.remove(); });
 }
 
 /**
@@ -950,7 +1165,11 @@ function openAddStudentModal(course, onSave) {
   const dialog = document.createElement('sl-dialog');
   dialog.label = 'Add Student to Roster';
   dialog.innerHTML = `
-    <div class="space-y-3">
+    <div class="space-y-3 py-1 text-sm">
+      <div class="grid grid-cols-2 gap-2">
+        <sl-input id="input-st-given" label="First Name" placeholder="Jane"></sl-input>
+        <sl-input id="input-st-family" label="Last Name" placeholder="Doe"></sl-input>
+      </div>
       <sl-input id="input-st-name" label="Student Full Name" placeholder="e.g. Jane Doe" required></sl-input>
       <sl-input id="input-st-id" label="Student ID / SIS ID" placeholder="e.g. S106" required></sl-input>
       <sl-input id="input-st-email" label="Student Email (Optional)" type="email" placeholder="jane.doe@school.edu"></sl-input>
@@ -964,26 +1183,37 @@ function openAddStudentModal(course, onSave) {
   dialog.show();
 
   dialog.querySelector('#btn-save-st')?.addEventListener('click', () => {
-    const fullName = dialog.querySelector('#input-st-name').value.trim();
-    const studentId = dialog.querySelector('#input-st-id').value.trim();
-    const email = dialog.querySelector('#input-st-email').value.trim();
+    const given = dialog.querySelector('#input-st-given')?.value?.trim();
+    const family = dialog.querySelector('#input-st-family')?.value?.trim();
+    let fullName = dialog.querySelector('#input-st-name')?.value?.trim();
+    if (!fullName && (given || family)) {
+      fullName = joinName(given, family);
+    }
+    const studentId = dialog.querySelector('#input-st-id')?.value?.trim();
+    const email = dialog.querySelector('#input-st-email')?.value?.trim();
 
     if (!fullName || !studentId) {
       toast.warning('Name and Student ID are required.');
       return;
     }
 
-    dialog.remove();
+    dialog.hide();
+    const now = new Date().toISOString();
     onSave({
       id: generateUUID(),
       course_id: course.id,
       student_id: studentId,
       full_name: fullName,
-      email: email || undefined
+      given_name: given || undefined,
+      family_name: family || undefined,
+      email: email || undefined,
+      created_at: now,
+      updated_at: now
     });
   });
 
-  dialog.querySelector('#btn-cancel-st')?.addEventListener('click', () => dialog.remove());
+  dialog.querySelector('#btn-cancel-st')?.addEventListener('click', () => dialog.hide());
+  dialog.addEventListener('sl-after-hide', (e) => { if (e.target === dialog) dialog.remove(); });
 }
 
 function openSelectStudentModal(students, onSelected) {

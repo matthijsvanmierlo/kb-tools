@@ -1,6 +1,6 @@
 {
   "name": "kennisboost-tools",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "",
   "type": "module",
   "scripts": {
@@ -8,7 +8,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build:css": "tailwindcss -c tailwind.config.js -i css/tailwind.src.css -o css/tailwind.output.css --minify",
-    "watch:css": "tailwindcss -c tailwind.config.js -i css/tailwind.src.css -o css/tailwind.output.css --watch"
+    "watch:css": "tailwindcss -c tailwind.config.js -i css/tailwind.src.css -o css/tailwind.output.css --watch",
+    "relay": "node server/relay/index.js",
+    "relay:add-teacher": "node scripts/relay-add-teacher.mjs"
   },
   "keywords": [],
   "author": "",

@@ -1138,6 +1138,26 @@ async function renderStudentKioskMode(assessment, container, router) {
     startError.classList.remove('hidden');
   };
 
+  const shareParams = store.getState('shareParams') || {};
+  const currentParams = router.currentParams || {};
+  const initialSid = currentParams.sid || shareParams.sid || '';
+  const initialSname = currentParams.sname || shareParams.sname || '';
+
+  if (initialSname && nameInput) nameInput.value = initialSname;
+  if (initialSid && idInput) {
+    idInput.value = initialSid;
+    idInput.setAttribute('readonly', '');
+    const changeLink = document.createElement('div');
+    changeLink.className = 'mt-1 flex justify-end';
+    changeLink.innerHTML = '<button type="button" class="text-xs text-blue-600 hover:text-blue-800 underline">Not you? Change</button>';
+    changeLink.querySelector('button').addEventListener('click', () => {
+      idInput.removeAttribute('readonly');
+      idInput.focus();
+      changeLink.remove();
+    });
+    idInput.parentNode.insertBefore(changeLink, idInput.nextSibling);
+  }
+
   exitBtn?.addEventListener('click', () => router.navigate('#/video'));
 
   let cleanup = null;

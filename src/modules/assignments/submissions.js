@@ -6,6 +6,16 @@ import { GradebookBridge } from '../gradebook/bridge.js';
 import { evaluateSubmission, splitSubmissionText, IDENTITY_LABELS, DECRYPT_ERRORS } from './pipeline.js';
 import { finalScore, totalPoints, describeCorrectAnswer, BLANK_TOKEN } from './grading.js';
 import { QUESTION_TYPE_META } from './question-types.js';
+import { importSubmissionTexts } from './import.js';
+import { LinkBuilder } from '../../core/links.js';
+import { toCSV, downloadCSV } from '../../core/csv.js';
+import { splitName, joinName } from '../../core/names.js';
+import { ExportDialog } from '../../components/export-dialog.js';
+import { buildSubmissionsExportRows, buildMailMergeExportRows, buildNotSubmittedExportRows } from '../../core/export-presets.js';
+import { createFeedbackLink } from './feedback-link.js';
+import { generateFeedbackZip } from './feedback-pdf.js';
+import { feedbackSummary, buildStudentPayload, answerToText } from './grading.js';
+import { CryptoShareEngine } from '../../core/crypto-share.js';
 
 /**
  * Submissions Inbox (KB-ASSIGN-006)
@@ -27,16 +37,8 @@ export function identityChip(identity) {
 
 function formatAnswer(q, v) {
   if (v === undefined || v === null || v === '' || (Array.isArray(v) && !v.length)) return '<span class="text-slate-400">No answer</span>';
-  switch (q.type) {
-    case 'single_choice': return esc(q.options?.find(o => o.id === v)?.text ?? '(removed option)');
-    case 'multi_choice': return esc((q.options || []).filter(o => v.includes(o.id)).map(o => o.text).join('; ') || '—');
-    case 'true_false': return v === true || v === 'true' ? 'True' : 'False';
-    case 'fill_blank': return esc(v.map((x, i) => `${i + 1}. ${x || '—'}`).join('   '));
-    case 'ordering': return esc(v.map(id => q.items?.find(i => i.id === id)?.text || '?').join(' → '));
-    case 'matching': return esc((q.pairs || []).map(p => `${p.left} → ${v[p.id] || '—'}`).join('; '));
-    case 'long_text': return `<div class="whitespace-pre-wrap">${esc(v)}</div>`;
-    default: return esc(v);
-  }
+  if (q.type === 'long_text') return `<div class="whitespace-pre-wrap">${esc(v)}</div>`;
+  return esc(answerToText(q, v));
 }
 
 export async function renderSubmissions(assignment, router, container) {
@@ -60,10 +62,13 @@ export async function renderSubmissions(assignment, router, container) {
     .filter(s => s.is_latest !== false && String(s.student_id).toUpperCase() === String(studentId).toUpperCase())
     .sort((x, y) => (y.submitted_at || '').localeCompare(x.submitted_at || ''))[0] || null;
 
+  let filterMode = 'all'; // 'all' | 'submitted' | 'not_submitted'
+
   const render = () => {
     const latest = submissions.filter(s => s.is_latest !== false);
     const rosterIds = new Set(roster.map(s => String(s.student_id).toUpperCase()));
     const strangers = latest.filter(s => !rosterIds.has(String(s.student_id).toUpperCase()));
+    const notSubmitted = roster.filter(s => !latestFor(s.student_id));
     const scores = latest.map(s => finalScore(a, s));
     const maxPts = totalPoints(a);
     const avg = scores.length ? Math.round((scores.reduce((t, s) => t + (s.possible ? s.earned / s.possible : 0), 0) / scores.length) * 100) : null;
@@ -92,6 +97,21 @@ export async function renderSubmissions(assignment, router, container) {
         </tr>`;
     };
 
+    let displayRows = [];
+    if (filterMode === 'submitted') {
+      displayRows = [
+        ...roster.filter(s => latestFor(s.student_id)).map(s => row(s, latestFor(s.student_id))),
+        ...strangers.map(sub => row(null, sub))
+      ];
+    } else if (filterMode === 'not_submitted') {
+      displayRows = notSubmitted.map(s => row(s, null));
+    } else {
+      displayRows = [
+        ...roster.map(s => row(s, latestFor(s.student_id))),
+        ...strangers.map(sub => row(null, sub))
+      ];
+    }
+
     container.innerHTML = `
       <div class="space-y-6 max-w-7xl mx-auto">
         <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
@@ -103,12 +123,26 @@ export async function renderSubmissions(assignment, router, container) {
             </div>
           </div>
           <div class="flex items-center gap-2 flex-wrap">
+            <sl-button size="small" href="#/inbox"><sl-icon slot="prefix" name="inbox"></sl-icon> Open Inbox</sl-button>
             <sl-button size="small" id="sub-paste"><sl-icon slot="prefix" name="clipboard-plus"></sl-icon> Paste codes</sl-button>
             <sl-button size="small" id="sub-import"><sl-icon slot="prefix" name="upload"></sl-icon> Import .kbsub files</sl-button>
+            <sl-button size="small" variant="neutral" id="sub-return-feedback"><sl-icon slot="prefix" name="reply-all"></sl-icon> Return feedback</sl-button>
             <sl-button size="small" variant="primary" id="sub-sync" ${!course || !latest.length ? 'disabled' : ''}><sl-icon slot="prefix" name="journal-arrow-up"></sl-icon> Sync to gradebook${unsynced ? ` (${unsynced})` : ''}</sl-button>
             <input type="file" id="sub-file" accept=".kbsub,.txt,.json" multiple class="hidden" />
           </div>
         </div>
+
+        ${roster.length ? `
+          <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs space-y-2">
+            <div class="flex justify-between text-xs text-slate-600 font-medium">
+              <span>Collected <strong>${latest.length}</strong> of <strong>${roster.length}</strong> roster submissions</span>
+              <span class="tabular-nums font-semibold text-amber-700">${Math.round((latest.length / roster.length) * 100)}%</span>
+            </div>
+            <div class="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+              <div class="h-full bg-amber-500 rounded-full transition-all duration-300" style="width: ${Math.min(100, Math.round((latest.length / roster.length) * 100))}%"></div>
+            </div>
+          </div>
+        ` : ''}
 
         <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
           ${[
@@ -127,35 +161,55 @@ export async function renderSubmissions(assignment, router, container) {
           <sl-alert variant="warning" open><sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             Link this assignment to a class in the editor to verify student identities and sync grades.</sl-alert>` : ''}
 
-        <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-          ${roster.length || latest.length ? `
-            <div class="overflow-x-auto">
-              <table class="w-full text-sm">
-                <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500 text-left">
-                  <tr>
-                    <th class="px-4 py-3 font-semibold">Student</th>
-                    <th class="px-4 py-3 font-semibold">Status</th>
-                    <th class="px-4 py-3 font-semibold hidden md:table-cell">Identity</th>
-                    <th class="px-4 py-3 font-semibold text-right">Score</th>
-                    <th class="px-4 py-3 font-semibold hidden sm:table-cell">Submitted</th>
-                    <th class="px-4 py-3 font-semibold hidden lg:table-cell">Gradebook</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${roster.map(s => row(s, latestFor(s.student_id))).join('')}
-                  ${strangers.map(sub => row(null, sub)).join('')}
-                </tbody>
-              </table>
-            </div>` : `
-            <div class="p-10 text-center space-y-3">
-              <span class="w-12 h-12 mx-auto rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-2xl"><sl-icon name="inbox"></sl-icon></span>
-              <h3 class="font-semibold text-slate-900">No submissions yet</h3>
-              <p class="text-sm text-slate-500 max-w-md mx-auto">Students download a <code>.kbsub</code> file or copy a submission code when they finish. Import the files or paste the codes here.</p>
-            </div>`}
+        <div class="space-y-3">
+          <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs">
+              <button type="button" class="px-3 py-1.5 rounded-lg font-medium ${filterMode === 'all' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}" id="btn-filter-all">
+                All (${roster.length || latest.length})
+              </button>
+              <button type="button" class="px-3 py-1.5 rounded-lg font-medium ${filterMode === 'submitted' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}" id="btn-filter-submitted">
+                Submitted (${latest.length})
+              </button>
+              <button type="button" class="px-3 py-1.5 rounded-lg font-medium ${filterMode === 'not_submitted' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}" id="btn-filter-not-submitted">
+                Not submitted (${notSubmitted.length})
+              </button>
+            </div>
+            ${filterMode === 'not_submitted' && notSubmitted.length > 0 ? `
+              <sl-button size="small" id="btn-export-not-submitted">
+                <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Export not-submitted list (CSV)
+              </sl-button>
+            ` : ''}
+          </div>
+
+          <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            ${displayRows.length ? `
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500 text-left">
+                    <tr>
+                      <th class="px-4 py-3 font-semibold">Student</th>
+                      <th class="px-4 py-3 font-semibold">Status</th>
+                      <th class="px-4 py-3 font-semibold hidden md:table-cell">Identity</th>
+                      <th class="px-4 py-3 font-semibold text-right">Score</th>
+                      <th class="px-4 py-3 font-semibold hidden sm:table-cell">Submitted</th>
+                      <th class="px-4 py-3 font-semibold hidden lg:table-cell">Gradebook</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${displayRows.join('')}
+                  </tbody>
+                </table>
+              </div>` : `
+              <div class="p-10 text-center space-y-3">
+                <span class="w-12 h-12 mx-auto rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-2xl"><sl-icon name="inbox"></sl-icon></span>
+                <h3 class="font-semibold text-slate-900">${filterMode === 'not_submitted' ? 'Everyone has submitted!' : 'No submissions yet'}</h3>
+                <p class="text-sm text-slate-500 max-w-md mx-auto">${filterMode === 'not_submitted' ? 'All students on this roster have handed in their work.' : 'Students download a <code>.kbsub</code> file or copy a submission code when they finish. Import the files or paste the codes here.'}</p>
+              </div>`}
+          </div>
         </div>
       </div>`;
 
-    bind();
+    bind(notSubmitted);
   };
 
   // ---------------------------------------------------------------------------
@@ -163,35 +217,12 @@ export async function renderSubmissions(assignment, router, container) {
   // ---------------------------------------------------------------------------
   async function importTexts(texts) {
     const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
-    const errors = [];
-    let added = 0;
-    let duplicates = 0;
-    for (const { text, source } of texts) {
-      try {
-        const sub = await evaluateSubmission({ text, teacherPrivateJwk: keys.privateJwk, assignment: a, roster });
-        const dupe = submissions.find(s => s.student_id === sub.student_id && s.submitted_at === sub.submitted_at);
-        if (dupe) { duplicates++; continue; }
-        // Older submissions from the same student stay on file but stop counting
-        for (const prev of submissions.filter(s => String(s.student_id).toUpperCase() === String(sub.student_id).toUpperCase() && s.is_latest !== false)) {
-          if ((prev.submitted_at || '') < (sub.submitted_at || '')) {
-            prev.is_latest = false;
-            await storage.table('assignment_submissions').put(prev);
-          } else {
-            sub.is_latest = false;
-          }
-        }
-        await storage.table('assignment_submissions').put(sub);
-        submissions.push(sub);
-        added++;
-      } catch (err) {
-        errors.push({ source, message: DECRYPT_ERRORS[err.message] || err.message });
-      }
-    }
+    const res = await importSubmissionTexts({ assignment: a, texts, roster, keys });
     await load();
     render();
-    if (added) toast.success(`Imported ${added} submission${added === 1 ? '' : 's'}.`);
-    if (duplicates) toast.info(`${duplicates} already imported.`);
-    if (errors.length) showImportErrors(errors);
+    if (res.added) toast.success(`Imported ${res.added} submission${res.added === 1 ? '' : 's'}.`);
+    if (res.duplicates) toast.info(`${res.duplicates} already imported.`);
+    if (res.errors.length) showImportErrors(res.errors);
   }
 
   function showImportErrors(errors) {
@@ -377,14 +408,25 @@ export async function renderSubmissions(assignment, router, container) {
         const student = rosterById.get(String(sub.student_id).toUpperCase());
         const s = finalScore(a, sub);
         if (s.pending) pending++;
+
+        let feedbackLinkUrl = undefined;
+        try {
+          const fbRes = await createFeedbackLink({ assignment: a, submission: sub, student, course });
+          feedbackLinkUrl = fbRes?.url;
+        } catch (_) {}
+
         await GradebookBridge.writeGrade({
           courseId: course.id,
           assignmentId: column.id,
           studentId: student.student_id,
           rawScore: s.earned,
           status: sub.days_late > 0 ? 'late' : 'submitted',
-          feedback: feedbackSummary(sub),
-          extra: { days_late: sub.days_late || undefined, source_submission_id: sub.id }
+          feedback: feedbackSummary(a, sub),
+          extra: {
+            days_late: sub.days_late || undefined,
+            source_submission_id: sub.id,
+            feedback_link: feedbackLinkUrl
+          }
         });
         sub.synced_at = now;
         sub.updated_at = sub.updated_at && sub.updated_at > now ? sub.updated_at : now;
@@ -401,11 +443,203 @@ export async function renderSubmissions(assignment, router, container) {
   }
 
   // ---------------------------------------------------------------------------
+  // Return Feedback Dialog & Exports
+  // ---------------------------------------------------------------------------
+  async function openReturnFeedbackDialog(notSubmitted = []) {
+    const latest = submissions.filter(s => s.is_latest !== false);
+
+    let publishedUrl = '';
+    try {
+      const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
+      let rosterChecks = null;
+      if (a.settings?.require_access_code && roster.length) {
+        rosterChecks = {};
+        for (const s of roster.filter(s => s.access_code)) {
+          rosterChecks[String(s.student_id).toUpperCase()] = await SubmissionCrypto.accessCodeCheck(a.id, s.student_id, s.access_code);
+        }
+      }
+      const payload = await buildStudentPayload(a, { teacherKeys: keys, rosterChecks });
+      const share = await CryptoShareEngine.createSharePayload('assignment', payload, '');
+      publishedUrl = share.url;
+    } catch (_) {}
+
+    const baseTakeUrl = publishedUrl || `${window.location.origin}${window.location.pathname}#/assignments/take`;
+    const assignmentLinksMap = {};
+    roster.forEach(s => {
+      const fullName = s.full_name || `${s.given_name || ''} ${s.family_name || ''}`.trim();
+      assignmentLinksMap[s.student_id] = LinkBuilder.withParams(baseTakeUrl, { sid: s.student_id, sname: fullName });
+    });
+
+    const cleanTitle = (a.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_').slice(0, 30);
+
+    const presets = [
+      {
+        id: 'mail_merge',
+        label: 'Mail-merge CSV (with encrypted feedback links)',
+        description: 'One row per student on the roster. Includes individual encrypted feedback links for submitted work and assignment links for reminders.',
+        supportsAccessCodes: true,
+        build: async (opts) => {
+          const feedbackLinksMap = {};
+          for (const sub of latest) {
+            const student = roster.find(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase()) || {
+              student_id: sub.student_id,
+              full_name: sub.student_name
+            };
+            try {
+              const { url } = await createFeedbackLink({
+                assignment: a,
+                submission: sub,
+                student,
+                course
+              });
+              feedbackLinksMap[student.student_id] = url;
+              feedbackLinksMap[String(student.student_id).toUpperCase()] = url;
+            } catch (e) {
+              console.error('Error creating feedback link for student:', student.student_id, e);
+            }
+          }
+
+          const { headers, rows } = buildMailMergeExportRows({
+            assignment: a,
+            submissions: latest,
+            roster: roster.length ? roster : latest.map(s => ({ student_id: s.student_id, full_name: s.student_name })),
+            course,
+            feedbackLinksMap,
+            assignmentLinksMap,
+            includeAccessCodes: opts.includeAccessCodes
+          });
+          return { headers, rows, filename: `${cleanTitle}_mail_merge.csv` };
+        }
+      },
+      {
+        id: 'submissions',
+        label: 'Submissions CSV (grades & question scores)',
+        description: 'One row per latest submission with identity status, final score, percentage, and teacher comments.',
+        supportsQuestions: true,
+        build: async (opts) => {
+          const { headers, rows } = buildSubmissionsExportRows({
+            assignment: a,
+            submissions: latest,
+            roster,
+            course,
+            includeQuestions: opts.includeQuestions
+          });
+          return { headers, rows, filename: `${cleanTitle}_submissions.csv` };
+        }
+      },
+      {
+        id: 'lms_comments',
+        label: 'Copy feedback for LMS comments',
+        description: 'Tab-delimited table of Student ID, Name, and feedback text for quick pasting into LMS gradebook comments.',
+        build: async () => {
+          const rows = latest.map(sub => {
+            const student = roster.find(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase());
+            return {
+              StudentID: sub.student_id,
+              FullName: student?.full_name || sub.student_name || '',
+              Feedback: feedbackSummary(a, sub)
+            };
+          });
+          return { headers: ['StudentID', 'FullName', 'Feedback'], rows, filename: `${cleanTitle}_lms_comments.tsv` };
+        }
+      },
+      {
+        id: 'feedback_pdfs',
+        label: 'Feedback PDFs (ZIP package)',
+        description: 'Generates one standalone PDF report per submission formatted with student work, scores, and teacher comments.',
+        customAction: {
+          label: 'Download ZIP',
+          icon: 'file-earmark-zip',
+          run: async () => {
+            toast.info('Generating feedback PDFs...');
+            const { blob, count, filename } = await generateFeedbackZip({
+              assignment: a,
+              submissions: latest,
+              roster,
+              course
+            });
+            const url = URL.createObjectURL(blob);
+            const dl = document.createElement('a');
+            dl.href = url;
+            dl.download = filename;
+            document.body.appendChild(dl);
+            dl.click();
+            document.body.removeChild(dl);
+            URL.revokeObjectURL(url);
+            toast.success(`Downloaded ${count} PDF reports in ${filename}`);
+          }
+        },
+        build: async () => {
+          const rows = latest.map(sub => {
+            const student = roster.find(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase());
+            const score = finalScore(a, sub);
+            return {
+              StudentID: sub.student_id,
+              FullName: student?.full_name || sub.student_name || '',
+              Score: `${score.earned} / ${score.possible}`,
+              PDF_File: `${sub.student_id}_${cleanTitle}.pdf`
+            };
+          });
+          return { headers: ['StudentID', 'FullName', 'Score', 'PDF_File'], rows, filename: `pdf_manifest.csv` };
+        }
+      },
+      {
+        id: 'not_submitted',
+        label: 'Not submitted list (CSV for reminders)',
+        description: 'One row per rostered student who has not submitted yet, with personalized direct assignment link.',
+        build: async () => {
+          const { headers, rows } = buildNotSubmittedExportRows({
+            assignment: a,
+            roster: notSubmitted,
+            assignmentLinksMap
+          });
+          return { headers, rows, filename: `${cleanTitle}_not_submitted.csv` };
+        }
+      }
+    ];
+
+    await ExportDialog.open({
+      title: `Return Feedback · ${a.title}`,
+      presets
+    });
+  }
+
+  // ---------------------------------------------------------------------------
   // Bindings
   // ---------------------------------------------------------------------------
-  function bind() {
+  function bind(notSubmitted = []) {
     container.querySelector('#sub-back')?.addEventListener('click', () => router.navigate(`#/assignments/edit?id=${a.id}`));
     container.querySelector('#sub-paste')?.addEventListener('click', openPasteDialog);
+    container.querySelector('#sub-return-feedback')?.addEventListener('click', () => openReturnFeedbackDialog(notSubmitted));
+    container.querySelector('#btn-filter-all')?.addEventListener('click', () => { filterMode = 'all'; render(); });
+    container.querySelector('#btn-filter-submitted')?.addEventListener('click', () => { filterMode = 'submitted'; render(); });
+    container.querySelector('#btn-filter-not-submitted')?.addEventListener('click', () => { filterMode = 'not_submitted'; render(); });
+
+    container.querySelector('#btn-export-not-submitted')?.addEventListener('click', () => {
+      const rows = (notSubmitted || []).map(s => {
+        const nameParts = splitName(s.full_name || `${s.given_name || ''} ${s.family_name || ''}`.trim());
+        const firstName = s.given_name || nameParts.given || '';
+        const lastName = s.family_name || nameParts.family || '';
+        const fullName = s.full_name || joinName({ given: firstName, family: lastName });
+        const baseTakeUrl = `${window.location.origin}${window.location.pathname}#/assignments/take`;
+        const link = LinkBuilder.withParams(baseTakeUrl, { sid: s.student_id, sname: fullName });
+        return {
+          Email: s.email || '',
+          FirstName: firstName,
+          LastName: lastName,
+          FullName: fullName,
+          StudentID: s.student_id,
+          Assignment: a.title || 'Assignment',
+          DueDate: a.settings?.due_date || '',
+          Link: link
+        };
+      });
+      const cols = ['Email', 'FirstName', 'LastName', 'FullName', 'StudentID', 'Assignment', 'DueDate', 'Link'];
+      const text = toCSV(rows, cols);
+      downloadCSV(`${(a.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_')}_not_submitted.csv`, text);
+      toast.success(`Exported ${rows.length} not-submitted students.`);
+    });
+
     const fileInput = container.querySelector('#sub-file');
     container.querySelector('#sub-import')?.addEventListener('click', () => fileInput.click());
     fileInput?.addEventListener('change', async () => {

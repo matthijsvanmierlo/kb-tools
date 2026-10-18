@@ -7,6 +7,7 @@ import { ConfirmDialog } from '../../utils/dialogs.js';
 import { buildStudentPayload, checkAnswerLocally, gradeSubmission, INSTANT_CHECK_TYPES, BLANK_TOKEN } from './grading.js';
 import { createSubmission, checkAccessCode } from './pipeline.js';
 import { QUESTION_TYPE_META } from './question-types.js';
+import { RelayTransport } from '../../core/transport.js';
 
 /**
  * Student Take Mode (KB-ASSIGN-005)
@@ -62,10 +63,14 @@ export async function renderTakeView(params, router, container) {
   const { payload, preview, teacherAssignment } = resolved;
   const questions = payload.questions || [];
   const feedback = payload.settings?.feedback_mode || 'after_submit';
+  const shareParams = store.getState('shareParams') || {};
+  const initialSid = params.sid || shareParams.sid || '';
+  const initialSname = params.sname || shareParams.sname || '';
+
   const state = {
     screen: 'start',
     index: 0,
-    student: { name: '', id: '', code: '' },
+    student: { name: initialSname, id: initialSid, code: '' },
     answers: {},
     checked: {}, // qid → true/false/null after "Check answer" (instant feedback mode)
     startedAt: null,
@@ -115,7 +120,14 @@ export async function renderTakeView(params, router, container) {
           ${payload.instructions ? `<div class="kb-prose text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-xl p-4">${Sanitizer.renderSTEMMarkdown(payload.instructions)}</div>` : ''}
           <form id="take-start-form" class="space-y-4" novalidate>
             <sl-input id="take-name" label="Your full name" required autocomplete="name" value="${esc(state.student.name)}"></sl-input>
-            <sl-input id="take-id" label="Student ID" required autocomplete="off" value="${esc(state.student.id)}"></sl-input>
+            <div>
+              <sl-input id="take-id" label="Student ID" required autocomplete="off" value="${esc(state.student.id)}" ${initialSid ? 'readonly' : ''}></sl-input>
+              ${initialSid ? `
+                <div class="mt-1 flex justify-end">
+                  <button type="button" id="take-change-id" class="text-xs text-blue-600 hover:text-blue-800 underline">Not you? Change</button>
+                </div>
+              ` : ''}
+            </div>
             <sl-input id="take-code" label="Access code${needsCode ? '' : ' (if your teacher gave you one)'}" ${needsCode ? 'required' : ''} autocomplete="off" placeholder="e.g. K7M2-QX9P" value="${esc(state.student.code)}">
               <sl-icon slot="prefix" name="key"></sl-icon>
             </sl-input>
@@ -135,6 +147,15 @@ export async function renderTakeView(params, router, container) {
       errorEl.classList.remove('hidden');
       container.querySelector('#take-continue-anyway')?.addEventListener('click', begin);
     };
+
+    container.querySelector('#take-change-id')?.addEventListener('click', () => {
+      const idInput = container.querySelector('#take-id');
+      if (idInput) {
+        idInput.removeAttribute('readonly');
+        idInput.focus();
+      }
+      container.querySelector('#take-change-id')?.parentElement?.remove();
+    });
 
     async function begin() {
       // Restore a draft for this student if one exists
@@ -564,15 +585,49 @@ export async function renderTakeView(params, router, container) {
             <div class="flex items-start gap-3">
               <span class="w-10 h-10 flex-shrink-0 rounded-xl bg-amber-500 text-white flex items-center justify-center text-xl"><sl-icon name="box-arrow-up"></sl-icon></span>
               <div>
-                <h2 id="handin-title" class="font-bold text-amber-900 text-lg">Last step: hand in your submission</h2>
-                <p class="text-sm text-amber-800">Your work is <strong>not sent automatically</strong>. Upload the file where your teacher asked (for example your LMS), or paste the code.</p>
+                <h2 id="handin-title" class="font-bold text-amber-900 text-lg">Hand in your submission</h2>
+                <p class="text-sm text-amber-800">Your work is <strong>not sent automatically</strong>. Follow the 3 steps below to complete your hand-in.</p>
               </div>
             </div>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <sl-button variant="primary" size="large" id="res-download"><sl-icon slot="prefix" name="download"></sl-icon> Download submission file</sl-button>
-              <sl-button size="large" id="res-copy"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy submission code</sl-button>
-            </div>
-            <p class="text-xs text-amber-800">Encrypted for your teacher's key <span class="font-mono font-semibold">${esc(payload.teacher_key?.fingerprint)}</span> · receipt <span class="font-mono">${esc(r.receiptId)}</span> · ${esc(new Date(r.submittedAt).toLocaleString())}. Classmates can't read or change it.</p>
+
+            ${payload.relay?.drop_id ? `
+              <div class="mb-4 p-4 rounded-xl bg-blue-50/90 border-2 border-blue-300 text-blue-950 space-y-2">
+                <div class="font-bold flex items-center gap-2 text-base text-blue-900">
+                  <sl-icon name="cloud-upload" class="text-blue-600 text-lg"></sl-icon> One-Click Hand-in to School Server
+                </div>
+                <p class="text-xs text-blue-800 leading-relaxed">
+                  Your teacher has configured automatic collection. Your work is encrypted directly to your teacher before sending.
+                </p>
+                <div class="pt-1 flex flex-wrap gap-2 items-center">
+                  <sl-button variant="primary" size="medium" id="res-server-handin">
+                    <sl-icon slot="prefix" name="cloud-arrow-up"></sl-icon> Hand in to teacher now
+                  </sl-button>
+                </div>
+                <div id="res-server-status" class="hidden"></div>
+              </div>
+            ` : ''}
+
+            <ol class="space-y-4 text-sm text-amber-950 list-decimal pl-5">
+              <li>
+                <div class="font-semibold text-amber-900">Save your submission:</div>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  <sl-button variant="primary" size="medium" id="res-download"><sl-icon slot="prefix" name="download"></sl-icon> Download submission file (.kbsub)</sl-button>
+                  <sl-button size="medium" id="res-copy"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy submission code</sl-button>
+                </div>
+              </li>
+              <li>
+                <div class="font-semibold text-amber-900">Hand it in to your teacher:</div>
+                <p class="text-xs text-amber-800 mt-1">Upload the downloaded file into your school's LMS (e.g. Google Classroom, Canvas), or use one of these shortcuts:</p>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  <sl-button size="medium" id="res-share" class="hidden"><sl-icon slot="prefix" name="share"></sl-icon> Share file…</sl-button>
+                  ${payload.handin?.email ? `<sl-button size="medium" id="res-email"><sl-icon slot="prefix" name="envelope"></sl-icon> Email to teacher</sl-button>` : ''}
+                </div>
+              </li>
+              <li>
+                <div class="font-semibold text-amber-900">Keep your receipt code:</div>
+                <p class="text-xs text-amber-800 mt-1">Receipt: <strong class="font-mono text-slate-900 bg-amber-200/60 px-1.5 py-0.5 rounded">${esc(r.receiptId)}</strong> · encrypted for key <span class="font-mono">${esc(payload.teacher_key?.fingerprint)}</span>. Classmates cannot open it.</p>
+              </li>
+            </ol>
           </section>` : ''}
 
         ${showScore ? `
@@ -609,18 +664,49 @@ export async function renderTakeView(params, router, container) {
       state.screen = 'question';
       render();
     });
+
+    const btnServerHandin = container.querySelector('#res-server-handin');
+    const serverStatus = container.querySelector('#res-server-status');
+    btnServerHandin?.addEventListener('click', async () => {
+      btnServerHandin.loading = true;
+      try {
+        const relayTransport = new RelayTransport({ baseUrl: payload.relay.base_url || '' });
+        const res = await relayTransport.submitToDrop(payload.relay.drop_id, r.text);
+        const receipt = res.receiptId || res.receipt_id;
+        serverStatus.className = 'mt-2 p-3 rounded-xl bg-emerald-100/90 border border-emerald-300 text-emerald-950 text-xs space-y-1';
+        serverStatus.innerHTML = `
+          <div class="font-bold flex items-center gap-1.5"><sl-icon name="check-circle-fill" class="text-emerald-600 text-sm"></sl-icon> Handed in successfully!</div>
+          <div>Server receipt: <strong class="font-mono bg-white/70 px-1 py-0.5 rounded">${esc(receipt)}</strong> (received at ${new Date(res.received_at).toLocaleTimeString()}). You can still download your file below as a backup.</div>
+        `;
+        serverStatus.classList.remove('hidden');
+        btnServerHandin.variant = 'default';
+        btnServerHandin.disabled = true;
+        btnServerHandin.innerHTML = '<sl-icon slot="prefix" name="check2"></sl-icon> Handed in to server';
+        toast.success('Your work was received by the teacher server!');
+      } catch (err) {
+        serverStatus.className = 'mt-2 p-3 rounded-xl bg-rose-100/90 border border-rose-300 text-rose-950 text-xs';
+        serverStatus.innerHTML = `<strong>Hand-in failed:</strong> ${esc(err.message)}. Please use the file download below to submit.`;
+        serverStatus.classList.remove('hidden');
+        toast.danger('Could not hand in to server: ' + err.message);
+      } finally {
+        btnServerHandin.loading = false;
+      }
+    });
+
+    const subFilename = `${payload.title}_${state.student.id}`.replace(/[^a-z0-9_-]+/gi, '_') + '.kbsub';
+
     container.querySelector('#res-download')?.addEventListener('click', () => {
-      const name = `${payload.title}_${state.student.id}`.replace(/[^a-z0-9_-]+/gi, '_');
       const blob = new Blob([r.text], { type: 'text/plain' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${name}.kbsub`;
+      link.download = subFilename;
       document.body.appendChild(link);
       link.click();
       setTimeout(() => { link.remove(); URL.revokeObjectURL(url); }, 100);
       toast.success('Submission file downloaded. Now hand it in.');
     });
+
     container.querySelector('#res-copy')?.addEventListener('click', async () => {
       try {
         await navigator.clipboard.writeText(r.text);
@@ -628,6 +714,38 @@ export async function renderTakeView(params, router, container) {
       } catch (_) {
         toast.warning('Copy failed — use the download button instead.');
       }
+    });
+
+    // Web Share API support check
+    const shareBtn = container.querySelector('#res-share');
+    if (shareBtn && typeof navigator !== 'undefined' && typeof File !== 'undefined' && typeof navigator.canShare === 'function') {
+      try {
+        const testFile = new File(['test'], 'test.kbsub', { type: 'text/plain' });
+        if (navigator.canShare({ files: [testFile] })) {
+          shareBtn.classList.remove('hidden');
+          shareBtn.addEventListener('click', async () => {
+            try {
+              const file = new File([r.text], subFilename, { type: 'text/plain' });
+              await navigator.share({
+                files: [file],
+                title: payload.title,
+                text: `Submission for ${payload.title} - ${state.student.name}`
+              });
+            } catch (err) {
+              if (err.name !== 'AbortError') {
+                toast.warning('Share failed — please use the download button instead.');
+              }
+            }
+          });
+        }
+      } catch (_) {}
+    }
+
+    container.querySelector('#res-email')?.addEventListener('click', () => {
+      const email = payload.handin?.email || '';
+      const subject = `[${payload.title}] ${state.student.name} ${state.student.id}`;
+      const body = `Hi,\n\nPlease find attached my submission file (${subFilename}) for "${payload.title}".\nReceipt code: ${r.receiptId}\n\n(Remember to attach the downloaded .kbsub file to this email).`;
+      window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
     });
   }
 
