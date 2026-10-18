@@ -78,13 +78,13 @@ export function daysLate(dueDate, submittedAt) {
  *
  * @param {object} opts
  * @param {string} opts.text - KBSUB1 code or envelope JSON
- * @param {object} opts.teacherPrivateJwk
+ * @param {CryptoKey|object} opts.teacherPrivateKey
  * @param {object} opts.assignment - local teacher record with the true answer key
  * @param {Array<object>} opts.roster - students of the linked course
  * @returns {Promise<object>} submission row for `assignment_submissions`
  * @throws {Error} NOT_A_SUBMISSION | DECRYPTION_FAILED | WRONG_ASSIGNMENT
  */
-export async function evaluateSubmission({ text, teacherPrivateJwk, assignment, roster = [] }) {
+export async function evaluateSubmission({ text, teacherPrivateKey, assignment, roster = [] }) {
   let envelope;
   try {
     envelope = SubmissionCrypto.parseEnvelope(text);
@@ -95,7 +95,7 @@ export async function evaluateSubmission({ text, teacherPrivateJwk, assignment, 
     throw new Error('WRONG_ASSIGNMENT');
   }
 
-  const { body, signature } = await SubmissionCrypto.decryptFromStudent(teacherPrivateJwk, envelope);
+  const { body, signature } = await SubmissionCrypto.decryptFromStudent(teacherPrivateKey, envelope);
   if (!body || body.assignment_id !== assignment.id) throw new Error('WRONG_ASSIGNMENT');
 
   const student = roster.find(s => String(s.student_id).toUpperCase() === String(body.student_id).toUpperCase());

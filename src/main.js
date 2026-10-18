@@ -194,22 +194,30 @@ function bindStorageControls() {
 
     try {
       const text = await file.text();
-      const { parseBackup } = await import('./core/backup.js');
-      const { counts, exportedAt } = parseBackup(text);
-      const confirmed = await confirmRestore(file.name, counts, exportedAt);
+      const opened = await openBackupWithRecoveryCode(text);
+      if (!opened) return;
+      const confirmed = await confirmRestore(file.name, opened.counts, opened.exportedAt, { plaintext: !opened.encrypted && opened.hasPlaintextSecrets });
       if (!confirmed) return;
       if (confirmed.safetyCopy) await sync.exportManualBackup();
-      await storage.restoreMasterSnapshot(text);
+      await sync.restoreOpenedBackup(opened);
       toast.success('Backup restored successfully! Refreshing view...');
+      if (!opened.encrypted && opened.hasPlaintextSecrets) {
+        toast.warning('That backup file was not encrypted. Delete it once you have made a new, encrypted backup.', 12000);
+      }
       await router.handleRoute();
     } catch (err) {
       console.error('Failed to restore backup:', err);
-      toast.danger(err?.name === 'BackupError'
+      toast.danger(err?.name === 'BackupError' || err?.name === 'VaultError'
         ? `Restore aborted: ${err.message}`
         : 'Invalid backup file. Restore aborted.');
     } finally {
       fileInput.value = '';
     }
+  });
+
+  document.getElementById('menu-btn-recovery-kit')?.addEventListener('click', async () => {
+    const { RecoveryKit } = await import('./components/recovery-kit.js');
+    RecoveryKit.open();
   });
 
   const btnRelayConnect = document.getElementById('menu-btn-relay-connect');
@@ -295,7 +303,62 @@ const RESTORE_LABELS = {
  * Restoring replaces everything on this device, so show what the file contains first.
  * @returns {Promise<false | { safetyCopy: boolean }>}
  */
-function confirmRestore(fileName, counts, exportedAt) {
+/**
+ * Decrypt/validate a backup, asking for the recovery code when this device can't open it.
+ * Resolves null if the teacher cancels.
+ */
+async function openBackupWithRecoveryCode(text) {
+  try {
+    return await sync.openBackupFile(text);
+  } catch (err) {
+    if (err?.code !== 'NEEDS_RECOVERY_CODE') throw err;
+  }
+  let error = '';
+  for (;;) {
+    const code = await promptRecoveryCode(error);
+    if (!code) return null;
+    try {
+      return await sync.openBackupFile(text, { recoveryCode: code });
+    } catch (err) {
+      if (err?.code !== 'WRONG_CODE' && err?.code !== 'BAD_CODE') throw err;
+      error = err.message;
+    }
+  }
+}
+
+function promptRecoveryCode(error = '') {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('sl-dialog');
+    dialog.label = 'Enter your recovery code';
+    dialog.innerHTML = `
+      <form class="space-y-3 text-sm" id="rc-form">
+        <p class="text-slate-700">This backup was made on another device (or before your recovery code changed). Type the code from your recovery kit to open it.</p>
+        <sl-input id="rc-input" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XX" class="font-mono"></sl-input>
+        ${error ? `<p class="text-xs text-rose-700">${Sanitizer.escapeHTML(error)}</p>` : ''}
+      </form>
+      <div slot="footer" class="flex justify-end gap-2">
+        <sl-button id="rc-cancel">Cancel</sl-button>
+        <sl-button variant="primary" id="rc-open">Open backup</sl-button>
+      </div>`;
+    let result = null;
+    const submit = () => {
+      result = dialog.querySelector('#rc-input').value.trim() || null;
+      dialog.hide();
+    };
+    dialog.querySelector('#rc-form').addEventListener('submit', (e) => { e.preventDefault(); submit(); });
+    dialog.querySelector('#rc-open').addEventListener('click', submit);
+    dialog.querySelector('#rc-cancel').addEventListener('click', () => dialog.hide());
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target !== dialog) return;
+      dialog.remove();
+      resolve(result);
+    });
+    document.body.appendChild(dialog);
+    dialog.show();
+  });
+}
+
+function confirmRestore(fileName, counts, exportedAt, { plaintext = false } = {}) {
   return new Promise((resolve) => {
     const esc = (v) => Sanitizer.escapeHTML(v);
     const when = exportedAt && !Number.isNaN(Date.parse(exportedAt)) ? new Date(exportedAt).toLocaleString() : 'unknown date';
@@ -308,6 +371,7 @@ function confirmRestore(fileName, counts, exportedAt) {
         <p><strong>${esc(fileName)}</strong> &mdash; exported ${esc(when)}</p>
         <ul class="text-xs text-slate-600">${rows || '<li>No records</li>'}</ul>
         <p class="text-rose-700 font-medium">Everything currently stored in this browser will be replaced.</p>
+        ${plaintext ? '<p class="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg p-2">This is an older, unencrypted backup: it contains your submission key and student access codes in plain text. After restoring, make a new backup and delete this file.</p>' : ''}
         <sl-checkbox id="restore-safety-copy" checked>Download a backup of my current data first</sl-checkbox>
       </div>
       <div slot="footer" class="flex justify-end gap-2">

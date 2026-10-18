@@ -16,6 +16,8 @@
  * files or copied as text for pasting into an LMS.
  */
 
+import { KeyVault } from './keyvault.js';
+
 const subtle = () => {
   const s = typeof crypto !== 'undefined' ? crypto.subtle : globalThis.crypto?.subtle;
   if (!s) throw new Error('Web Crypto API is not available');
@@ -57,7 +59,8 @@ export function canonicalJSON(value) {
 }
 
 export const SUBMISSION_FILE_EXT = '.kbsub';
-const TEACHER_KEY_METADATA = 'teacher_submission_keypair';
+
+const isCryptoKey = (k) => Boolean(k && typeof k === 'object' && 'algorithm' in k && 'usages' in k && 'type' in k);
 
 export class SubmissionCrypto {
   // ---------------------------------------------------------------------------
@@ -85,17 +88,13 @@ export class SubmissionCrypto {
   }
 
   /**
-   * Load the teacher key pair from local storage, creating it on first use.
-   * The private key is included in JSON backups — losing it makes outstanding submissions unreadable.
+   * Load the teacher key pair, creating it on first use: `{ publicJwk, fingerprint, privateKey }`.
+   * The private key is a non-extractable CryptoKey kept by the KeyVault; backups carry it only
+   * encrypted under the teacher's recovery code.
    * @param {{ getMetadata: Function, setMetadata: Function }} store
    */
   static async getOrCreateTeacherKeys(store) {
-    let keys = await store.getMetadata(TEACHER_KEY_METADATA);
-    if (!keys || !keys.publicJwk || !keys.privateJwk) {
-      keys = await this.generateKeyPair();
-      await store.setMetadata(TEACHER_KEY_METADATA, keys);
-    }
-    return keys;
+    return KeyVault.getTeacherKeys(store);
   }
 
   // ---------------------------------------------------------------------------
@@ -192,14 +191,16 @@ export class SubmissionCrypto {
   }
 
   /**
-   * Decrypt an envelope with the teacher's private key. The header is authenticated, so a
-   * tampered routing header causes decryption to fail.
+   * Decrypt an envelope with the teacher's private key (a CryptoKey from the KeyVault, or a JWK).
+   * The header is authenticated, so a tampered routing header causes decryption to fail.
    */
-  static async decryptFromStudent(teacherPrivateJwk, envelope) {
+  static async decryptFromStudent(teacherPrivateKey, envelope) {
     if (!envelope || envelope.kbsub !== 1 || !envelope.epk || !envelope.ct) {
       throw new Error('NOT_A_SUBMISSION');
     }
-    const priv = await subtle().importKey('jwk', teacherPrivateJwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
+    const priv = isCryptoKey(teacherPrivateKey)
+      ? teacherPrivateKey
+      : await subtle().importKey('jwk', teacherPrivateKey, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
     const ephPub = await subtle().importKey('jwk', { ...envelope.epk, ext: true }, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
     const aesKey = await this._deriveAesKey(priv, ephPub, 'kb-submission-v1');
     try {

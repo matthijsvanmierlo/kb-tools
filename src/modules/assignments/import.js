@@ -46,7 +46,7 @@ export async function importSubmissionTexts({ assignment, texts, roster = [], ke
     try {
       const sub = await evaluateSubmission({
         text,
-        teacherPrivateJwk: keys.privateJwk,
+        teacherPrivateKey: keys.privateKey,
         assignment,
         roster
       });

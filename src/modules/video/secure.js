@@ -220,16 +220,16 @@ function looksLikeEnvelope(text) {
  *
  * @param {string} text - file contents
  * @param {object} ctx
- * @param {object} ctx.teacherPrivateJwk
+ * @param {CryptoKey|object} ctx.teacherPrivateKey
  * @param {(id: string) => Promise<object|null>} ctx.getAssessment - teacher record lookup
  * @param {(courseId: string) => Promise<object[]>} ctx.getStudents - roster lookup
  * @returns {Promise<object>} { ok, format: 'v2'|'legacy', error?, studentName, studentId, identity, earned, max, percent, completedAt, assessment, detail }
  */
-export async function openReceipt(text, { teacherPrivateJwk, getAssessment, getStudents }) {
+export async function openReceipt(text, { teacherPrivateKey, getAssessment, getStudents }) {
   if (looksLikeEnvelope(text)) {
     let opened;
     try {
-      opened = await SubmissionCrypto.decryptFromStudent(teacherPrivateJwk, SubmissionCrypto.parseEnvelope(text));
+      opened = await SubmissionCrypto.decryptFromStudent(teacherPrivateKey, SubmissionCrypto.parseEnvelope(text));
     } catch (err) {
       return { ok: false, format: 'v2', error: err.message === 'DECRYPTION_FAILED' ? 'NOT_FOR_THIS_TEACHER' : 'CORRUPTED_RECEIPT' };
     }

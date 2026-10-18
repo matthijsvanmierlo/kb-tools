@@ -62,7 +62,7 @@ describe('Phase 10: Encrypted, signed video receipts', () => {
     return {
       keys,
       open: (text) => openReceipt(text, {
-        teacherPrivateJwk: keys.privateJwk,
+        teacherPrivateKey: keys.privateJwk,
         getAssessment: async (id) => (id === assessment.id ? assessment : null),
         getStudents: async () => roster
       })

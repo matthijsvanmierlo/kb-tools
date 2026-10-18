@@ -1,5 +1,6 @@
 import { storage } from '../../core/storage.js';
-import { sync } from '../../core/sync.js';
+import { sync, SyncManager } from '../../core/sync.js';
+import { KeyVault } from '../../core/keyvault.js';
 import { Sanitizer } from '../../core/sanitizer.js';
 import { router } from '../../router.js';
 import { toast } from '../../utils/toast.js';
@@ -30,7 +31,10 @@ export async function renderHomeView(params, r, container) {
   const quota = await storage.checkStorageQuota();
   const metadata = {
     last_manual_export_timestamp: await storage.getMetadata('last_manual_export_timestamp'),
-    setup_checklist_dismissed_at: await storage.getMetadata('setup_checklist_dismissed_at')
+    setup_checklist_dismissed_at: await storage.getMetadata('setup_checklist_dismissed_at'),
+    autosync_configured: SyncManager.isUsableHandle(await storage.getMetadata('autosync_file_handle')),
+    autosync_supported: typeof window !== 'undefined' && 'showSaveFilePicker' in window,
+    recovery_kit_saved: (await KeyVault.status(storage)).recoveryKitSaved
   };
 
   const stats = computeHomeStats({
@@ -103,7 +107,10 @@ export async function renderHomeView(params, r, container) {
       checklistItems: stats.checklistItems,
       onAction: (id, route) => {
         if (route === '#backup') {
-          sync.exportManualBackup();
+          if ('showSaveFilePicker' in window) sync.configureAutoSyncFile();
+          else sync.exportManualBackup();
+        } else if (route === '#recovery-kit') {
+          import('../../components/recovery-kit.js').then(({ RecoveryKit }) => RecoveryKit.open());
         } else if (route) {
           router.navigate(route);
         }

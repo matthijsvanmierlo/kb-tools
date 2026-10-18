@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
+import 'fake-indexeddb/auto';
 import {
   normalizeScore,
   GradebookMathEngine
@@ -190,22 +191,29 @@ describe('Phase 5: Student Report PDF, Batch ZIP & Encrypted Share Link', () => 
     expect(zipBlob.size).toBeGreaterThan(100);
   });
 
-  it('creates FERPA-isolated student URL encrypted with student ID', async () => {
-    const share = await GradebookReportGenerator.createStudentShareLink(mockStudent, mockCourse, mockAssignments, mockGradesMap);
+  it('creates FERPA-isolated student URL encrypted with an access code, never the student ID', async () => {
+    const student = { ...mockStudent };
+    const share = await GradebookReportGenerator.createStudentShareLink(student, mockCourse, mockAssignments, mockGradesMap);
     expect(share.url).toContain('enc=1');
     expect(share.url).toContain('&d=');
 
-    const dParam = new URL(share.url).hash.split('d=')[1];
+    // The student had no code, so one was created and reported back to the teacher
+    expect(share.generatedAccessCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    expect(student.access_code).toBe(share.generatedAccessCode);
 
-    // Decrypt with student's own ID
-    const unpacked = await CryptoShareEngine.unpackSharePayload(dParam, true, mockStudent.student_id);
+    const dParam = new URL(share.url).hash.split('d=')[1];
+    const unpacked = await CryptoShareEngine.unpackSharePayload(dParam, true, share.generatedAccessCode.replace('-', ''));
     expect(unpacked.type).toBe('student_grade_report');
     expect(unpacked.payload.student.full_name).toBe('David Miller');
 
-    // Wrong password / ID fails
+    // The student ID no longer opens it
     await expect(
-      CryptoShareEngine.unpackSharePayload(dParam, true, 'WrongID')
+      CryptoShareEngine.unpackSharePayload(dParam, true, mockStudent.student_id)
     ).rejects.toThrow('INVALID_PASSPHRASE');
+
+    // A second link reuses the existing code
+    const again = await GradebookReportGenerator.createStudentShareLink(student, mockCourse, mockAssignments, mockGradesMap);
+    expect(again.generatedAccessCode).toBeNull();
   });
 });
 

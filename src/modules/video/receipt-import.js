@@ -58,7 +58,7 @@ export async function importVideoReceipts({
   const chosenColumn = !autoColumns ? assignments.find(a => a.id === mode) : null;
 
   const ctx = {
-    teacherPrivateJwk: keys.privateJwk,
+    teacherPrivateKey: keys.privateKey,
     getAssessment: (id) => storage.table('video_assessments').get(id),
     getStudents: (courseId) => storage.table('gradebook_students').where('course_id').equals(courseId).toArray()
   };

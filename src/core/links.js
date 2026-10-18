@@ -65,15 +65,16 @@ export class LinkBuilder {
 
   /**
    * Create an encrypted assignment feedback share link.
-   * Encrypts with student's access code if available, otherwise student ID.
+   * Encrypts with the student's access code, creating one first if they have none.
    *
    * @param {object} feedbackPayload
    * @param {object} student
-   * @returns {Promise<{ url: string, exceedsUrlLimit: boolean, rawFileContent: string, length: number }>}
+   * @returns {Promise<{ url: string, exceedsUrlLimit: boolean, rawFileContent: string, length: number, generatedAccessCode: string|null }>}
    */
   static async feedback(feedbackPayload, student) {
-    const pass = AccessCodes.reportPassphrase(student || {});
-    return CryptoShareEngine.createSharePayload('assignment_feedback', feedbackPayload, pass);
+    const generatedAccessCode = await AccessCodes.ensureForStudent(student);
+    const result = await CryptoShareEngine.createSharePayload('assignment_feedback', feedbackPayload, AccessCodes.reportPassphrase(student));
+    return { ...result, generatedAccessCode };
   }
 
   /**

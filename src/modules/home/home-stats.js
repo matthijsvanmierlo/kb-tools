@@ -25,6 +25,10 @@ export function computeHomeStats({
   const hasPublished = assignments.some(a => !a.is_demo && a.publish) ||
                        videos.some(v => !v.is_demo && v.shared_at);
   const hasBackup = Boolean(metadata?.last_manual_export_timestamp);
+  // Browsers without the File System Access API can only make manual backups
+  const hasAutomaticBackup = Boolean(metadata?.autosync_configured)
+    || (metadata?.autosync_supported === false && hasBackup);
+  const hasRecoveryKit = Boolean(metadata?.recovery_kit_saved);
 
   const checklistItems = [
     {
@@ -57,10 +61,17 @@ export function computeHomeStats({
     },
     {
       id: 'make_backup',
-      label: 'Make a backup',
-      completed: hasBackup,
+      label: metadata?.autosync_supported === false ? 'Make an encrypted backup' : 'Turn on automatic encrypted backup',
+      completed: hasAutomaticBackup,
       actionRoute: '#backup',
-      actionLabel: 'Backup now'
+      actionLabel: metadata?.autosync_supported === false ? 'Backup now' : 'Choose backup file'
+    },
+    {
+      id: 'recovery_kit',
+      label: 'Save your recovery kit',
+      completed: hasRecoveryKit,
+      actionRoute: '#recovery-kit',
+      actionLabel: 'Show kit'
     }
   ];
 

@@ -1,6 +1,7 @@
 import { storage } from './storage.js';
 import { toast } from '../utils/toast.js';
-import { DEVICE_BOUND_METADATA } from './backup.js';
+import { DEVICE_BOUND_METADATA, parseBackup } from './backup.js';
+import { KeyVault } from './keyvault.js';
 
 /**
  * SyncManager - KB-CORE-002
@@ -101,6 +102,7 @@ export class SyncManager {
       
       // Perform immediate sync to initialize file
       await this.executeSync();
+      await this.promptRecoveryKitIfNeeded();
       return true;
     } catch (err) {
       if (err.name !== 'AbortError') {
@@ -108,6 +110,44 @@ export class SyncManager {
         toast.danger('Failed to select auto-sync destination.');
       }
       return false;
+    }
+  }
+
+  /** Every backup that leaves IndexedDB is encrypted under the teacher's recovery code */
+  async buildBackupText() {
+    const snapshot = await this.storage.dumpMasterSnapshot();
+    return KeyVault.encryptBackup(this.storage, snapshot);
+  }
+
+  /** A backup is only useful on another device together with the recovery code */
+  async promptRecoveryKitIfNeeded() {
+    const status = await KeyVault.status(this.storage);
+    if (status.recoveryKitSaved || typeof document === 'undefined') return;
+    const { RecoveryKit } = await import('../components/recovery-kit.js');
+    RecoveryKit.open();
+  }
+
+  /**
+   * Open a backup file for restoring: decrypts v3 (with this device's key or the recovery code)
+   * and validates the snapshot. Nothing is written yet.
+   * @throws {VaultError|BackupError}
+   */
+  async openBackupFile(text, { recoveryCode = null } = {}) {
+    if (!KeyVault.isEncryptedBackup(text)) {
+      return { ...parseBackup(text), text, encrypted: false, vault: null, usedRecoveryCode: false };
+    }
+    const opened = await KeyVault.decryptBackup(this.storage, text, recoveryCode);
+    return { ...parseBackup(opened.text), text: opened.text, encrypted: true, vault: opened.vault, usedRecoveryCode: opened.usedRecoveryCode };
+  }
+
+  /** Restore a backup returned by openBackupFile */
+  async restoreOpenedBackup(opened) {
+    await this.storage.restoreMasterSnapshot(opened.text);
+    if (opened.vault) {
+      await KeyVault.adoptBackupKey(this.storage, opened.vault, { usedRecoveryCode: opened.usedRecoveryCode });
+    } else {
+      // A plaintext backup's key is migrated into the vault on next use
+      await KeyVault.forgetLocalTeacherKey(this.storage);
     }
   }
 
@@ -157,8 +197,7 @@ export class SyncManager {
       }
 
       this._updateSyncIndicator('saving');
-      const snapshot = await this.storage.dumpMasterSnapshot();
-      const jsonStr = JSON.stringify(snapshot, null, 2);
+      const jsonStr = await this.buildBackupText();
 
       // createWritable writes to a temporary file that replaces the target only on close(),
       // so an interrupted write never leaves a half-written backup
@@ -195,8 +234,7 @@ export class SyncManager {
    */
   async exportManualBackup() {
     try {
-      const snapshot = await this.storage.dumpMasterSnapshot();
-      const jsonStr = JSON.stringify(snapshot, null, 2);
+      const jsonStr = await this.buildBackupText();
       const blob = new Blob([jsonStr], { type: 'application/json' });
 
       const dateStr = new Date().toISOString().split('T')[0];
@@ -217,7 +255,8 @@ export class SyncManager {
 
       const now = Date.now();
       await this.storage.setMetadata('last_manual_export_timestamp', now);
-      toast.success(`Backup exported successfully as ${filename}`);
+      toast.success(`Encrypted backup exported as ${filename}`);
+      await this.promptRecoveryKitIfNeeded();
       return blob;
     } catch (err) {
       console.error('Export manual backup failed:', err);

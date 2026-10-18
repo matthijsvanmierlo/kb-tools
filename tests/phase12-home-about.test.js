@@ -7,9 +7,9 @@ import { APP_VERSION } from '../src/version.js';
 
 describe('Phase 12: Home & About Modules', () => {
   describe('computeHomeStats', () => {
-    it('returns empty checklist (0/5) for fresh profile', () => {
+    it('returns empty checklist (0/6) for fresh profile', () => {
       const stats = computeHomeStats();
-      expect(stats.checklistItems).toHaveLength(5);
+      expect(stats.checklistItems).toHaveLength(6);
       expect(stats.checklistAllDone).toBe(false);
       expect(stats.showChecklist).toBe(true);
       expect(stats.checklistItems.every(i => !i.completed)).toBe(true);
@@ -20,11 +20,21 @@ describe('Phase 12: Home & About Modules', () => {
       const courses = [{ id: 'c1', name: 'AP Chem', is_demo: false }];
       const students = [{ id: 's1', course_id: 'c1', access_code: 'CODE-1234', is_demo: false }];
       const assignments = [{ id: 'a1', title: 'Task 1', publish: { version: 1 }, is_demo: false }];
-      const metadata = { last_manual_export_timestamp: Date.now() };
+      const metadata = { last_manual_export_timestamp: Date.now(), autosync_configured: true, recovery_kit_saved: true };
 
       const stats = computeHomeStats({ courses, students, assignments, metadata });
       expect(stats.checklistAllDone).toBe(true);
       expect(stats.showChecklist).toBe(false);
+    });
+
+    it('needs automatic backup and a saved recovery kit, unless the browser cannot auto-sync', () => {
+      const done = (meta) => computeHomeStats({ metadata: meta }).checklistItems;
+      const item = (meta, id) => done(meta).find(i => i.id === id);
+      expect(item({ last_manual_export_timestamp: Date.now() }, 'make_backup').completed).toBe(false);
+      expect(item({ last_manual_export_timestamp: Date.now(), autosync_supported: false }, 'make_backup').completed).toBe(true);
+      expect(item({ autosync_configured: true }, 'make_backup').completed).toBe(true);
+      expect(item({}, 'recovery_kit').completed).toBe(false);
+      expect(item({ recovery_kit_saved: true }, 'recovery_kit').completed).toBe(true);
     });
 
     it('hides checklist if teacher dismissed it', () => {

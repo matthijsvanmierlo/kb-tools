@@ -102,19 +102,26 @@ describe('Phase 21: Auto-sync robustness (rev-3 §3.4)', () => {
         close: async () => {}
       })
     };
-    const fakeStorage = { onMutation: () => {}, getMetadata: async () => null, setMetadata: async () => {}, dumpMasterSnapshot: async () => ({ n: writes.length }) };
+    const meta = new Map();
+    const fakeStorage = {
+      onMutation: () => {},
+      getMetadata: async (k) => meta.get(k) ?? null,
+      setMetadata: async (k, v) => { meta.set(k, v); },
+      dumpMasterSnapshot: async () => ({ n: writes.length })
+    };
+    const until = async (cond) => { for (let i = 0; i < 200 && !cond(); i++) await new Promise(r => setTimeout(r, 5)); };
     const sync = new SyncManager(fakeStorage);
     sync.fileHandle = handle;
     sync.debounceDelayMs = 0;
     const first = sync.executeSync();
-    await new Promise(r => setTimeout(r, 0));
+    await until(() => writes.length === 1); // backups are encrypted first, so the write lands a bit later
     expect(await sync.executeSync()).toBe(false); // busy → queued, not dropped
     expect(sync.pendingSync).toBe(true);
-    release();
+    const releaseFirst = release;
+    releaseFirst();
     await first;
-    await new Promise(r => setTimeout(r, 10));
-    release?.();
-    await new Promise(r => setTimeout(r, 10));
+    await until(() => writes.length === 2);
+    release();
     expect(writes.length).toBe(2);
   });
 });

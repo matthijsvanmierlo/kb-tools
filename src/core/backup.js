@@ -5,6 +5,8 @@
  * validated with Zod before anything touches IndexedDB. Restores are all-or-nothing.
  *
  * Format v2 adds `blobs` (card images/audio, base64) and drops device-bound metadata.
+ * Files on disk are v3: the v2 snapshot encrypted under the teacher's recovery code (keyvault.js).
+ * This module validates the decrypted snapshot; plaintext v1/v2 files are still accepted.
  */
 import { z } from './zod.js';
 
@@ -23,7 +25,10 @@ export const BACKUP_TABLES = [
  */
 export const DEVICE_BOUND_METADATA = new Set([
   'autosync_file_handle', 'device_id', 'is_persistent', 'schema_version',
-  'snooze_backup_until', 'sync_config', 'storage_warning_dismissed'
+  'snooze_backup_until', 'sync_config', 'storage_warning_dismissed',
+  // KeyVault: CryptoKeys (serialize to `{}`) and the recovery code, which must never sit next to
+  // the backup it unlocks
+  'teacher_key_local', 'vault_backup_key', 'vault_previous_backup_keys', 'vault_pending_recovery_code'
 ]);
 
 const MAX_RECORDS_PER_TABLE = 200000;
@@ -62,7 +67,7 @@ export class BackupError extends Error {
 /**
  * Parse and validate backup JSON text.
  * @param {string} text
- * @returns {{ snapshot: object, counts: Record<string, number>, exportedAt: string|null }}
+ * @returns {{ snapshot: object, counts: Record<string, number>, exportedAt: string|null, hasPlaintextSecrets: boolean }}
  * @throws {BackupError} with a message suitable for showing to the user
  */
 export function parseBackup(text) {
@@ -71,6 +76,9 @@ export function parseBackup(text) {
     raw = JSON.parse(text);
   } catch (_) {
     throw new BackupError('This file is not valid JSON.');
+  }
+  if (raw?.kennisboost_backup === 3) {
+    throw new BackupError('This backup is encrypted and must be opened with its recovery code first.');
   }
   const result = BackupSchema.safeParse(raw);
   if (!result.success) {
@@ -92,7 +100,9 @@ export function parseBackup(text) {
     if (t !== 'app_metadata') counts[t] = snapshot.data[t]?.length || 0;
   }
   counts.media = snapshot.blobs?.length || 0;
-  return { snapshot, counts, exportedAt: snapshot.exported_at || null };
+  // Written before encrypted backups existed: the teacher's private key is in the clear
+  const hasPlaintextSecrets = Boolean(snapshot.data.app_metadata?.some(r => r.key === 'teacher_submission_keypair' && r.value));
+  return { snapshot, counts, exportedAt: snapshot.exported_at || null, hasPlaintextSecrets };
 }
 
 export function stripDeviceMetadata(rows = []) {

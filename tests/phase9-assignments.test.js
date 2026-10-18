@@ -166,7 +166,7 @@ describe('Phase 9: Encrypted submission round trip', () => {
     const { keys, code, roster, payload } = await setup();
     const { text } = await createSubmission({ payload, studentId: 's101', studentName: 'Emma', accessCode: code, answers: { q1: 'a', q3: false }, clientScore: { earned: 25, possible: 25 } });
     expect(splitSubmissionText(`noise ${text} more`)).toEqual([text]);
-    const row = await evaluateSubmission({ text, teacherPrivateJwk: keys.privateJwk, assignment, roster });
+    const row = await evaluateSubmission({ text, teacherPrivateKey: keys.privateJwk, assignment, roster });
     expect(row.identity).toBe('verified');
     expect(row.student_id).toBe('S101');
     expect(row.student_name).toBe('Emma Watson');
@@ -178,20 +178,20 @@ describe('Phase 9: Encrypted submission round trip', () => {
   it('flags impersonation, missing codes and unknown students', async () => {
     const { keys, roster, payload } = await setup();
     const forged = await createSubmission({ payload, studentId: 'S101', studentName: 'Emma', accessCode: generateAccessCode(), answers: {} });
-    expect((await evaluateSubmission({ text: forged.text, teacherPrivateJwk: keys.privateJwk, assignment, roster })).identity).toBe('code_mismatch');
+    expect((await evaluateSubmission({ text: forged.text, teacherPrivateKey: keys.privateJwk, assignment, roster })).identity).toBe('code_mismatch');
     const nocode = await createSubmission({ payload, studentId: 'S102', studentName: 'Liam', accessCode: '', answers: {} });
-    expect((await evaluateSubmission({ text: nocode.text, teacherPrivateJwk: keys.privateJwk, assignment, roster })).identity).toBe('no_code_on_file');
+    expect((await evaluateSubmission({ text: nocode.text, teacherPrivateKey: keys.privateJwk, assignment, roster })).identity).toBe('no_code_on_file');
     const stranger = await createSubmission({ payload, studentId: 'X1', studentName: 'X', accessCode: '', answers: {} });
-    expect((await evaluateSubmission({ text: stranger.text, teacherPrivateJwk: keys.privateJwk, assignment, roster })).identity).toBe('not_in_roster');
+    expect((await evaluateSubmission({ text: stranger.text, teacherPrivateKey: keys.privateJwk, assignment, roster })).identity).toBe('not_in_roster');
   });
 
   it('rejects other teachers, other assignments and garbage', async () => {
     const { roster, payload, code } = await setup();
     const other = await SubmissionCrypto.generateKeyPair();
     const { text } = await createSubmission({ payload, studentId: 'S101', accessCode: code, answers: {} });
-    await expect(evaluateSubmission({ text, teacherPrivateJwk: other.privateJwk, assignment, roster })).rejects.toThrow('DECRYPTION_FAILED');
-    await expect(evaluateSubmission({ text, teacherPrivateJwk: other.privateJwk, assignment: { ...assignment, id: 'as-2' }, roster })).rejects.toThrow('WRONG_ASSIGNMENT');
-    await expect(evaluateSubmission({ text: 'hello', teacherPrivateJwk: other.privateJwk, assignment, roster })).rejects.toThrow('NOT_A_SUBMISSION');
+    await expect(evaluateSubmission({ text, teacherPrivateKey: other.privateJwk, assignment, roster })).rejects.toThrow('DECRYPTION_FAILED');
+    await expect(evaluateSubmission({ text, teacherPrivateKey: other.privateJwk, assignment: { ...assignment, id: 'as-2' }, roster })).rejects.toThrow('WRONG_ASSIGNMENT');
+    await expect(evaluateSubmission({ text: 'hello', teacherPrivateKey: other.privateJwk, assignment, roster })).rejects.toThrow('NOT_A_SUBMISSION');
   });
 
   it('computes days late against the end of the due date', () => {

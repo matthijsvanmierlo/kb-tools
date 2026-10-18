@@ -97,7 +97,7 @@ export class CommandPalette {
       { category: 'Actions', title: 'Manage Classes & Rosters', icon: 'mortarboard', run: () => ClassManager.openClassManagerModal() },
       { category: 'Actions', title: 'Load sample workspace', icon: 'box-arrow-in-down', run: async () => { const { loadDemoWorkspace } = await import('../core/demo.js'); await loadDemoWorkspace(); router.handleRoute(); } },
       { category: 'Actions', title: 'Remove sample data', icon: 'trash', run: async () => { const { removeDemoData } = await import('../core/demo.js'); await removeDemoData(); router.handleRoute(); } },
-      { category: 'Actions', title: 'Export JSON Backup File', icon: 'download', run: () => sync.exportManualBackup() },
+      { category: 'Actions', title: 'Export Encrypted Backup File', icon: 'download', run: () => sync.exportManualBackup() },
       { category: 'Actions', title: 'Keyboard Shortcuts Cheat Sheet', icon: 'question-circle', run: () => this.openShortcutsModal() }
     ];
 

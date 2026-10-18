@@ -181,7 +181,8 @@ export class GradebookReportGenerator {
   }
 
   /**
-   * Create zero-server FERPA-isolated student URL encrypted with student ID
+   * Create zero-server FERPA-isolated student URL encrypted with the student's access code
+   * (created first if missing; returned as generatedAccessCode so the teacher can pass it on)
    * Strips all other students' records to guarantee 100% data privacy.
    * @param {object} student
    * @param {object} course
@@ -190,9 +191,10 @@ export class GradebookReportGenerator {
    * @returns {Promise<{ url: string, exceedsUrlLimit: boolean }>}
    */
   static async createStudentShareLink(student, course, assignments, gradesMap, rubrics = [], options = {}) {
+    const generatedAccessCode = await AccessCodes.ensureForStudent(student);
     const payload = this.buildStudentReportPayload(student, course, assignments, gradesMap, rubrics, options);
     const result = await CryptoShareEngine.createSharePayload('student_grade_report', payload, AccessCodes.reportPassphrase(student));
-    return { ...result, usesAccessCode: !AccessCodes.isWeak(student) };
+    return { ...result, generatedAccessCode };
   }
 
   /**

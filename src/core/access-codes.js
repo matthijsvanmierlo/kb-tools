@@ -32,15 +32,23 @@ export const MIN_ACCESS_CODE_LENGTH = 6;
 
 export class AccessCodes {
   /**
-   * The secret that protects a student's grade report link: their access code when set,
-   * otherwise their student ID (legacy behaviour, weaker because IDs are often known to peers).
+   * The secret that protects a student's grade report and feedback links: their access code.
+   * Student IDs are never used as a fallback (classmates often know them); call ensureForStudent first.
    */
   static reportPassphrase(student) {
-    return student.access_code ? normalizeAccessCode(student.access_code) : String(student.student_id || '');
+    if (!student?.access_code) throw new Error('NO_ACCESS_CODE');
+    return normalizeAccessCode(student.access_code);
   }
 
-  static isWeak(student) {
-    return !student.access_code;
+  /**
+   * Give a student a code if they have none, so a private link can be made for them.
+   * @returns {Promise<string|null>} the newly created code, or null if they already had one
+   */
+  static async ensureForStudent(student) {
+    if (student?.access_code) return null;
+    if (!student?.id) throw new Error('NO_ACCESS_CODE');
+    await this.regenerate(student);
+    return student.access_code;
   }
 
   /** Make sure every student in a course has a code; returns the updated students */

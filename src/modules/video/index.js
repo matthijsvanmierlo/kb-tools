@@ -1416,7 +1416,7 @@ async function renderKioskCompletion(assessment, student, responseLogs, containe
 export async function openReceiptOnThisDevice(text) {
   const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
   return openReceipt(text, {
-    teacherPrivateJwk: keys.privateJwk,
+    teacherPrivateKey: keys.privateKey,
     getAssessment: (id) => storage.table('video_assessments').get(id),
     getStudents: (courseId) => storage.table('gradebook_students').where('course_id').equals(courseId).toArray()
   });

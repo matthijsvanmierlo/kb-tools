@@ -17,86 +17,130 @@ const DATA_TABLES = new Set([
   'assignment_submissions'
 ]);
 
+const WRITE_OPS = new Set(['put', 'bulkPut', 'delete', 'bulkDelete', 'clear']);
+
+export function isQuotaError(err) {
+  const names = [err?.name, err?.inner?.name];
+  return names.includes('QuotaExceededError') || /quota/i.test(String(err?.message || ''));
+}
+
 /**
  * Wrap a Dexie table with stamping (created_at, updated_at, id) and outbox logging.
+ * Failed writes are reported (see StorageManager.reportWriteError) and re-thrown.
  */
 function wrapDexieTable(rawTable, tableName, storageManager) {
   if (!DATA_TABLES.has(tableName)) return rawTable;
 
   return new Proxy(rawTable, {
     get(target, prop, receiver) {
-      if (prop === 'put') {
-        return async (record, ...rest) => {
-          const now = new Date().toISOString();
-          record.updated_at = now;
-          record.created_at = record.created_at || now;
-          if (!record.id) {
-            record.id = crypto.randomUUID();
-          }
+      const val = resolveTableProp(target, prop, receiver);
+      if (!WRITE_OPS.has(prop)) return val;
+      return async (...args) => {
+        try {
+          return await val(...args);
+        } catch (err) {
+          storageManager.reportWriteError(err);
+          throw err;
+        }
+      };
+    }
+  });
 
-          if (storageManager._outboxEnabled && target.db.outbox) {
-            const key = tableName === 'gradebook_grades'
-              ? [record.student_id, record.assignment_id]
-              : (record.id || record.key);
-            return target.db.transaction('rw', [target, target.db.outbox], async () => {
-              const res = await target.put(record, ...rest);
+  function resolveTableProp(target, prop, receiver) {
+    if (prop === 'put') {
+      return async (record, ...rest) => {
+        const now = new Date().toISOString();
+        record.updated_at = now;
+        record.created_at = record.created_at || now;
+        if (!record.id) {
+          record.id = crypto.randomUUID();
+        }
+
+        if (storageManager._outboxEnabled && target.db.outbox) {
+          const key = tableName === 'gradebook_grades'
+            ? [record.student_id, record.assignment_id]
+            : (record.id || record.key);
+          return target.db.transaction('rw', [target, target.db.outbox], async () => {
+            const res = await target.put(record, ...rest);
+            await target.db.outbox.add({
+              table: tableName,
+              key,
+              op: 'put',
+              record,
+              created_at: now,
+              pushed_at: null,
+              device_id: storageManager.deviceId || null
+            });
+            return res;
+          });
+        }
+        return target.put(record, ...rest);
+      };
+    }
+
+    if (prop === 'bulkPut') {
+      return async (records, ...rest) => {
+        const now = new Date().toISOString();
+        for (const r of records) {
+          r.updated_at = now;
+          r.created_at = r.created_at || now;
+          if (!r.id) {
+            r.id = crypto.randomUUID();
+          }
+        }
+
+        if (storageManager._outboxEnabled && target.db.outbox) {
+          return target.db.transaction('rw', [target, target.db.outbox], async () => {
+            const res = await target.bulkPut(records, ...rest);
+            for (const r of records) {
+              const key = tableName === 'gradebook_grades'
+                ? [r.student_id, r.assignment_id]
+                : (r.id || r.key);
               await target.db.outbox.add({
                 table: tableName,
                 key,
                 op: 'put',
-                record,
+                record: r,
                 created_at: now,
                 pushed_at: null,
                 device_id: storageManager.deviceId || null
               });
-              return res;
-            });
-          }
-          return target.put(record, ...rest);
-        };
-      }
-
-      if (prop === 'bulkPut') {
-        return async (records, ...rest) => {
-          const now = new Date().toISOString();
-          for (const r of records) {
-            r.updated_at = now;
-            r.created_at = r.created_at || now;
-            if (!r.id) {
-              r.id = crypto.randomUUID();
             }
-          }
+            return res;
+          });
+        }
+        return target.bulkPut(records, ...rest);
+      };
+    }
 
-          if (storageManager._outboxEnabled && target.db.outbox) {
-            return target.db.transaction('rw', [target, target.db.outbox], async () => {
-              const res = await target.bulkPut(records, ...rest);
-              for (const r of records) {
-                const key = tableName === 'gradebook_grades'
-                  ? [r.student_id, r.assignment_id]
-                  : (r.id || r.key);
-                await target.db.outbox.add({
-                  table: tableName,
-                  key,
-                  op: 'put',
-                  record: r,
-                  created_at: now,
-                  pushed_at: null,
-                  device_id: storageManager.deviceId || null
-                });
-              }
-              return res;
+    if (prop === 'delete') {
+      return async (key, ...rest) => {
+        if (storageManager._outboxEnabled && target.db.outbox) {
+          const now = new Date().toISOString();
+          return target.db.transaction('rw', [target, target.db.outbox], async () => {
+            const res = await target.delete(key, ...rest);
+            await target.db.outbox.add({
+              table: tableName,
+              key,
+              op: 'delete',
+              created_at: now,
+              pushed_at: null,
+              device_id: storageManager.deviceId || null
             });
-          }
-          return target.bulkPut(records, ...rest);
-        };
-      }
+            return res;
+          });
+        }
+        return target.delete(key, ...rest);
+      };
+    }
 
-      if (prop === 'delete') {
-        return async (key, ...rest) => {
-          if (storageManager._outboxEnabled && target.db.outbox) {
-            const now = new Date().toISOString();
-            return target.db.transaction('rw', [target, target.db.outbox], async () => {
-              const res = await target.delete(key, ...rest);
+    if (prop === 'bulkDelete') {
+      return async (keys, ...rest) => {
+        if (storageManager._outboxEnabled && target.db.outbox) {
+          const now = new Date().toISOString();
+          return target.db.transaction('rw', [target, target.db.outbox], async () => {
+            const res = await target.bulkDelete(keys, ...rest);
+            for (const key of keys) {
               await target.db.outbox.add({
                 table: tableName,
                 key,
@@ -105,61 +149,38 @@ function wrapDexieTable(rawTable, tableName, storageManager) {
                 pushed_at: null,
                 device_id: storageManager.deviceId || null
               });
-              return res;
-            });
-          }
-          return target.delete(key, ...rest);
-        };
-      }
-
-      if (prop === 'bulkDelete') {
-        return async (keys, ...rest) => {
-          if (storageManager._outboxEnabled && target.db.outbox) {
-            const now = new Date().toISOString();
-            return target.db.transaction('rw', [target, target.db.outbox], async () => {
-              const res = await target.bulkDelete(keys, ...rest);
-              for (const key of keys) {
-                await target.db.outbox.add({
-                  table: tableName,
-                  key,
-                  op: 'delete',
-                  created_at: now,
-                  pushed_at: null,
-                  device_id: storageManager.deviceId || null
-                });
-              }
-              return res;
-            });
-          }
-          return target.bulkDelete(keys, ...rest);
-        };
-      }
-
-      if (prop === 'clear') {
-        return async (...rest) => {
-          if (storageManager._outboxEnabled && target.db.outbox) {
-            const now = new Date().toISOString();
-            return target.db.transaction('rw', [target, target.db.outbox], async () => {
-              const res = await target.clear(...rest);
-              await target.db.outbox.add({
-                table: tableName,
-                key: '*',
-                op: 'clear',
-                created_at: now,
-                pushed_at: null,
-                device_id: storageManager.deviceId || null
-              });
-              return res;
-            });
-          }
-          return target.clear(...rest);
-        };
-      }
-
-      const val = Reflect.get(target, prop, receiver);
-      return typeof val === 'function' ? val.bind(target) : val;
+            }
+            return res;
+          });
+        }
+        return target.bulkDelete(keys, ...rest);
+      };
     }
-  });
+
+    if (prop === 'clear') {
+      return async (...rest) => {
+        if (storageManager._outboxEnabled && target.db.outbox) {
+          const now = new Date().toISOString();
+          return target.db.transaction('rw', [target, target.db.outbox], async () => {
+            const res = await target.clear(...rest);
+            await target.db.outbox.add({
+              table: tableName,
+              key: '*',
+              op: 'clear',
+              created_at: now,
+              pushed_at: null,
+              device_id: storageManager.deviceId || null
+            });
+            return res;
+          });
+        }
+        return target.clear(...rest);
+      };
+    }
+
+    const val = Reflect.get(target, prop, receiver);
+    return typeof val === 'function' ? val.bind(target) : val;
+  }
 }
 
 /** Below this quota the profile is most likely a guest/ephemeral one (normal profiles get GBs) */
@@ -495,7 +516,33 @@ export class StorageManager {
       table?.set(key, { key, value });
       return;
     }
-    await this.db.app_metadata.put({ key, value });
+    try {
+      await this.db.app_metadata.put({ key, value });
+    } catch (err) {
+      this.reportWriteError(err);
+      throw err;
+    }
+  }
+
+  /**
+   * A write failed. When the disk or browser quota is full, tell the teacher once instead of
+   * letting edits fail silently; the in-memory UI still shows the unsaved change.
+   */
+  reportWriteError(err) {
+    if (!isQuotaError(err) || typeof document === 'undefined') return;
+    if (document.getElementById('kb-quota-full-banner')) return;
+    const banner = document.createElement('div');
+    banner.id = 'kb-quota-full-banner';
+    banner.setAttribute('role', 'alert');
+    banner.className = 'bg-red-100 border-b border-red-300 px-4 py-2 flex items-center justify-between gap-3 text-xs text-red-900';
+    banner.innerHTML = `
+      <span><strong>Storage is full — your latest changes were not saved.</strong> Export a backup now, then free space (remove unused decks, media or old classes) or ask IT to raise this browser's storage limit.</span>
+      <button type="button" class="bg-red-600 text-white font-medium px-3 py-1 rounded hover:bg-red-700 focus:outline-none">Export backup</button>
+    `;
+    banner.querySelector('button')?.addEventListener('click', () => {
+      window.dispatchEvent(new CustomEvent('kb-request-backup'));
+    });
+    document.body.prepend(banner);
   }
 
   // --- Binary Asset Routing (64KB Rule) ---

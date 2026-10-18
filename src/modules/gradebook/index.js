@@ -1262,25 +1262,24 @@ function openSelectStudentModal(students, onSelected) {
 
 function showEncryptedLinkDialog(student, linkData, onOpenAccess) {
   const url = linkData.url;
-  const strong = !!linkData.usesAccessCode;
+  const newCode = linkData.generatedAccessCode;
   const dialog = document.createElement('sl-dialog');
   dialog.label = `Grade report link · ${student.full_name}`;
   dialog.style.setProperty('--width', 'min(560px, 96vw)');
   dialog.innerHTML = `
     <div class="space-y-4">
-      <div class="rounded-xl border ${strong ? 'border-emerald-200 bg-emerald-50' : 'border-amber-200 bg-amber-50'} p-3 flex gap-3">
-        <sl-icon name="${strong ? 'shield-check' : 'shield-exclamation'}" class="${strong ? 'text-emerald-600' : 'text-amber-600'} text-xl flex-shrink-0"></sl-icon>
+      <div class="rounded-xl border ${newCode ? 'border-amber-200 bg-amber-50' : 'border-emerald-200 bg-emerald-50'} p-3 flex gap-3">
+        <sl-icon name="shield-check" class="${newCode ? 'text-amber-600' : 'text-emerald-600'} text-xl flex-shrink-0"></sl-icon>
         <p class="text-xs leading-relaxed text-slate-700">
-          ${strong
-            ? `Encrypted with AES-256 using ${Sanitizer.escapeHTML(student.full_name)}'s <strong>access code</strong>. Only someone with that code can open it.`
-            : `Encrypted with the <strong>student ID</strong> (${Sanitizer.escapeHTML(student.student_id)}) because no access code is set. Classmates who know the ID could open it — generate an access code for stronger protection.`}
+          Encrypted with AES-256 using ${Sanitizer.escapeHTML(student.full_name)}'s <strong>access code</strong>. Only someone with that code can open it.
+          ${newCode ? `<br><strong>${Sanitizer.escapeHTML(student.full_name)} had no access code, so one was just created: <span class="font-mono">${Sanitizer.escapeHTML(newCode)}</span>.</strong> Give it to them privately (or print code slips).` : ''}
         </p>
       </div>
       <sl-input id="input-student-url" value="${Sanitizer.escapeHTML(url)}" readonly label="Private link"></sl-input>
       <p class="text-xs text-slate-500">The link contains only this student's grades and feedback, as of now. Send a new link after updating grades.</p>
     </div>
     <div slot="footer" class="flex flex-wrap justify-end gap-2">
-      ${!strong && onOpenAccess ? '<sl-button id="btn-link-codes" variant="text">Set up access codes</sl-button>' : ''}
+      ${newCode && onOpenAccess ? '<sl-button id="btn-link-codes" variant="text">Manage access codes</sl-button>' : ''}
       <sl-button id="btn-close-link">Close</sl-button>
       <sl-button variant="primary" id="btn-copy-link"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy link</sl-button>
     </div>

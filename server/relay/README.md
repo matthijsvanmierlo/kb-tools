@@ -13,7 +13,7 @@ The KennisBoost relay server provides:
 1. **Zero-Knowledge by Design:**
    - The relay server **never** sees plaintext lessons or student work.
    - Lesson payloads are encrypted client-side with ephemeral random keys placed in the URL fragment (`k=<key>`). The browser does not send hash fragments over HTTP.
-   - Student submissions (`KBSUB1.`) are encrypted end-to-end to the teacher's key using secp256k1 ECIES + AES-GCM before posting.
+   - Student submissions (`KBSUB1.`) are encrypted end-to-end to the teacher's key using ECIES (ECDH P-256 + HKDF-SHA-256) with AES-256-GCM before posting.
 2. **Visible Metadata:**
    - The server records drop box assignment IDs, timestamps, submission envelope lengths, and client IP addresses (used solely for rate limiting).
    - If metadata titles are provided during publish, they are stored alongside the payload reference.
