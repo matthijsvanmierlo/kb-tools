@@ -15,6 +15,7 @@ import {
   parseStandardsText
 } from './grading-scales.js';
 import { STANDARDS_CSV_TEMPLATE, downloadCSVTemplate } from '../../core/csv-templates.js';
+import { downloadCSV } from '../../core/csv.js';
 
 /**
  * Class Settings (KB-GRAD-008)
@@ -595,12 +596,9 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
       const v = e.detail.item.value;
       if (v === 'print') return printCodeSlips();
       if (v === 'csv') {
-        const blob = new Blob([AccessCodes.toCSV(students, draft)], { type: 'text/csv' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `${(draft.name || 'class').replace(/[^a-z0-9]+/gi, '_')}_access_codes.csv`;
-        a.click();
-        setTimeout(() => URL.revokeObjectURL(a.href), 500);
+        const filename = `${(draft.name || 'class').replace(/[^a-z0-9]+/gi, '_')}_access_codes.csv`;
+        downloadCSV(filename, AccessCodes.toCSV(students, draft));
+        toast.success(`Exported access codes to ${filename}`);
         return;
       }
       if (v === 'regen-all') {

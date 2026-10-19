@@ -109,7 +109,6 @@ export class CSVImportDialog {
     `;
 
     document.body.appendChild(dialog);
-    await dialog.show();
 
     const tabs = dialog.querySelector('#import-mode-tabs');
     const dropZone = dialog.querySelector('#csv-drop-zone');
@@ -263,6 +262,7 @@ export class CSVImportDialog {
     cancelBtn?.addEventListener('click', () => dialog.hide());
     dialog.addEventListener('sl-after-hide', () => dialog.remove());
 
+    await dialog.show();
     return dialog;
   }
 }

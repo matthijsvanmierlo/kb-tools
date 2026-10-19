@@ -8,7 +8,7 @@ import { finalScore, totalPoints, describeCorrectAnswer, BLANK_TOKEN } from './g
 import { QUESTION_TYPE_META } from './question-types.js';
 import { importSubmissionTexts } from './import.js';
 import { LinkBuilder } from '../../core/links.js';
-import { toCSV, downloadCSV } from '../../core/csv.js';
+import { toCSV, downloadCSV, downloadBlob } from '../../core/csv.js';
 import { splitName, joinName } from '../../core/names.js';
 import { ExportDialog } from '../../components/export-dialog.js';
 import { buildSubmissionsExportRows, buildMailMergeExportRows, buildNotSubmittedExportRows } from '../../core/export-presets.js';
@@ -559,14 +559,7 @@ export async function renderSubmissions(assignment, router, container) {
               roster,
               course
             });
-            const url = URL.createObjectURL(blob);
-            const dl = document.createElement('a');
-            dl.href = url;
-            dl.download = filename;
-            document.body.appendChild(dl);
-            dl.click();
-            document.body.removeChild(dl);
-            URL.revokeObjectURL(url);
+            downloadBlob(blob, filename);
             toast.success(`Downloaded ${count} PDF reports in ${filename}`);
           }
         },

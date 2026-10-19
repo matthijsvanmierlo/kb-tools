@@ -3,7 +3,7 @@
  * Universal dialog for CSV exports, mail-merge presets, and data downloads.
  */
 
-import { toCSV, suggestDelimiter } from '../core/csv.js';
+import { toCSV, suggestDelimiter, downloadCSV } from '../core/csv.js';
 import { getExportPresetTemplate, downloadCSVTemplate } from '../core/csv-templates.js';
 import { Sanitizer } from '../core/sanitizer.js';
 import { toast } from '../utils/toast.js';
@@ -266,9 +266,8 @@ export class ExportDialog {
     `;
 
     document.body.appendChild(dialog);
-    await dialog.show();
 
-    // Setup event listeners
+    // Setup event listeners before show() so clicks are immediately active
     const presetLabels = dialog.querySelectorAll('#export-preset-radio-group label');
     dialog.querySelectorAll('input[name="export-preset"]').forEach(radio => {
       radio.addEventListener('change', (e) => {
@@ -347,16 +346,9 @@ export class ExportDialog {
         return;
       }
       const csvStr = toCSV(currentResult.rows, currentResult.headers, { delimiter, decimal });
-      const blob = new Blob([csvStr], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = currentResult.filename || 'export.csv';
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-      toast.success('Downloaded ' + a.download);
+      const filename = currentResult.filename || 'export.csv';
+      downloadCSV(filename, csvStr);
+      toast.success('Downloaded ' + filename);
     });
 
     // Download Preset Template
@@ -389,7 +381,8 @@ export class ExportDialog {
       dialog.remove();
     });
 
-    // Initial load
+    // Initial load and show dialog
     await updatePreviewAndCounts();
+    await dialog.show();
   }
 }

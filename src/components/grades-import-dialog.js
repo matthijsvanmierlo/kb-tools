@@ -112,7 +112,6 @@ export class GradesImportDialog {
     `;
 
     document.body.appendChild(dialog);
-    await dialog.show();
 
     const dropZone = dialog.querySelector('#grades-drop-zone');
     const fileInput = dialog.querySelector('#input-grades-file');
@@ -265,5 +264,7 @@ export class GradesImportDialog {
 
     dialog.querySelector('#btn-grades-import-cancel')?.addEventListener('click', () => dialog.hide());
     dialog.addEventListener('sl-after-hide', () => dialog.remove());
+
+    await dialog.show();
   }
 }

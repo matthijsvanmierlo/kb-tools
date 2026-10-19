@@ -159,21 +159,64 @@ export function parseCSV(text, opts = {}) {
 }
 
 /**
- * Trigger a browser file download of CSV content.
+ * Trigger a browser file download of an arbitrary Blob.
+ * Defers URL.revokeObjectURL to avoid race conditions in Safari/WebKit on macOS/iOS.
+ *
+ * @param {Blob} blob
+ * @param {string} filename
+ */
+export function downloadBlob(blob, filename = 'download') {
+  if (typeof document === 'undefined') return;
+
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  link.rel = 'noopener';
+  // Position off-screen rather than visibility:hidden or display:none
+  // to ensure all browser engines (Safari, Firefox, Chromium) consider it an active layout node
+  link.style.position = 'fixed';
+  link.style.top = '0';
+  link.style.left = '-9999px';
+  link.style.opacity = '0';
+  link.style.pointerEvents = 'none';
+
+  document.body.appendChild(link);
+
+  try {
+    link.click();
+  } catch (_) {
+    try {
+      const clickEvt = new MouseEvent('click', { bubbles: true, cancelable: true, view: window });
+      link.dispatchEvent(clickEvt);
+    } catch (_) {}
+  }
+
+  // Defer cleanup: Safari aborts download if URL.revokeObjectURL is called synchronously
+  // before the browser's download manager reads the blob stream.
+  setTimeout(() => {
+    try {
+      if (link.parentNode) {
+        link.parentNode.removeChild(link);
+      }
+      URL.revokeObjectURL(url);
+    } catch (_) {}
+  }, 10000);
+}
+
+/**
+ * Trigger a browser file download of CSV content with UTF-8 BOM and deferred revocation.
  * @param {string} filename
  * @param {string} text
  */
 export function downloadCSV(filename, text) {
   if (typeof document === 'undefined') return;
 
-  const blob = new Blob([text], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.setAttribute('href', url);
-  link.setAttribute('download', filename.endsWith('.csv') ? filename : `${filename}.csv`);
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
+  const safeFilename = filename?.endsWith('.csv') ? filename : `${filename || 'export'}.csv`;
+  const content = typeof text === 'string' ? text : String(text ?? '');
+  // Prepend UTF-8 BOM if missing so Excel, Numbers, and Google Sheets handle UTF-8 cleanly
+  const withBom = content.startsWith('\uFEFF') ? content : `\uFEFF${content}`;
+  const blob = new Blob([withBom], { type: 'text/csv;charset=utf-8' });
+
+  downloadBlob(blob, safeFilename);
 }

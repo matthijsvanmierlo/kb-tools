@@ -3,6 +3,7 @@ import { store } from '../../state/store.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { toast } from '../../utils/toast.js';
 import { Sanitizer } from '../../core/sanitizer.js';
+import { downloadBlob } from '../../core/csv.js';
 import { VirtualGradebookGrid } from './virtual-grid.js';
 import { RubricDesigner } from './rubric-builder.js';
 import { GradebookReportGenerator } from './report-generator.js';
@@ -644,14 +645,7 @@ export async function renderGradebookView(params, router, container) {
               assignments: allAssignments,
               gradesMap
             });
-            const url = URL.createObjectURL(blob);
-            const dl = document.createElement('a');
-            dl.href = url;
-            dl.download = filename;
-            document.body.appendChild(dl);
-            dl.click();
-            document.body.removeChild(dl);
-            URL.revokeObjectURL(url);
+            downloadBlob(blob, filename);
             toast.success('Downloaded OneRoster bundle.');
           }
         },

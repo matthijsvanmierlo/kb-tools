@@ -13,6 +13,7 @@ import { RichTextEditor } from '../../components/rich-text-editor.js';
 import { ConfirmDialog } from '../../utils/dialogs.js';
 import { CSVImportDialog } from '../../components/csv-import-dialog.js';
 import { TIMELINE_CSV_TEMPLATE, downloadCSVTemplate } from '../../core/csv-templates.js';
+import { downloadCSV, downloadBlob } from '../../core/csv.js';
 
 /**
  * Interactive Timeline Module Controller & View
@@ -613,7 +614,9 @@ export async function renderTimelineView(params, router, container) {
 
   container.querySelector('#menu-export-csv')?.addEventListener('click', () => {
     const csvStr = Exporter.toCSV(activeTimeline.events);
-    downloadFile(csvStr, `${activeTimeline.title.replace(/\s+/g, '_')}.csv`, 'text/csv');
+    const filename = `${activeTimeline.title.replace(/\s+/g, '_')}.csv`;
+    downloadCSV(filename, csvStr);
+    toast.success(`Exported ${activeTimeline.events.length} timeline events to CSV`);
   });
 
   container.querySelector('#menu-template-csv')?.addEventListener('click', () => {
@@ -850,16 +853,7 @@ function openEventEditorModal(eventObj, timeline, onSaveCallback) {
 
 function downloadFile(content, filename, mimeType) {
   const blob = new Blob([content], { type: mimeType });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  setTimeout(() => {
-    a.remove();
-    URL.revokeObjectURL(url);
-  }, 100);
+  downloadBlob(blob, filename);
 }
 
 export default renderTimelineView;
