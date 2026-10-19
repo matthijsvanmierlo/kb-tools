@@ -218,17 +218,39 @@ export const GradebookGradeSchema = z.object({
 // --- 2. CSV Header Normalization ---
 
 export const HEADER_ALIASES = {
+  'title': 'title',
+  'name': 'title',
+  'event': 'title',
+  'eventname': 'title',
+  'event_name': 'title',
+  'startdate': 'start_date',
   'start_date': 'start_date',
   'start date': 'start_date',
+  'start': 'start_date',
   'begin': 'start_date',
   'date': 'start_date',
+  'enddate': 'end_date',
   'end_date': 'end_date',
   'end date': 'end_date',
   'end': 'end_date',
+  'category': 'category',
+  'tag': 'category',
+  'type': 'category',
+  'description': 'description',
+  'desc': 'description',
+  'notes': 'description',
+  'color': 'color',
+  'colour': 'color',
+  'citations': 'citations',
+  'citation': 'citations',
+  'sources': 'citations',
+  'source': 'citations',
   'question': 'front',
+  'front': 'front',
   'term': 'front',
   'prompt': 'front',
   'answer': 'back',
+  'back': 'back',
   'definition': 'back'
 };
 
@@ -332,9 +354,16 @@ export function parseCSVWithValidation(csvString, schema, options = {}) {
       };
     }
 
-    // 2. Timelines: empty end_date to null
-    if (row.end_date === '' || row.end_date === undefined) {
-      row.end_date = null;
+    // 2. Timelines: empty end_date to null and stringify numeric dates
+    if (schema === TimelineEventSchema || row.start_date !== undefined) {
+      if (row.start_date !== undefined && row.start_date !== null && typeof row.start_date !== 'string') {
+        row.start_date = String(row.start_date);
+      }
+      if (row.end_date === '' || row.end_date === undefined || row.end_date === null) {
+        row.end_date = null;
+      } else if (typeof row.end_date !== 'string') {
+        row.end_date = String(row.end_date);
+      }
     }
     if (row.color && !row.color.startsWith('#')) {
       row.color = `#${row.color}`;

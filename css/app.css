@@ -344,13 +344,15 @@ code, kbd, samp, pre {
 }
 
 .kb-header-inner {
-  max-width: 80rem;
+  max-width: min(100%, 96rem);
+  width: 100%;
   height: 100%;
   margin: 0 auto;
   padding: 0 1rem;
   display: flex;
   align-items: center;
-  gap: 1rem;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 
 @media (min-width: 640px) {
@@ -402,6 +404,7 @@ code, kbd, samp, pre {
   border-radius: 999px;
   background: var(--kb-surface-subtle);
   border: 1px solid var(--kb-border);
+  flex-shrink: 0;
 }
 
 .kb-nav-link {
@@ -446,11 +449,19 @@ code, kbd, samp, pre {
 .kb-nav-link[data-route-link='#/gradebook'] { --kb-nav-accent: var(--kb-accent-gradebook); }
 .kb-nav-link[data-route-link='#/assignments'] { --kb-nav-accent: var(--kb-accent-assignments); }
 
-/* Medium screens: icons only for the less common labels keeps the bar on one line */
-@media (min-width: 768px) and (max-width: 1365px) {
+/* Medium and laptop screens (up to 1535.98px, including MacBook Air 1366px & 1440px):
+   Active item displays its label with accent icon, while other items display icons with tooltips.
+   Keeps the navigation bar compact, elegant, and prevents header overflow. */
+@media (min-width: 768px) and (max-width: 1535.98px) {
   .kb-nav-link { padding: 0 0.75rem; }
   .kb-nav-link span { display: none; }
   .kb-nav-link.kb-nav-active span { display: inline; }
+}
+
+/* Extra-large desktop screens (>= 1536px): display all navigation labels */
+@media (min-width: 1536px) {
+  .kb-nav-link { padding: 0 0.85rem; }
+  .kb-nav-link span { display: inline; }
 }
 
 /* Small screens: navigation becomes a bottom tab bar */
@@ -501,6 +512,10 @@ code, kbd, samp, pre {
   gap: 0.375rem;
   flex-shrink: 0;
   margin-left: auto;
+}
+
+.kb-storage-menu {
+  flex-shrink: 0;
 }
 
 @media (min-width: 768px) {

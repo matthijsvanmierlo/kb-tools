@@ -11,6 +11,8 @@ import { ShareModal } from '../../components/share-dialog.js';
 import { ClassManager } from '../../components/class-manager.js';
 import { RichTextEditor } from '../../components/rich-text-editor.js';
 import { ConfirmDialog } from '../../utils/dialogs.js';
+import { CSVImportDialog } from '../../components/csv-import-dialog.js';
+import { TIMELINE_CSV_TEMPLATE, downloadCSVTemplate } from '../../core/csv-templates.js';
 
 /**
  * Interactive Timeline Module Controller & View
@@ -36,47 +38,40 @@ export async function renderTimelineView(params, router, container) {
       getEditUrl: (item) => `#/timeline/view?id=${item.id}`,
       getMetadataSummary: (item) => `${(item.events || []).length} Events`,
       onImport: () => {
-        const input = document.createElement('input');
-        input.type = 'file';
-        input.accept = '.json,.csv';
-        input.onchange = async (e) => {
-          const file = e.target.files?.[0];
-          if (!file) return;
-          try {
-            const text = await file.text();
-            if (file.name.endsWith('.json')) {
-              const parsed = JSON.parse(text);
+        CSVImportDialog.open({
+          title: 'Import Timeline',
+          subtitle: 'Upload a CSV/JSON file or copy and paste rows directly from Google Sheets or Excel.',
+          templateFilename: 'timeline_events_template.csv',
+          templateContent: TIMELINE_CSV_TEMPLATE,
+          schema: TimelineEventSchema,
+          acceptJson: true,
+          onImport: async (resultData, rawText, { filename, isJson }) => {
+            if (isJson) {
+              const parsed = resultData;
               const newTimeline = {
                 version: 1,
                 id: generateUUID(),
-                title: parsed.title || file.name.replace(/\.[^/.]+$/, ''),
+                title: parsed.title || (filename || 'Imported Timeline').replace(/\.[^/.]+$/, ''),
                 events: Array.isArray(parsed.events) ? parsed.events : [],
                 updated_at: new Date().toISOString()
               };
               await storage.table('timelines').put(newTimeline);
               toast.success('Imported timeline JSON!');
             } else {
-              const res = parseCSVWithValidation(text, TimelineEventSchema);
-              if (!res.success) {
-                showImportErrorsDialog(res.errors);
-                return;
-              }
+              const title = (filename || 'Imported Timeline').replace(/\.[^/.]+$/, '');
               const newTimeline = {
                 version: 1,
                 id: generateUUID(),
-                title: file.name.replace(/\.[^/.]+$/, ''),
-                events: res.data.map(ev => ({ ...ev, id: ev.id || generateUUID() })),
+                title: title === 'pasted_data' ? 'Pasted Timeline' : title,
+                events: resultData.map(ev => ({ ...ev, id: ev.id || generateUUID() })),
                 updated_at: new Date().toISOString()
               };
               await storage.table('timelines').put(newTimeline);
-              toast.success(`Imported timeline with ${res.data.length} events!`);
+              toast.success(`Imported timeline with ${resultData.length} events!`);
             }
             library.render(container);
-          } catch (err) {
-            toast.danger('Import failed: ' + err.message);
           }
-        };
-        input.click();
+        });
       }
     });
 
@@ -239,12 +234,15 @@ export async function renderTimelineView(params, router, container) {
               <sl-menu-item id="menu-export-csv">
                 <sl-icon slot="prefix" name="filetype-csv"></sl-icon> Export CSV
               </sl-menu-item>
+              <sl-menu-item id="menu-template-csv">
+                <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Download CSV Template
+              </sl-menu-item>
               <sl-menu-item id="menu-export-md">
                 <sl-icon slot="prefix" name="markdown"></sl-icon> Export Markdown
               </sl-menu-item>
               <sl-divider></sl-divider>
               <sl-menu-item id="menu-import-csv">
-                <sl-icon slot="prefix" name="upload"></sl-icon> Import Events CSV...
+                <sl-icon slot="prefix" name="upload"></sl-icon> Import Events from CSV / Spreadsheet…
               </sl-menu-item>
             </sl-menu>
           </sl-dropdown>
@@ -618,42 +616,36 @@ export async function renderTimelineView(params, router, container) {
     downloadFile(csvStr, `${activeTimeline.title.replace(/\s+/g, '_')}.csv`, 'text/csv');
   });
 
+  container.querySelector('#menu-template-csv')?.addEventListener('click', () => {
+    downloadCSVTemplate('timeline_events_template.csv', TIMELINE_CSV_TEMPLATE);
+    toast.success('Downloaded timeline events CSV template');
+  });
+
   container.querySelector('#menu-export-md')?.addEventListener('click', () => {
     const mdStr = Exporter.toMarkdown(activeTimeline.events, 'timeline');
     downloadFile(mdStr, `${activeTimeline.title.replace(/\s+/g, '_')}.md`, 'text/markdown');
   });
 
-  const fileInput = container.querySelector('#input-timeline-csv');
   container.querySelector('#menu-import-csv')?.addEventListener('click', () => {
-    fileInput?.click();
-  });
-
-  fileInput?.addEventListener('change', async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    try {
-      const text = await file.text();
-      const res = parseCSVWithValidation(text, TimelineEventSchema);
-      if (!res.success) {
-        showImportErrorsDialog(res.errors);
-        return;
+    CSVImportDialog.open({
+      title: `Import Events into "${activeTimeline.title || 'Timeline'}"`,
+      subtitle: 'Upload a CSV file or paste cells directly from Google Sheets / Excel to add events to this timeline.',
+      templateFilename: 'timeline_events_template.csv',
+      templateContent: TIMELINE_CSV_TEMPLATE,
+      schema: TimelineEventSchema,
+      acceptJson: false,
+      onImport: async (resultData) => {
+        if (!Array.isArray(resultData) || resultData.length === 0) return;
+        for (const ev of resultData) {
+          ev.id = ev.id || generateUUID();
+          activeTimeline.events.push(ev);
+        }
+        activeTimeline.updated_at = new Date().toISOString();
+        await storage.table('timelines').put(activeTimeline);
+        toast.success(`Imported ${resultData.length} events!`);
+        renderActiveViewMode();
       }
-
-      for (const ev of res.data) {
-        ev.id = ev.id || generateUUID();
-        activeTimeline.events.push(ev);
-      }
-      activeTimeline.updated_at = new Date().toISOString();
-      await storage.table('timelines').put(activeTimeline);
-      toast.success(`Imported ${res.data.length} events!`);
-      renderActiveViewMode();
-    } catch (err) {
-      console.error('Import timeline error:', err);
-      toast.danger('Import failed.');
-    } finally {
-      fileInput.value = '';
-    }
+    });
   });
 
   // Add / Edit / Duplicate Event Actions

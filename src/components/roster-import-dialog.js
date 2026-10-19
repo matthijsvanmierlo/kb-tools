@@ -6,6 +6,7 @@ import { parseCSV } from '../core/csv.js';
 import { detectColumns, normalizeRows, planMerge, parsePastedRoster } from '../core/roster-import.js';
 import { parseOneRosterBundle } from '../core/oneroster.js';
 import { AccessCodes } from '../core/access-codes.js';
+import { ROSTER_CSV_TEMPLATE, downloadCSVTemplate } from '../core/csv-templates.js';
 
 export class RosterImportDialog {
   /**
@@ -48,6 +49,13 @@ export class RosterImportDialog {
     function renderSourceStep() {
       dialog.innerHTML = `
         <div class="space-y-4 py-1 text-sm">
+          <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-1 text-xs text-slate-500">
+            <span>Upload a roster file or paste spreadsheet cells (Google Sheets / Excel):</span>
+            <sl-button size="small" variant="default" id="btn-roster-download-template" class="shrink-0">
+              <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Download CSV Template
+            </sl-button>
+          </div>
+
           <sl-tab-group id="import-tabs">
             <sl-tab slot="nav" panel="tab-file" active>
               <sl-icon slot="prefix" name="file-earmark-arrow-up"></sl-icon> Upload File
@@ -100,7 +108,10 @@ export class RosterImportDialog {
             </sl-tab-panel>
           </sl-tab-group>
         </div>
-        <div slot="footer" class="flex justify-end">
+        <div slot="footer" class="flex flex-wrap items-center justify-between gap-2 w-full">
+          <sl-button size="small" variant="default" id="btn-footer-roster-template">
+            <sl-icon slot="prefix" name="download"></sl-icon> Download CSV Template
+          </sl-button>
           <sl-button variant="default" id="btn-cancel-import">Cancel</sl-button>
         </div>
       `;
@@ -110,6 +121,13 @@ export class RosterImportDialog {
 
     function bindSourceStep() {
       dialog.querySelector('#btn-cancel-import')?.addEventListener('click', () => dialog.hide());
+
+      const handleTemplateDownload = () => {
+        downloadCSVTemplate('roster_template.csv', ROSTER_CSV_TEMPLATE);
+        toast.success('Downloaded roster CSV template');
+      };
+      dialog.querySelector('#btn-roster-download-template')?.addEventListener('click', handleTemplateDownload);
+      dialog.querySelector('#btn-footer-roster-template')?.addEventListener('click', handleTemplateDownload);
 
       // File upload handler
       const dropZone = dialog.querySelector('#file-drop-zone');

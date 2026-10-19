@@ -14,6 +14,7 @@ import {
   letterForPercent,
   parseStandardsText
 } from './grading-scales.js';
+import { STANDARDS_CSV_TEMPLATE, downloadCSVTemplate } from '../../core/csv-templates.js';
 
 /**
  * Class Settings (KB-GRAD-008)
@@ -180,6 +181,7 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
                   <sl-divider></sl-divider>
                   <sl-menu-item value="__paste"><sl-icon slot="prefix" name="clipboard"></sl-icon> Paste a list…</sl-menu-item>
                   <sl-menu-item value="__csv"><sl-icon slot="prefix" name="filetype-csv"></sl-icon> Upload CSV…</sl-menu-item>
+                  <sl-menu-item value="__template"><sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Download CSV Template</sl-menu-item>
                 </sl-menu>
               </sl-dropdown>
               <sl-button size="small" id="cs-add-std"><sl-icon slot="prefix" name="plus-lg"></sl-icon> Add</sl-button>
@@ -372,7 +374,12 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
       <div class="space-y-3">
         <p class="text-xs text-slate-500">One standard per line. Use a comma, tab, colon or dash between the code and the description, e.g. <code>HS-PS1-1, Use the periodic table…</code></p>
         <sl-textarea id="paste-std" rows="10" placeholder="CODE, description"></sl-textarea>
-        <p id="paste-std-count" class="text-xs text-slate-500">0 standards detected</p>
+        <div class="flex items-center justify-between text-xs text-slate-500">
+          <p id="paste-std-count">0 standards detected</p>
+          <sl-button size="small" variant="default" id="paste-template">
+            <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Download CSV Template
+          </sl-button>
+        </div>
       </div>
       <div slot="footer" class="flex justify-end gap-2"><sl-button id="paste-cancel">Cancel</sl-button><sl-button variant="primary" id="paste-ok">Import</sl-button></div>`;
     document.body.appendChild(d);
@@ -380,6 +387,10 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
     const ta = d.querySelector('#paste-std');
     ta.addEventListener('sl-input', () => {
       d.querySelector('#paste-std-count').textContent = `${parseStandardsText(ta.value).length} standards detected`;
+    });
+    d.querySelector('#paste-template')?.addEventListener('click', () => {
+      downloadCSVTemplate('standards_template.csv', STANDARDS_CSV_TEMPLATE);
+      toast.success('Downloaded standards CSV template');
     });
     d.querySelector('#paste-cancel').addEventListener('click', () => d.hide());
     d.querySelector('#paste-ok').addEventListener('click', () => {
@@ -492,6 +503,11 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
       const v = e.detail.item.value;
       if (v === '__paste') return openPasteDialog();
       if (v === '__csv') return csvInput?.click();
+      if (v === '__template') {
+        downloadCSVTemplate('standards_template.csv', STANDARDS_CSV_TEMPLATE);
+        toast.success('Downloaded standards CSV template');
+        return;
+      }
       const preset = STANDARD_SET_PRESETS.find(p => p.key === v);
       if (preset) importStandards(preset.standards, preset.key);
     });

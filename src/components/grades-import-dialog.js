@@ -1,9 +1,11 @@
 /**
  * GradesImportDialog Component (KB-COMP-010)
  * Dialog for importing grades from wide CSVs or LMS exports with live diff preview.
+ * Supports file upload, direct spreadsheet pasting, and downloading custom CSV templates.
  */
 
 import { parseGradesCSV, planGradesImport } from '../modules/gradebook/gradebook-csv.js';
+import { getGradesCSVTemplate, downloadCSVTemplate } from '../core/csv-templates.js';
 import { Sanitizer } from '../core/sanitizer.js';
 import { toast } from '../utils/toast.js';
 
@@ -22,25 +24,57 @@ export class GradesImportDialog {
    */
   static async open({ course, students = [], assignments = [], gradesMap = new Map(), onApply }) {
     const dialog = document.createElement('sl-dialog');
-    dialog.setAttribute('label', `Import Scores from CSV · ${course.name}`);
+    dialog.setAttribute('label', `Import Scores from CSV · ${course?.name || 'Class'}`);
     dialog.className = 'kb-grades-import-dialog';
-    dialog.style.setProperty('--width', '640px');
+    dialog.style.setProperty('--width', '680px');
 
     let currentPlan = null;
 
     dialog.innerHTML = `
       <div class="space-y-4 text-sm">
-        <p class="text-xs text-slate-500">
-          Upload a wide CSV or Canvas gradebook export. Column headers matching assignment titles will be updated. Blank cells are ignored.
-        </p>
-
-        <!-- Drop zone & file picker -->
-        <div id="grades-drop-zone" class="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-blue-400 bg-slate-50 transition-colors cursor-pointer space-y-2">
-          <sl-icon name="cloud-arrow-up" class="text-3xl text-slate-400"></sl-icon>
-          <div class="text-xs font-semibold text-slate-700">Drop CSV file here or click to browse</div>
-          <div class="text-[11px] text-slate-400">Supports .csv and .tsv files</div>
-          <input type="file" id="input-grades-file" accept=".csv,.tsv,.txt" class="hidden" />
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs text-slate-500">
+          <p class="text-xs text-slate-600">
+            Upload a CSV/TSV file or paste cells directly from Google Sheets or Excel. Column headers matching assignment titles will be updated.
+          </p>
+          <sl-button size="small" variant="default" id="btn-grades-top-template" class="shrink-0">
+            <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Download CSV Template
+          </sl-button>
         </div>
+
+        <sl-tab-group id="grades-import-tabs">
+          <sl-tab slot="nav" panel="tab-file" active>
+            <sl-icon slot="prefix" name="file-earmark-arrow-up"></sl-icon> Upload File
+          </sl-tab>
+          <sl-tab slot="nav" panel="tab-paste">
+            <sl-icon slot="prefix" name="clipboard"></sl-icon> Paste from Spreadsheet
+          </sl-tab>
+
+          <!-- Drop zone & file picker -->
+          <sl-tab-panel name="tab-file">
+            <div id="grades-drop-zone" class="mt-3 border-2 border-dashed border-slate-300 rounded-xl p-6 text-center hover:border-blue-400 bg-slate-50 transition-colors cursor-pointer space-y-2">
+              <sl-icon name="cloud-arrow-up" class="text-3xl text-slate-400"></sl-icon>
+              <div class="text-xs font-semibold text-slate-700">Drop CSV/TSV file here or click to browse</div>
+              <div class="text-[11px] text-slate-400">Supports .csv, .tsv, and LMS exports</div>
+              <input type="file" id="input-grades-file" accept=".csv,.tsv,.txt" class="hidden" />
+            </div>
+          </sl-tab-panel>
+
+          <!-- Paste Panel -->
+          <sl-tab-panel name="tab-paste">
+            <div class="mt-3 space-y-2">
+              <p class="text-xs text-slate-500">
+                Copy cells directly from Google Sheets or Excel and paste below:
+              </p>
+              <sl-textarea id="grades-paste-textarea" rows="6" placeholder="StudentID&#9;StudentName&#9;Quiz 1&#9;Homework 1&#10;S101&#9;Emma Watson&#9;95&#9;100"></sl-textarea>
+              <div class="flex items-center justify-between">
+                <span id="grades-paste-row-count" class="text-xs text-slate-400">0 rows detected</span>
+                <sl-button size="small" variant="neutral" id="btn-grades-process-paste">
+                  <sl-icon slot="prefix" name="arrow-clockwise"></sl-icon> Preview Pasted Scores
+                </sl-button>
+              </div>
+            </div>
+          </sl-tab-panel>
+        </sl-tab-group>
 
         <!-- Plan preview container -->
         <div id="grades-plan-container" class="space-y-3 hidden">
@@ -64,11 +98,16 @@ export class GradesImportDialog {
         </div>
       </div>
 
-      <div slot="footer" class="flex items-center justify-between gap-2 w-full">
-        <sl-button variant="default" id="btn-grades-import-cancel">Cancel</sl-button>
-        <sl-button variant="primary" id="btn-grades-import-apply" disabled>
-          <sl-icon slot="prefix" name="check2"></sl-icon> Apply Changes
+      <div slot="footer" class="flex flex-wrap items-center justify-between gap-2 w-full">
+        <sl-button size="small" variant="default" id="btn-grades-footer-template">
+          <sl-icon slot="prefix" name="download"></sl-icon> Download CSV Template
         </sl-button>
+        <div class="flex items-center gap-2">
+          <sl-button variant="default" id="btn-grades-import-cancel">Cancel</sl-button>
+          <sl-button variant="primary" id="btn-grades-import-apply" disabled>
+            <sl-icon slot="prefix" name="check2"></sl-icon> Apply Changes
+          </sl-button>
+        </div>
       </div>
     `;
 
@@ -77,14 +116,29 @@ export class GradesImportDialog {
 
     const dropZone = dialog.querySelector('#grades-drop-zone');
     const fileInput = dialog.querySelector('#input-grades-file');
+    const pasteTextarea = dialog.querySelector('#grades-paste-textarea');
+    const pasteRowCount = dialog.querySelector('#grades-paste-row-count');
+    const processPasteBtn = dialog.querySelector('#btn-grades-process-paste');
     const planContainer = dialog.querySelector('#grades-plan-container');
     const planSummary = dialog.querySelector('#grades-plan-summary');
     const planTbody = dialog.querySelector('#grades-plan-tbody');
     const applyBtn = dialog.querySelector('#btn-grades-import-apply');
+    const topTemplateBtn = dialog.querySelector('#btn-grades-top-template');
+    const footerTemplateBtn = dialog.querySelector('#btn-grades-footer-template');
 
-    const processFile = async (file) => {
+    // Download Template Handler
+    const handleDownloadTemplate = () => {
+      const templateCSV = getGradesCSVTemplate(course, assignments, students);
+      const cleanName = (course?.name || 'grades').replace(/[^a-z0-9_-]+/gi, '_');
+      downloadCSVTemplate(`${cleanName}_template.csv`, templateCSV);
+      toast.success('Downloaded grades CSV template');
+    };
+    topTemplateBtn?.addEventListener('click', handleDownloadTemplate);
+    footerTemplateBtn?.addEventListener('click', handleDownloadTemplate);
+
+    // Process CSV / TSV text (used by both file upload and paste)
+    const processCSVText = (text) => {
       try {
-        const text = await file.text();
         const parsed = parseGradesCSV(text);
         const plan = planGradesImport({
           parsed,
@@ -140,32 +194,59 @@ export class GradesImportDialog {
         planContainer.classList.remove('hidden');
       } catch (err) {
         console.error('Failed to parse grades CSV:', err);
-        toast.error('Could not parse file: ' + err.message);
+        toast.error('Could not parse data: ' + err.message);
       }
     };
 
-    dropZone.addEventListener('click', () => fileInput.click());
-    dropZone.addEventListener('dragover', (e) => {
+    // File Handlers
+    const processFile = async (file) => {
+      try {
+        const text = await file.text();
+        processCSVText(text);
+      } catch (err) {
+        toast.error('Could not read file: ' + err.message);
+      }
+    };
+
+    dropZone?.addEventListener('click', () => fileInput?.click());
+    dropZone?.addEventListener('dragover', (e) => {
       e.preventDefault();
       dropZone.classList.add('border-blue-500', 'bg-blue-50/50');
     });
-    dropZone.addEventListener('dragleave', () => {
+    dropZone?.addEventListener('dragleave', () => {
       dropZone.classList.remove('border-blue-500', 'bg-blue-50/50');
     });
-    dropZone.addEventListener('drop', async (e) => {
+    dropZone?.addEventListener('drop', async (e) => {
       e.preventDefault();
       dropZone.classList.remove('border-blue-500', 'bg-blue-50/50');
-      const file = e.dataTransfer.files?.[0];
+      const file = e.dataTransfer?.files?.[0];
       if (file) await processFile(file);
     });
 
-    fileInput.addEventListener('change', async (e) => {
+    fileInput?.addEventListener('change', async (e) => {
       const file = e.target.files?.[0];
       if (file) await processFile(file);
       fileInput.value = '';
     });
 
-    applyBtn.addEventListener('click', async () => {
+    // Paste Handlers
+    pasteTextarea?.addEventListener('sl-input', () => {
+      const lines = (pasteTextarea.value || '').trim().split(/\r?\n/).filter(Boolean);
+      const rows = lines.length > 1 ? lines.length - 1 : lines.length;
+      if (pasteRowCount) pasteRowCount.textContent = `${rows} ${rows === 1 ? 'row' : 'rows'} detected`;
+    });
+
+    processPasteBtn?.addEventListener('click', () => {
+      const text = (pasteTextarea?.value || '').trim();
+      if (!text) {
+        toast.warning('Please paste spreadsheet data first.');
+        return;
+      }
+      processCSVText(text);
+    });
+
+    // Apply Handler
+    applyBtn?.addEventListener('click', async () => {
       if (!currentPlan || !currentPlan.changes.length) return;
       applyBtn.setAttribute('loading', '');
       try {

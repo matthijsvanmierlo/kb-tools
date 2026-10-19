@@ -4,6 +4,7 @@
  */
 
 import { toCSV, suggestDelimiter } from '../core/csv.js';
+import { getExportPresetTemplate, downloadCSVTemplate } from '../core/csv-templates.js';
 import { Sanitizer } from '../core/sanitizer.js';
 import { toast } from '../utils/toast.js';
 
@@ -249,7 +250,10 @@ export class ExportDialog {
       <!-- Footer Buttons -->
       <div slot="footer" class="flex flex-wrap items-center justify-between gap-2 w-full">
         <sl-button variant="default" id="btn-export-close">Close</sl-button>
-        <div class="flex items-center gap-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <sl-button variant="default" id="btn-export-download-template" title="Download a blank or sample CSV template for this format">
+            <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Download Template
+          </sl-button>
           <sl-button variant="default" id="btn-export-copy-table">
             <sl-icon slot="prefix" name="clipboard"></sl-icon> Copy as table
           </sl-button>
@@ -353,6 +357,15 @@ export class ExportDialog {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
       toast.success('Downloaded ' + a.download);
+    });
+
+    // Download Preset Template
+    dialog.querySelector('#btn-export-download-template')?.addEventListener('click', () => {
+      const preset = presets.find(p => p.id === selectedPresetId) || presets[0];
+      const templateCSV = getExportPresetTemplate(preset, currentResult.headers);
+      const cleanId = (preset.id || 'export').replace(/[^a-z0-9_-]+/gi, '_');
+      downloadCSVTemplate(`${cleanId}_template.csv`, templateCSV);
+      toast.success(`Downloaded template for ${preset.label || 'preset'}`);
     });
 
     // Custom Action (e.g. download ZIP)

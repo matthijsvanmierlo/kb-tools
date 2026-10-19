@@ -5,6 +5,10 @@ import { generateUUID } from '../../utils/uuid.js';
 import { toast } from '../../utils/toast.js';
 import { RichTextEditor } from '../../components/rich-text-editor.js';
 import { ClassManager } from '../../components/class-manager.js';
+import { Exporter, FlashcardItemSchema } from '../../core/validator.js';
+import { CSVImportDialog } from '../../components/csv-import-dialog.js';
+import { FLASHCARDS_CSV_TEMPLATE, downloadCSVTemplate } from '../../core/csv-templates.js';
+import { downloadCSV } from '../../core/csv.js';
 
 /**
  * Deck & Card Editor (KB-CARD-001)
@@ -208,6 +212,23 @@ export class FlashcardEditor {
               <sl-button variant="default" size="small" id="btn-add-card">
                 <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add Card
               </sl-button>
+              <sl-dropdown placement="bottom-end">
+                <sl-button slot="trigger" variant="default" size="small" caret>
+                  <sl-icon slot="prefix" name="filetype-csv"></sl-icon> CSV
+                </sl-button>
+                <sl-menu id="menu-editor-deck-actions">
+                  <sl-menu-item value="import-cards">
+                    <sl-icon slot="prefix" name="upload"></sl-icon> Import from CSV / Spreadsheet…
+                  </sl-menu-item>
+                  <sl-menu-item value="export-csv">
+                    <sl-icon slot="prefix" name="download"></sl-icon> Export Cards to CSV
+                  </sl-menu-item>
+                  <sl-divider></sl-divider>
+                  <sl-menu-item value="template-csv">
+                    <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Download CSV Template
+                  </sl-menu-item>
+                </sl-menu>
+              </sl-dropdown>
               <sl-button variant="primary" size="small" id="btn-save-deck">
                 <sl-icon slot="prefix" name="check-lg"></sl-icon> Save &amp; Return
               </sl-button>
@@ -379,6 +400,44 @@ export class FlashcardEditor {
 
     this.container.querySelector('#btn-save-deck')?.addEventListener('click', () => {
       this.saveDeck(true);
+    });
+
+    // CSV Menu Actions
+    this.container.querySelector('#menu-editor-deck-actions')?.addEventListener('sl-select', async (e) => {
+      const val = e.detail?.item?.value;
+      if (val === 'import-cards') {
+        CSVImportDialog.open({
+          title: `Import Cards into "${this.deck.title || 'Deck'}"`,
+          subtitle: 'Upload a CSV file or paste cells directly from Google Sheets / Excel to add cards to this deck.',
+          templateFilename: 'flashcards_template.csv',
+          templateContent: FLASHCARDS_CSV_TEMPLATE,
+          schema: FlashcardItemSchema,
+          acceptJson: false,
+          onImport: async (resultData) => {
+            if (!Array.isArray(resultData) || resultData.length === 0) return;
+            const newCards = resultData.map(c => ({
+              id: generateUUID(),
+              type: 'text',
+              front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : c.front,
+              back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : c.back,
+              fsrs: { state: 0, stability: 0, difficulty: 0, due: new Date().toISOString() }
+            }));
+            this.deck.cards.push(...newCards);
+            this.selectedCardIndex = this.deck.cards.length - 1;
+            this._render();
+            this._scheduleAutoSave();
+            toast.success(`Added ${newCards.length} cards from CSV!`);
+          }
+        });
+      } else if (val === 'export-csv') {
+        const csvStr = Exporter.toCSV(this.deck.cards);
+        const filename = `${(this.deck.title || 'flashcard_deck').replace(/[^a-z0-9_-]+/gi, '_')}.csv`;
+        downloadCSV(filename, csvStr);
+        toast.success(`Exported ${this.deck.cards.length} cards to ${filename}`);
+      } else if (val === 'template-csv') {
+        downloadCSVTemplate('flashcards_template.csv', FLASHCARDS_CSV_TEMPLATE);
+        toast.success('Downloaded flashcards CSV template');
+      }
     });
 
     // Metadata inputs

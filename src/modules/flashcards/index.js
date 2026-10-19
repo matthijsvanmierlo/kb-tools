@@ -8,6 +8,8 @@ import { FlashcardEditor } from './editor.js';
 import { StudyPlayer } from './study-player.js';
 import { TowerDefenseEngine } from './tower-defense.js';
 import { ProjectLibraryView } from '../../components/project-library.js';
+import { CSVImportDialog } from '../../components/csv-import-dialog.js';
+import { FLASHCARDS_CSV_TEMPLATE } from '../../core/csv-templates.js';
 import { renderStudyPlanner, applySavedRetention } from './study-planner.js';
 import { normalizeSharedEnvelope } from '../../core/shared-payload.js';
 import { ClassManager } from '../../components/class-manager.js';
@@ -160,22 +162,20 @@ async function renderLibrary(container, router) {
       return `${cards.length} Cards • ${due} Due`;
     },
     onImport: () => {
-      const input = document.createElement('input');
-      input.type = 'file';
-      input.accept = '.csv,.json';
-      input.onchange = async (e) => {
-        const file = e.target.files?.[0];
-        if (!file) return;
-
-        try {
-          const text = await file.text();
-          if (file.name.endsWith('.json')) {
-            // Imported files come from elsewhere: same value hygiene as shared links
-            const parsed = normalizeSharedEnvelope({ type: 'flashcards', payload: JSON.parse(text) }).payload;
+      CSVImportDialog.open({
+        title: 'Import Flashcards',
+        subtitle: 'Upload a CSV/JSON file or copy and paste rows directly from Google Sheets or Excel.',
+        templateFilename: 'flashcards_template.csv',
+        templateContent: FLASHCARDS_CSV_TEMPLATE,
+        schema: FlashcardItemSchema,
+        acceptJson: true,
+        onImport: async (resultData, rawText, { filename, isJson }) => {
+          if (isJson) {
+            const parsed = normalizeSharedEnvelope({ type: 'flashcards', payload: resultData }).payload;
             const newDeck = {
               version: 1,
               id: generateUUID(),
-              title: parsed.title || file.name.replace(/\.[^/.]+$/, ''),
+              title: parsed.title || (filename || 'Imported Deck').replace(/\.[^/.]+$/, ''),
               cards: Array.isArray(parsed.cards) ? parsed.cards.map(c => ({
                 id: generateUUID(),
                 type: 'text',
@@ -188,16 +188,12 @@ async function renderLibrary(container, router) {
             await storage.table('flashcards').put(newDeck);
             toast.success('Deck imported from JSON!');
           } else {
-            const res = parseCSVWithValidation(text, FlashcardItemSchema);
-            if (!res.success) {
-              showImportErrorsDialog(res.errors);
-              return;
-            }
+            const title = (filename || 'Imported Flashcards').replace(/\.[^/.]+$/, '');
             const newDeck = {
               version: 1,
               id: generateUUID(),
-              title: file.name.replace(/\.[^/.]+$/, ''),
-              cards: res.data.map(c => ({
+              title: title === 'pasted_data' ? 'Pasted Flashcards Deck' : title,
+              cards: resultData.map(c => ({
                 id: generateUUID(),
                 type: 'text',
                 front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : c.front,
@@ -207,15 +203,12 @@ async function renderLibrary(container, router) {
               updated_at: new Date().toISOString()
             };
             await storage.table('flashcards').put(newDeck);
-            toast.success(`Imported deck with ${res.data.length} cards!`);
+            toast.success(`Imported deck with ${resultData.length} cards!`);
           }
           library.render(libraryEl);
           renderStudyPlanner(plannerEl);
-        } catch (err) {
-          toast.danger('Import failed: ' + err.message);
         }
-      };
-      input.click();
+      });
     }
   });
 
