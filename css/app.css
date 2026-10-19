@@ -1101,5 +1101,52 @@ body[data-mode="student"] .kb-brand-name span::after { content: ' · Student'; }
 .kb-forecast-value { font-size: .75rem; font-weight: 600; color: #334155; min-height: 1rem; }
 .sl-theme-dark .kb-forecast-value { color: #cbd5e1; }
 .kb-forecast-day { position: absolute; bottom: -1.35rem; font-size: .6875rem; color: #64748b; white-space: nowrap; }
-.kb-forecast + table + p { margin-top: 1.75rem; }
 @media (prefers-reduced-motion: reduce) { .kb-forecast-bar { transition: none; } }
+
+/* Role Mode Switching (KB-ROLE-001) */
+body[data-role-mode="student"] .kb-nav-teacher {
+  display: none !important;
+}
+body[data-role-mode="student"] .kb-nav-student {
+  display: inline-flex !important;
+}
+body[data-role-mode="student"] #kb-nav-class-selector {
+  display: none !important;
+}
+body[data-role-mode="teacher"] .kb-nav-student {
+  display: none !important;
+}
+body[data-role-mode="teacher"] .kb-nav-teacher {
+  display: inline-flex !important;
+}
+
+.kb-role-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border-color, #e2e8f0);
+  background: var(--surface-secondary, #f8fafc);
+  color: var(--text-secondary, #475569);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.kb-role-toggle-btn:hover {
+  background: var(--surface-hover, #f1f5f9);
+  color: var(--text-primary, #0f172a);
+}
+body[data-role-mode="student"] .kb-role-toggle-btn {
+  background: #eff6ff;
+  color: #2563eb;
+  border-color: #bfdbfe;
+}
+.sl-theme-dark body[data-role-mode="student"] .kb-role-toggle-btn {
+  background: #1e3a8a;
+  color: #93c5fd;
+  border-color: #1d4ed8;
+}

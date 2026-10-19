@@ -2,6 +2,7 @@ import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { normalizeAccessCode } from '../../core/access-codes.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { gradeSubmission } from './grading.js';
+import { StudentMatcher } from '../../core/student-matcher.js';
 
 /**
  * Assignment Submission Pipeline (KB-ASSIGN-002)
@@ -98,11 +99,14 @@ export async function evaluateSubmission({ text, teacherPrivateKey, assignment, 
   const { body, signature } = await SubmissionCrypto.decryptFromStudent(teacherPrivateKey, envelope);
   if (!body || body.assignment_id !== assignment.id) throw new Error('WRONG_ASSIGNMENT');
 
-  const student = roster.find(s => String(s.student_id).toUpperCase() === String(body.student_id).toUpperCase());
-  let identity;
-  if (!student) identity = 'not_in_roster';
-  else if (!student.access_code) identity = 'no_code_on_file';
-  else identity = (await SubmissionCrypto.verifyAccessCodeSignature(body, signature, student.access_code)) ? 'verified' : 'code_mismatch';
+  const matchResult = await StudentMatcher.resolveStudentForSubmission({
+    body,
+    signature,
+    roster
+  });
+
+  const student = matchResult.matchedStudent || null;
+  const identity = matchResult.identity;
 
   // Never trust client_score: grade again from the key that only the teacher holds
   const auto = gradeSubmission(assignment, body.answers || {});
@@ -111,8 +115,11 @@ export async function evaluateSubmission({ text, teacherPrivateKey, assignment, 
     id: generateUUID(),
     assignment_id: assignment.id,
     student_id: student ? student.student_id : body.student_id,
-    student_name: student ? student.full_name : body.student_name,
+    student_name: student ? (student.full_name || student.name) : body.student_name,
     claimed_name: body.student_name,
+    suggested_student: matchResult.suggestedStudent || null,
+    match_type: matchResult.matchedBy || null,
+    match_confidence: matchResult.matchConfidence || 0,
     submitted_at: body.submitted_at,
     started_at: body.started_at,
     received_at: new Date().toISOString(),
@@ -134,6 +141,7 @@ export const IDENTITY_LABELS = {
   verified: { label: 'Verified', tone: 'emerald', icon: 'patch-check', help: 'Signed with this student\'s access code.' },
   code_mismatch: { label: 'Code mismatch', tone: 'rose', icon: 'exclamation-triangle', help: 'The access code used does not match this student. Someone else may have submitted under this name.' },
   no_code_on_file: { label: 'Unverified', tone: 'amber', icon: 'question-circle', help: 'This student has no access code yet, so identity could not be checked.' },
+  suggested_match: { label: 'Suggested match', tone: 'indigo', icon: 'person-check', help: 'Auto-detected likely student based on name or LMS pattern.' },
   not_in_roster: { label: 'Not in roster', tone: 'amber', icon: 'person-x', help: 'The student ID does not match anyone in the linked class.' }
 };
 

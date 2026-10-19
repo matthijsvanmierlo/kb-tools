@@ -64,14 +64,30 @@ export async function publishAssignment(assignment, roster, { handinEmail = '', 
   };
 
   let rosterChecks = null;
-  if (next.settings?.require_access_code && roster?.withCode?.length) {
-    rosterChecks = {};
+  let rosterCards = null;
+  if (roster?.withCode?.length) {
+    if (next.settings?.require_access_code) {
+      rosterChecks = {};
+      for (const s of roster.withCode) {
+        rosterChecks[String(s.student_id).toUpperCase()] = await SubmissionCrypto.accessCodeCheck(next.id, s.student_id, s.access_code);
+      }
+    }
+    rosterCards = {};
     for (const s of roster.withCode) {
-      rosterChecks[String(s.student_id).toUpperCase()] = await SubmissionCrypto.accessCodeCheck(next.id, s.student_id, s.access_code);
+      const card = await SubmissionCrypto.buildRosterCard(next.id, s, s.access_code);
+      if (card?.tag) {
+        rosterCards[card.tag] = card.ct;
+      }
     }
   }
 
-  const payload = await buildStudentPayload(next, { teacherKeys: keys, rosterChecks });
+  const courseMeta = roster?.course ? {
+    course_id: roster.course.id,
+    course_name: roster.course.name || '',
+    section: roster.course.section || ''
+  } : null;
+
+  const payload = await buildStudentPayload(next, { teacherKeys: keys, rosterChecks, rosterCards, courseMeta });
   if (handinEmail) {
     payload.handin = { email: handinEmail };
   }

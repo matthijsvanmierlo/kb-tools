@@ -8,6 +8,7 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { GradebookBridge } from '../gradebook/bridge.js';
 import { openReceipt, IDENTITY_LABELS } from './secure.js';
+import { StudentMatcher } from '../../core/student-matcher.js';
 
 export const RECEIPT_ERROR_TEXT = {
   NOT_FOR_THIS_TEACHER: 'encrypted for a different teacher key (another device or browser profile)',
@@ -119,9 +120,16 @@ export async function importVideoReceipts({
       continue;
     }
 
-    // Match by student ID first; fall back to name only for legacy receipts without IDs
-    const matchedStudent = students.find(s => r.studentId && String(s.student_id).toLowerCase() === String(r.studentId).toLowerCase())
-      || (r.format === 'legacy' ? students.find(s => s.full_name && s.full_name.toLowerCase() === (r.studentName || '').toLowerCase()) : null);
+    // Match using resolved roster student or StudentMatcher
+    let matchedStudent = r.rosterStudent || null;
+    if (!matchedStudent) {
+      const match = await StudentMatcher.resolveStudentForSubmission({
+        claimedId: r.studentId,
+        claimedName: r.studentName,
+        roster: students
+      });
+      matchedStudent = match.matched || match.suggested || null;
+    }
 
     if (!matchedStudent) {
       problems.push(`${file}: ${r.studentName || 'unknown student'} is not in this class`);

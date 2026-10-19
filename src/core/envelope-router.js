@@ -6,6 +6,7 @@
 import jszipLib from 'jszip';
 import lzLib from 'lz-string';
 import { SubmissionCrypto } from './submission-crypto.js';
+import { extractEnvelopeFromHtml } from './html-launcher.js';
 
 const JSZip = jszipLib.default || jszipLib;
 const LZString = lzLib.compressToEncodedURIComponent ? lzLib : (lzLib.default || lzLib);
@@ -41,6 +42,38 @@ export function classifyText(text) {
     return { kind: 'unknown', text: '' };
   }
 
+  // 0. Try extracting from HTML launcher wrapper
+  if (trimmed.includes('<html') || trimmed.includes('<!DOCTYPE html') || trimmed.includes('kb-payload')) {
+    const extracted = extractEnvelopeFromHtml(trimmed);
+    if (extracted) {
+      if (typeof extracted === 'string') {
+        return classifyText(extracted);
+      }
+      if (typeof extracted === 'object') {
+        if (extracted.kind === 'assignment_feedback' || extracted.type === 'assignment_feedback') {
+          return {
+            kind: 'assignment_feedback',
+            assignment_id: extracted.assignment?.id || null,
+            course_id: extracted.course?.id || null,
+            text: JSON.stringify(extracted)
+          };
+        }
+        if (extracted.kbsub === 1 || extracted.epk) {
+          return classifyText(JSON.stringify(extracted));
+        }
+        if (extracted.kind === 'kb-assignment' || extracted.assignment_id) {
+          return {
+            kind: 'assignment',
+            assignment_id: extracted.assignment_id,
+            publish_version: headerVersion(extracted.publish_version),
+            text: JSON.stringify(extracted)
+          };
+        }
+        return classifyText(JSON.stringify(extracted));
+      }
+    }
+  }
+
   // 1. Try parsing as KBSUB envelope (KBSUB1. string or raw envelope JSON)
   try {
     const envelope = SubmissionCrypto.parseEnvelope(trimmed);
@@ -69,10 +102,19 @@ export function classifyText(text) {
     // Not a valid KBSUB envelope
   }
 
-  // 2. Try parsing as plain JSON (legacy video receipt, shared deck/lesson, etc.)
+  // 2. Try parsing as plain JSON (legacy video receipt, shared deck/lesson, feedback, etc.)
   try {
     const parsed = JSON.parse(trimmed);
     if (parsed && typeof parsed === 'object') {
+      // Assignment Feedback
+      if (parsed.kind === 'assignment_feedback' || parsed.type === 'assignment_feedback') {
+        return {
+          kind: 'assignment_feedback',
+          assignment_id: parsed.assignment?.id || null,
+          course_id: parsed.course?.id || null,
+          text: trimmed
+        };
+      }
       // Legacy video receipt: { receipt, signature } or receipt object with quizId / assessmentId / totalScore
       if (parsed.receipt && (parsed.signature || parsed.receipt.quizId || parsed.receipt.assessmentId || parsed.receipt.totalScore !== undefined)) {
         return {
@@ -131,7 +173,7 @@ function headerId(v) {
   return typeof v === 'string' && v.length <= 200 ? v : null;
 }
 
-const ALLOWED_EXTENSIONS = ['.kbsub', '.kbr', '.txt', '.json'];
+const ALLOWED_EXTENSIONS = ['.kbsub', '.kbr', '.kbshare', '.kbfeedback', '.html', '.htm', '.txt', '.json'];
 
 // Archive limits: an LMS bulk download of a class is a few MB; anything far beyond is hostile
 export const ZIP_LIMITS = { maxEntries: 5000, maxTotalBytes: 100 * 1024 * 1024, maxEntryBytes: 10 * 1024 * 1024, maxDepth: 3 };

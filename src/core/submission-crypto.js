@@ -256,6 +256,57 @@ export class SubmissionCrypto {
   static async hashAnswer(salt, normalizedAnswer) {
     return (await sha256Hex(`kb-ans|${salt}|${normalizedAnswer}`)).slice(0, 24);
   }
+
+  // ---------------------------------------------------------------------------
+  // Privacy-preserving roster auto-fill cards
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Encrypt a student's ID and name with their access code and scopeId.
+   * Produces a tag (lookup key) and an encrypted ciphertext.
+   * Classmates cannot decrypt or map tags without the student's access code.
+   */
+  static async buildRosterCard(scopeId, student, accessCode) {
+    const norm = String(accessCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!norm) return null;
+    const tag = (await sha256Hex(`kb-card-tag|${scopeId}|${norm}`)).slice(0, 24);
+    const keyMaterial = await subtle().digest('SHA-256', enc.encode(`kb-card-key|${scopeId}|${norm}`));
+    const aesKey = await subtle().importKey('raw', keyMaterial, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const name = student.full_name || student.name || [student.first_name || student.given_name, student.last_name || student.family_name].filter(Boolean).join(' ') || '';
+    const pt = enc.encode(JSON.stringify({ sid: student.student_id, name }));
+    const ct = await subtle().encrypt({ name: 'AES-GCM', iv }, aesKey, pt);
+    const packed = new Uint8Array(12 + ct.byteLength);
+    packed.set(iv, 0);
+    packed.set(new Uint8Array(ct), 12);
+    return { tag, ct: bytesToB64(packed) };
+  }
+
+  /**
+   * Given an access code and a roster_cards map, attempt to unlock and return { sid, name }.
+   * Returns null if no match or decryption fails.
+   */
+  static async unlockRosterCard(scopeId, rosterCards, accessCode) {
+    if (!rosterCards || typeof rosterCards !== 'object') return null;
+    const norm = String(accessCode || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (!norm) return null;
+    const tag = (await sha256Hex(`kb-card-tag|${scopeId}|${norm}`)).slice(0, 24);
+    const b64 = rosterCards[tag];
+    if (!b64) return null;
+    try {
+      const packed = b64ToBytes(b64);
+      if (packed.byteLength < 13) return null;
+      const iv = packed.slice(0, 12);
+      const ct = packed.slice(12);
+      const keyMaterial = await subtle().digest('SHA-256', enc.encode(`kb-card-key|${scopeId}|${norm}`));
+      const aesKey = await subtle().importKey('raw', keyMaterial, { name: 'AES-GCM' }, false, ['decrypt']);
+      const pt = await subtle().decrypt({ name: 'AES-GCM', iv }, aesKey, ct);
+      return JSON.parse(dec.decode(pt));
+    } catch (_) {
+      return null;
+    }
+  }
 }
 
 export default SubmissionCrypto;
+

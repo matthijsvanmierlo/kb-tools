@@ -35,7 +35,8 @@
       "icons": [{ "src": "icons/file-kbsub-96.png", "sizes": "96x96", "type": "image/png" }],
       "accept": {
         "application/vnd.kennisboost.submission": [".kbsub"],
-        "application/vnd.kennisboost.receipt": [".kbr"]
+        "application/vnd.kennisboost.receipt": [".kbr"],
+        "application/vnd.kennisboost.feedback": [".kbfeedback"]
       }
     }
   ],
@@ -50,7 +51,7 @@
       "files": [
         {
           "name": "files",
-          "accept": [".kbshare", ".kbsub", ".kbr", ".zip", ".json", ".txt", "application/json", "application/zip", "text/plain", "application/octet-stream"]
+          "accept": [".kbshare", ".kbsub", ".kbr", ".kbfeedback", ".zip", ".json", ".txt", ".html", "application/json", "application/zip", "text/plain", "text/html", "application/octet-stream"]
         }
       ]
     }

@@ -6,6 +6,9 @@ import { Sanitizer } from './core/sanitizer.js';
 import { normalizeAccessCode } from './core/access-codes.js';
 import { getTransport } from './core/transport.js';
 import { normalizeSharedEnvelope, toLibraryRecord } from './core/shared-payload.js';
+import { StudentProfile } from './core/student-profile.js';
+import { StudentLedger } from './modules/student/ledger.js';
+import { RoleMode } from './state/role-mode.js';
 
 /**
  * Extract student share params from URL query parameters.
@@ -102,13 +105,16 @@ export class Router {
     const isStudentFacing = (eph && (eph.type === 'assignment' || (eph.type === 'video' && eph.payload?.secure) || eph.type === 'student_grade_report' || eph.type === 'assignment_feedback'))
       || (path === '#/assignments/take' && !params?.preview)
       || (path === '#/report')
-      || (path === '#/feedback');
+      || (path === '#/feedback')
+      || (path === '#/student')
+      || (path === '#/student/gradebook')
+      || (RoleMode.get() === 'student');
 
     if (typeof document !== 'undefined' && document.body) {
       const brand = document.querySelector('.kb-brand');
       if (isStudentFacing) {
         document.body.dataset.mode = 'student';
-        if (brand) brand.setAttribute('href', path);
+        if (brand) brand.setAttribute('href', RoleMode.get() === 'student' ? '#/student' : '#/');
       } else {
         delete document.body.dataset.mode;
         if (brand) brand.setAttribute('href', '#/');
@@ -291,6 +297,19 @@ export class Router {
       return;
     }
 
+    // Attempt keychain auto-unlock with candidate access codes first
+    const candidates = StudentProfile.candidateAccessCodes();
+    for (const code of candidates) {
+      try {
+        const unpacked = await CryptoShareEngine.unpackSharePayload(dParam, true, code, version);
+        if (unpacked) {
+          toast.info('Unlocked automatically using your saved class access code.');
+          this._activateSharedPayload(unpacked);
+          return;
+        }
+      } catch (_) {}
+    }
+
     // Encrypted payload: open decryption dialog
     this._renderDecryptionDialog(dParam, version);
   }
@@ -417,10 +436,14 @@ export class Router {
       store.setState('activeVideo', payload);
       this.navigate('#/video?kiosk=1');
     } else if (type === 'student_grade_report') {
-      // Read-only student view; never touches the teacher's gradebook state
-      this.navigate('#/report');
+      StudentLedger.ingestGradeReport(payload).catch(console.error);
+      RoleMode.set('student');
+      this.navigate('#/student/gradebook');
     } else if (type === 'assignment_feedback') {
-      this.navigate('#/feedback');
+      StudentLedger.ingestAssignmentFeedback(payload).catch(console.error);
+      RoleMode.set('student');
+      toast.success(`Feedback for "${payload.assignment?.title || 'Assignment'}" added to your gradebook!`);
+      this.navigate('#/student/gradebook');
     } else if (type === 'assignment') {
       this.navigate('#/assignments/take');
     } else if (type === 'gradebook') {

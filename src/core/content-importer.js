@@ -10,6 +10,7 @@ import { storage } from './storage.js';
 import { Sanitizer } from './sanitizer.js';
 import { generateUUID } from '../utils/uuid.js';
 import { splitSubmissionText, classifyText } from './envelope-router.js';
+import { extractEnvelopeFromHtml } from './html-launcher.js';
 
 export class ContentImportError extends Error {
   constructor(message, code) {
@@ -25,7 +26,7 @@ export class ContentImporter {
    * @param {string} text
    * @param {string} [filename='']
    * @returns {{
-   *   kind: 'kbshare'|'kbsub'|'json'|'csv'|'unknown',
+   *   kind: 'kbshare'|'kbsub'|'feedback'|'json'|'csv'|'unknown',
    *   isEncrypted?: boolean,
    *   version?: number,
    *   shareType?: string,
@@ -35,11 +36,25 @@ export class ContentImporter {
    * }}
    */
   static inspect(text, filename = '') {
-    const raw = String(text || '').trim();
+    let raw = String(text || '').trim();
     const lowerFilename = (filename || '').toLowerCase();
 
     if (!raw) {
       return { kind: 'unknown', rawText: '', filename };
+    }
+
+    // 0. Unwrap HTML launcher if present
+    if (lowerFilename.endsWith('.html') || lowerFilename.endsWith('.htm') || raw.includes('kb-payload')) {
+      const extracted = extractEnvelopeFromHtml(raw);
+      if (extracted) {
+        if (typeof extracted === 'string') raw = extracted;
+        else if (typeof extracted === 'object') {
+          if (extracted.kind === 'assignment_feedback' || extracted.type === 'assignment_feedback') {
+            return { kind: 'feedback', parsed: extracted, rawText: JSON.stringify(extracted), filename };
+          }
+          return { kind: 'json', parsed: extracted, rawText: JSON.stringify(extracted), filename };
+        }
+      }
     }
 
     // 1. Check for KBSUB1 submission

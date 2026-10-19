@@ -15,7 +15,8 @@ export const BACKUP_VERSION = 2;
 export const BACKUP_TABLES = [
   'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
   'gradebook_students', 'gradebook_assignments', 'gradebook_grades',
-  'gradebook_rubrics', 'assignments', 'assignment_submissions', 'app_metadata'
+  'gradebook_rubrics', 'assignments', 'assignment_submissions',
+  'student_courses', 'student_ledger', 'app_metadata'
 ];
 
 /**

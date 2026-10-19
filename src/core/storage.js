@@ -14,7 +14,9 @@ const DATA_TABLES = new Set([
   'gradebook_grades',
   'gradebook_rubrics',
   'assignments',
-  'assignment_submissions'
+  'assignment_submissions',
+  'student_courses',
+  'student_ledger'
 ]);
 
 const WRITE_OPS = new Set(['put', 'bulkPut', 'delete', 'bulkDelete', 'clear']);
@@ -36,6 +38,8 @@ export function scopeOf(tableName, record) {
     case 'timelines':
     case 'video_assessments': return { course_id: record.class_id || null };
     case 'assignment_submissions': return { assignment_id: record.assignment_id || null };
+    case 'student_courses': return { course_id: record.course_id || record.id };
+    case 'student_ledger': return { course_id: record.course_id || null };
     default: return null;
   }
 }
@@ -332,11 +336,18 @@ export class StorageManager {
       });
     });
 
+    // v5: Persistent Student Workspace & Ledger
+    this.db.version(5).stores({
+      student_courses: 'id, course_id, course_name, teacher_fingerprint, updated_at',
+      student_ledger:  'id, course_id, assignment_id, item_type, student_id, submitted_at, received_at, [course_id+assignment_id]'
+    });
+
     // Initialize in-memory tables for ephemeral mode
     const tables = [
       'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
       'gradebook_students', 'gradebook_assignments', 'gradebook_grades',
       'gradebook_rubrics', 'assignments', 'assignment_submissions',
+      'student_courses', 'student_ledger',
       'app_metadata', 'binary_blobs', 'outbox'
     ];
     for (const t of tables) {
@@ -922,6 +933,7 @@ export class StorageManager {
         where: (field) => {
           const createClause = (predicate) => ({
             toArray: async () => Array.from(memTable.values()).filter(predicate),
+            first: async () => Array.from(memTable.values()).filter(predicate)[0] || null,
             count: async () => Array.from(memTable.values()).filter(predicate).length,
             delete: async () => {
               for (const [k, v] of Array.from(memTable.entries())) {
@@ -941,7 +953,16 @@ export class StorageManager {
           });
 
           return {
-            equals: (val) => createClause(item => item[field] === val)
+            equals: (val) => {
+              if (typeof field === 'string' && field.startsWith('[') && field.endsWith(']')) {
+                const subFields = field.slice(1, -1).split('+');
+                return createClause(item => {
+                  if (!Array.isArray(val)) return false;
+                  return subFields.every((sf, idx) => item[sf] === val[idx]);
+                });
+              }
+              return createClause(item => item[field] === val);
+            }
           };
         },
         toCollection: () => ({

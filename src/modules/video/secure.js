@@ -1,6 +1,7 @@
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { KioskReportEngine } from './kiosk-report.js';
 import { Sanitizer } from '../../core/sanitizer.js';
+import { StudentMatcher } from '../../core/student-matcher.js';
 
 /**
  * Video Assessment Security (KB-VID-004)
@@ -243,12 +244,19 @@ export async function openReceipt(text, { teacherPrivateKey, getAssessment, getS
 
     let identity = 'unsigned';
     let rosterStudent = null;
-    if (assessment.class_id && body.student_id) {
+    if (assessment.class_id && (body.student_id || body.student_name)) {
       const roster = await getStudents(assessment.class_id);
-      rosterStudent = roster.find(s => String(s.student_id).toUpperCase() === body.student_id.toUpperCase()) || null;
-      if (!rosterStudent) identity = 'not_in_roster';
+      const matchResult = await StudentMatcher.resolveStudentForSubmission({
+        body,
+        signature,
+        roster
+      });
+      rosterStudent = matchResult.matchedStudent || null;
+      if (matchResult.identity === 'verified') identity = 'verified';
+      else if (matchResult.identity === 'code_mismatch') identity = 'code_mismatch';
+      else if (!rosterStudent) identity = 'not_in_roster';
       else if (!rosterStudent.access_code) identity = signature ? 'no_code_on_file' : 'unsigned';
-      else identity = (await SubmissionCrypto.verifyAccessCodeSignature(body, signature, rosterStudent.access_code)) ? 'verified' : 'code_mismatch';
+      else identity = matchResult.identity;
     }
 
     return {

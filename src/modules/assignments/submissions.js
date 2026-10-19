@@ -17,6 +17,7 @@ import { generateFeedbackZip } from './feedback-pdf.js';
 import { feedbackSummary, buildStudentPayload, answerToText } from './grading.js';
 import { CryptoShareEngine } from '../../core/crypto-share.js';
 import { replication } from '../../core/replication/manager.js';
+import { StudentMatcher } from '../../core/student-matcher.js';
 
 /**
  * Submissions Inbox (KB-ASSIGN-006)
@@ -28,7 +29,8 @@ const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 const IDENTITY_CLASSES = {
   emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   rose: 'bg-rose-50 text-rose-700 border-rose-200',
-  amber: 'bg-amber-50 text-amber-700 border-amber-200'
+  amber: 'bg-amber-50 text-amber-700 border-amber-200',
+  indigo: 'bg-indigo-50 text-indigo-700 border-indigo-200'
 };
 
 export function identityChip(identity) {
@@ -296,6 +298,23 @@ export async function renderSubmissions(assignment, router, container) {
           <div id="review-score">${scoreLine()}</div>
         </div>
 
+        ${sub.identity === 'suggested_match' && sub.suggested_student ? `
+          <div class="p-4 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between gap-3 text-sm">
+            <div>
+              <div class="font-semibold text-indigo-900 flex items-center gap-1.5"><sl-icon name="person-check"></sl-icon> Suggested student match</div>
+              <div class="text-indigo-800 text-xs mt-0.5">${esc(sub.suggested_student.full_name || sub.suggested_student.name)} (${esc(sub.suggested_student.student_id)})</div>
+            </div>
+            <sl-button size="small" variant="primary" id="review-link-suggested"><sl-icon slot="prefix" name="link"></sl-icon> Link student</sl-button>
+          </div>
+        ` : ''}
+
+        ${sub.identity === 'not_in_roster' && course ? `
+          <div class="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-3 text-xs">
+            <span class="text-amber-800">Student ID "${esc(sub.student_id)}" is not in this class roster.</span>
+            <sl-button size="small" id="review-add-roster"><sl-icon slot="prefix" name="person-plus"></sl-icon> Add to roster</sl-button>
+          </div>
+        ` : ''}
+
         <ol class="space-y-4">
           ${(a.questions || []).map((q, i) => {
             const auto = sub.auto?.per_question?.[q.id] || { earned: 0, possible: q.points || 0, needs_manual: q.type === 'long_text' };
@@ -327,15 +346,70 @@ export async function renderSubmissions(assignment, router, container) {
 
         <sl-textarea id="review-feedback" label="Overall feedback" rows="3" resize="auto" value="${esc(draft.feedback)}" placeholder="Shown to the student with their grade"></sl-textarea>
       </div>
-      <div slot="footer" class="flex flex-wrap justify-end gap-2">
-        <sl-button id="review-cancel">Cancel</sl-button>
-        <sl-button id="review-save">Save</sl-button>
-        <sl-button variant="primary" id="review-save-sync" ${course && roster.some(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase()) ? '' : 'disabled'}><sl-icon slot="prefix" name="journal-arrow-up"></sl-icon> Save &amp; sync</sl-button>
+      <div slot="footer" class="flex flex-wrap items-center justify-between gap-2 w-full">
+        <div class="flex items-center gap-2">
+          <sl-button size="small" id="review-copy-feedback-link"><sl-icon slot="prefix" name="link-45deg"></sl-icon> Copy feedback link</sl-button>
+        </div>
+        <div class="flex items-center gap-2">
+          <sl-button id="review-cancel">Cancel</sl-button>
+          <sl-button id="review-save">Save</sl-button>
+          <sl-button variant="primary" id="review-save-sync" ${course && roster.some(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase()) ? '' : 'disabled'}><sl-icon slot="prefix" name="journal-arrow-up"></sl-icon> Save &amp; sync</sl-button>
+        </div>
       </div>`;
 
     document.body.appendChild(drawer);
     drawer.addEventListener('sl-after-hide', (e) => { if (e.target === drawer) drawer.remove(); });
     drawer.show();
+
+    drawer.querySelector('#review-copy-feedback-link')?.addEventListener('click', async () => {
+      try {
+        const student = roster.find(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase());
+        const link = await createFeedbackLink({ assignment: a, submission: { ...sub, manual: draft.manual, feedback: draft.feedback }, student, course });
+        await navigator.clipboard.writeText(link.url);
+        toast.success('Feedback link copied to clipboard!');
+      } catch (err) {
+        toast.danger('Could not create feedback link: ' + err.message);
+      }
+    });
+
+    drawer.querySelector('#review-link-suggested')?.addEventListener('click', async () => {
+      const suggested = sub.suggested_student;
+      if (!suggested) return;
+      sub.student_id = suggested.student_id;
+      sub.student_name = suggested.full_name || suggested.name;
+      sub.identity = suggested.access_code ? 'verified' : 'no_code_on_file';
+      sub.suggested_student = null;
+      sub.updated_at = new Date().toISOString();
+      await storage.table('assignment_submissions').put(sub);
+      if (courseId) {
+        await StudentMatcher.addStudentAlias(courseId, suggested.student_id, sub.claimed_name || sub.student_id);
+      }
+      drawer.hide();
+      toast.success(`Linked submission to ${suggested.full_name || suggested.name}`);
+      await load();
+      render();
+    });
+
+    drawer.querySelector('#review-add-roster')?.addEventListener('click', async () => {
+      if (!courseId) return;
+      const newStudent = {
+        id: crypto.randomUUID(),
+        course_id: courseId,
+        student_id: sub.student_id,
+        full_name: sub.claimed_name || sub.student_name || sub.student_id,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      await storage.table('gradebook_students').put(newStudent);
+      sub.student_name = newStudent.full_name;
+      sub.identity = 'no_code_on_file';
+      sub.updated_at = new Date().toISOString();
+      await storage.table('assignment_submissions').put(sub);
+      drawer.hide();
+      toast.success(`Added ${newStudent.full_name} to class roster.`);
+      await load();
+      render();
+    });
 
     drawer.querySelectorAll('[data-review-q]').forEach(li => {
       const qid = li.dataset.reviewQ;

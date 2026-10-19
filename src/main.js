@@ -6,11 +6,23 @@ import { toast } from './utils/toast.js';
 import { Sanitizer } from './core/sanitizer.js';
 import { registerServiceWorker, initLaunchHandlers } from './core/pwa.js';
 import { getTransport, setTransportConfig, RelayTransport } from './core/transport.js';
+import { RoleMode } from './state/role-mode.js';
+import { WelcomeRoleChooser } from './components/welcome-role-chooser.js';
 
 // Lazy-loaded or modular controller bindings
 async function loadHomeModule(...args) {
   const mod = await import('./modules/home/index.js');
   return mod.renderHomeView(...args);
+}
+
+async function loadStudentHubModule(...args) {
+  const mod = await import('./modules/student/index.js');
+  return mod.renderStudentHubView(...args);
+}
+
+async function loadStudentGradebookModule(...args) {
+  const mod = await import('./modules/student/gradebook.js');
+  return mod.renderStudentGradebookView(...args);
 }
 
 async function loadFlashcardsModule(...args) {
@@ -112,6 +124,8 @@ async function bootstrapApp() {
     router.register('#/report', loadStudentReportModule);
     router.register('#/feedback', loadFeedbackModule);
     router.register('#/guide', loadGuideModule);
+    router.register('#/student', loadStudentHubModule);
+    router.register('#/student/gradebook', loadStudentGradebookModule);
 
     // Global drag-and-drop listener for home and assignments navigating to #/inbox (§6.4)
     if (typeof window !== 'undefined') {
@@ -157,6 +171,28 @@ async function bootstrapApp() {
         router.handleRoute();
       });
     }
+
+    // Role Mode Initializer & Switcher
+    RoleMode.init();
+    const roleToggleBtn = document.getElementById('btn-toggle-role-mode');
+    const roleToggleLabel = document.getElementById('label-active-role');
+    const syncRoleUI = () => {
+      const mode = RoleMode.get();
+      if (roleToggleLabel) roleToggleLabel.textContent = mode === 'student' ? 'Student' : 'Teacher';
+      if (roleToggleBtn) roleToggleBtn.title = `Currently in ${mode === 'student' ? 'Student' : 'Teacher'} View. Click to switch.`;
+    };
+    syncRoleUI();
+    window.addEventListener('kb-role-mode-changed', () => {
+      syncRoleUI();
+      router.handleRoute();
+    });
+    roleToggleBtn?.addEventListener('click', () => {
+      const next = RoleMode.toggle();
+      toast.info(`Switched to ${next === 'student' ? 'Student View' : 'Teacher View'}`);
+      if (next === 'student') router.navigate('#/student');
+      else router.navigate('#/');
+    });
+    WelcomeRoleChooser.checkAndShow(router);
 
     // 6. Initialize Command Palette (Ctrl+K & ?)
     const { CommandPalette } = await import('./components/command-palette.js');

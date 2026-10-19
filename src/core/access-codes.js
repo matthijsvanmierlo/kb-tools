@@ -85,16 +85,30 @@ export class AccessCodes {
     return student;
   }
 
+  /** Build a direct setup link that auto-populates the student's keychain */
+  static createOnboardingPassUrl(student, course, baseUrl = (typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '')) {
+    const params = new URLSearchParams({
+      sid: student.student_id || '',
+      sname: student.full_name || '',
+      code: student.access_code || '',
+      cid: course?.id || '',
+      cname: course?.name || '',
+      csec: course?.section || ''
+    });
+    return `${baseUrl}#/student?${params.toString()}`;
+  }
+
   /** CSV of roster codes for printing or mail-merge */
-  static toCSV(students, course) {
+  static toCSV(students, course, baseUrl = '') {
     const rows = students.map(s => ({
       Class: course?.name || '',
       Section: course?.section || '',
       'Student Name': s.full_name || '',
       'Student ID': s.student_id || '',
-      'Access Code': s.access_code || ''
+      'Access Code': s.access_code || '',
+      'Onboarding Link': AccessCodes.createOnboardingPassUrl(s, course, baseUrl)
     }));
-    return toCSV(rows, ['Class', 'Section', 'Student Name', 'Student ID', 'Access Code']);
+    return toCSV(rows, ['Class', 'Section', 'Student Name', 'Student ID', 'Access Code', 'Onboarding Link']);
   }
 
   /** Print cut-out slips for students */
@@ -106,15 +120,19 @@ export class AccessCodes {
       return;
     }
     const esc = v => Sanitizer.escapeHTML(v);
-    const slips = students.filter(s => s.access_code).map(s => `
+    const slips = students.filter(s => s.access_code).map(s => {
+      const link = AccessCodes.createOnboardingPassUrl(s, course);
+      return `
       <div class="slip">
         <div class="cls">${esc(course?.name || 'Class')}${course?.section ? ` · ${esc(course.section)}` : ''}</div>
         <div class="name">${esc(s.full_name || '')}</div>
         <div class="id">Student ID: ${esc(s.student_id || '')}</div>
         <div class="code">${esc(s.access_code || '')}</div>
+        <div class="setup-url">Auto-setup link: <span class="url-text">${esc(link)}</span></div>
         <div class="hint">Keep this code private. You need it to view your grades and hand in assignments.</div>
       </div>
-    `).join('');
+    `;
+    }).join('');
     w.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Access codes — ${esc(course?.name || 'Class')}</title>
       <style>
         body { font-family: system-ui, sans-serif; margin: 24px; color: #0f172a; }
@@ -124,6 +142,7 @@ export class AccessCodes {
         .name { font-weight: 700; font-size: 16px; margin-top: 4px; }
         .id { font-size: 12px; color: #475569; }
         .code { font-family: ui-monospace, monospace; font-size: 22px; letter-spacing: .12em; margin: 8px 0; font-weight: 700; }
+        .setup-url { font-size: 10px; color: #2563eb; margin-bottom: 6px; word-break: break-all; }
         .hint { font-size: 10px; color: #64748b; }
       </style>
       </head><body><div class="grid">${slips}</div><script>window.onload=()=>window.print()<\/script></body></html>`);

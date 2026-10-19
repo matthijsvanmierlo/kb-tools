@@ -9,6 +9,7 @@ import { createSubmission, checkAccessCode } from './pipeline.js';
 import { QUESTION_TYPE_META } from './question-types.js';
 import { RelayTransport } from '../../core/transport.js';
 import { DraftRoamer } from './draft-roaming.js';
+import { StudentProfile } from '../../core/student-profile.js';
 
 /**
  * Student Take Mode (KB-ASSIGN-005)
@@ -68,13 +69,15 @@ export async function renderTakeView(params, router, container) {
     .map(q => ({ ...q, points: Math.max(0, Sanitizer.safeNumber(q?.points, 0)) }));
   const feedback = payload.settings?.feedback_mode || 'after_submit';
   const shareParams = store.getState('shareParams') || {};
-  const initialSid = params.sid || shareParams.sid || '';
-  const initialSname = params.sname || shareParams.sname || '';
+  const resolvedProfile = StudentProfile.resolveForPayload(payload, shareParams);
+  const initialSid = params.sid || shareParams.sid || resolvedProfile.student_id || '';
+  const initialSname = params.sname || shareParams.sname || resolvedProfile.full_name || '';
+  const initialCode = params.code || shareParams.code || resolvedProfile.access_code || '';
 
   const state = {
     screen: 'start',
     index: 0,
-    student: { name: initialSname, id: initialSid, code: '' },
+    student: { name: initialSname, id: initialSid, code: initialCode },
     answers: {},
     checked: {}, // qid → true/false/null after "Check answer" (instant feedback mode)
     startedAt: null,
@@ -170,6 +173,35 @@ export async function renderTakeView(params, router, container) {
         idInput.focus();
       }
       container.querySelector('#take-change-id')?.parentElement?.remove();
+    });
+
+    const codeInput = container.querySelector('#take-code');
+    const tryUnlockWithCode = async (code) => {
+      if (!code || !payload.roster_cards) return;
+      const unlocked = await SubmissionCrypto.unlockRosterCard(payload.assignment_id, payload.roster_cards, code);
+      if (unlocked) {
+        const nameInput = container.querySelector('#take-name');
+        const idInput = container.querySelector('#take-id');
+        if (nameInput && (!nameInput.value || !state.student.name)) {
+          nameInput.value = unlocked.name || '';
+          state.student.name = unlocked.name || '';
+        }
+        if (idInput && (!idInput.value || !state.student.id)) {
+          idInput.value = unlocked.sid || '';
+          state.student.id = unlocked.sid || '';
+        }
+      }
+    };
+
+    if (state.student.code && (!state.student.name || !state.student.id)) {
+      tryUnlockWithCode(state.student.code);
+    }
+
+    codeInput?.addEventListener('sl-input', (e) => {
+      const val = (e.target.value || '').trim();
+      if (val.length >= 6) {
+        tryUnlockWithCode(val);
+      }
     });
 
     async function begin() {
@@ -580,6 +612,15 @@ export async function renderTakeView(params, router, container) {
       safeStorage.set(receiptKey(), state.result);
       safeStorage.remove(draftKey());
       roamer?.markSubmitted().catch(() => {});
+      StudentProfile.saveIdentity({
+        studentId: state.student.id,
+        fullName: state.student.name,
+        accessCode: state.student.code,
+        courseId: payload.course_id || payload.course_meta?.course_id || null,
+        courseName: payload.course_meta?.course_name || '',
+        section: payload.course_meta?.section || '',
+        teacherFingerprint: payload.teacher_key?.fingerprint || ''
+      }).catch(() => {});
     }
     state.screen = 'results';
     render();

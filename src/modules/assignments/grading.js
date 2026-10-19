@@ -450,7 +450,7 @@ export async function checkAnswerLocally(studentQuestion, answer, salt) {
  * @param {{ publicJwk: object, fingerprint: string }} opts.teacherKeys
  * @param {Record<string,string>|null} [opts.rosterChecks] - STUDENT_ID → access-code check value
  */
-export async function buildStudentPayload(assignment, { teacherKeys, rosterChecks = null }) {
+export async function buildStudentPayload(assignment, { teacherKeys, rosterChecks = null, rosterCards = null, courseMeta = null }) {
   const settings = assignment.settings || {};
   const salt = assignment.publish?.salt;
   if (!salt) throw new Error('MISSING_PUBLISH_SALT');
@@ -465,7 +465,7 @@ export async function buildStudentPayload(assignment, { teacherKeys, rosterCheck
     v: 1,
     assignment_id: assignment.id,
     publish_version: assignment.publish?.version || 1,
-    course_id: assignment.gradebook?.course_id || null,
+    course_id: assignment.gradebook?.course_id || assignment.class_id || null,
     title: assignment.title || 'Assignment',
     instructions: assignment.instructions || '',
     due_date: settings.due_date || null,
@@ -479,6 +479,13 @@ export async function buildStudentPayload(assignment, { teacherKeys, rosterCheck
     salt,
     questions
   };
+
+  if (rosterCards && typeof rosterCards === 'object' && Object.keys(rosterCards).length) {
+    payload.roster_cards = rosterCards;
+  }
+  if (courseMeta && typeof courseMeta === 'object') {
+    payload.course_meta = courseMeta;
+  }
 
   if (settings.show_correct_answers) {
     // Revealed after submission. This is display text, not a secret.

@@ -8,9 +8,32 @@
  */
 import { store } from '../state/store.js';
 import { toast } from '../utils/toast.js';
+import { extractEnvelopeFromHtml } from './html-launcher.js';
 
 const SHARE_CACHE = 'kennisboost-share-inbox';
 const HANDIN_EXTENSIONS = ['.kbsub', '.kbr', '.zip'];
+
+let deferredInstallPrompt = null;
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeinstallprompt', (e) => {
+    e.preventDefault();
+    deferredInstallPrompt = e;
+    window.dispatchEvent(new CustomEvent('kb-pwa-installable', { detail: true }));
+  });
+}
+
+export function canInstallPwa() {
+  return !!deferredInstallPrompt;
+}
+
+export async function promptPwaInstall() {
+  if (!deferredInstallPrompt) return false;
+  deferredInstallPrompt.prompt();
+  const { outcome } = await deferredInstallPrompt.userChoice;
+  deferredInstallPrompt = null;
+  window.dispatchEvent(new CustomEvent('kb-pwa-installable', { detail: false }));
+  return outcome === 'accepted';
+}
 
 /** Extract the `#/share?...` part of a KennisBoost link, or null */
 export function extractShareHash(text, origin = (typeof window !== 'undefined' ? window.location.origin : '')) {
@@ -32,6 +55,7 @@ export function extractShareHash(text, origin = (typeof window !== 'undefined' ?
 export function classifyIncomingFile(name = '') {
   const lower = name.toLowerCase();
   if (HANDIN_EXTENSIONS.some(ext => lower.endsWith(ext))) return 'inbox';
+  if (lower.endsWith('.kbfeedback')) return 'feedback';
   return 'share';
 }
 
@@ -60,7 +84,26 @@ export async function openIncomingFiles(files, router) {
   }
 
   for (const file of others) {
-    const text = await file.text();
+    let text = await file.text();
+    if (file.name.toLowerCase().endsWith('.html') || file.name.toLowerCase().endsWith('.htm') || text.includes('kb-payload')) {
+      const extracted = extractEnvelopeFromHtml(text);
+      if (extracted) {
+        if (typeof extracted === 'object') {
+          if (extracted.kind === 'assignment_feedback' || extracted.type === 'assignment_feedback') {
+            router._activateSharedPayload?.({ type: 'assignment_feedback', payload: extracted });
+            return;
+          }
+          if (extracted.kbsub === 1 || extracted.epk) {
+            goToInbox(router, [file]);
+            continue;
+          }
+          text = JSON.stringify(extracted);
+        } else if (typeof extracted === 'string') {
+          text = extracted;
+        }
+      }
+    }
+
     const shareHash = extractShareHash(text);
     if (shareHash) {
       router.navigate(shareHash);

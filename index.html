@@ -69,10 +69,31 @@
 
       <!-- Primary Navigation (bottom tab bar on small screens) -->
       <nav class="kb-nav" aria-label="Main navigation">
-        <a href="#/" data-route-link="#/" class="kb-nav-link" title="Home">
+        <!-- Teacher View Links -->
+        <a href="#/" data-route-link="#/" class="kb-nav-link kb-nav-teacher" title="Home">
           <sl-icon name="house-door" aria-hidden="true"></sl-icon>
           <span>Home</span>
         </a>
+        <a href="#/assignments" data-route-link="#/assignments" class="kb-nav-link kb-nav-teacher" title="Assignments">
+          <sl-icon name="ui-checks" aria-hidden="true"></sl-icon>
+          <span>Assignments</span>
+        </a>
+        <a href="#/gradebook" data-route-link="#/gradebook" class="kb-nav-link kb-nav-teacher" title="Gradebook">
+          <sl-icon name="journal-check" aria-hidden="true"></sl-icon>
+          <span>Gradebook</span>
+        </a>
+
+        <!-- Student View Links -->
+        <a href="#/student" data-route-link="#/student" class="kb-nav-link kb-nav-student" title="Student Hub">
+          <sl-icon name="house-door" aria-hidden="true"></sl-icon>
+          <span>Student Hub</span>
+        </a>
+        <a href="#/student/gradebook" data-route-link="#/student/gradebook" class="kb-nav-link kb-nav-student" title="My Gradebook">
+          <sl-icon name="journal-check" aria-hidden="true"></sl-icon>
+          <span>My Grades</span>
+        </a>
+
+        <!-- Common Study Tools -->
         <a href="#/flashcards" data-route-link="#/flashcards" class="kb-nav-link" title="Flashcards">
           <sl-icon name="stack" aria-hidden="true"></sl-icon>
           <span>Flashcards</span>
@@ -85,18 +106,16 @@
           <sl-icon name="play-circle" aria-hidden="true"></sl-icon>
           <span>Video</span>
         </a>
-        <a href="#/assignments" data-route-link="#/assignments" class="kb-nav-link" title="Assignments">
-          <sl-icon name="ui-checks" aria-hidden="true"></sl-icon>
-          <span>Assignments</span>
-        </a>
-        <a href="#/gradebook" data-route-link="#/gradebook" class="kb-nav-link" title="Gradebook">
-          <sl-icon name="journal-check" aria-hidden="true"></sl-icon>
-          <span>Gradebook</span>
-        </a>
       </nav>
 
       <!-- Global Class Selector & Action Dock -->
       <div class="kb-header-actions">
+        <!-- Role Toggle (Teacher ⇄ Student) -->
+        <button type="button" id="btn-toggle-role-mode" class="kb-role-toggle-btn" aria-label="Switch between Teacher and Student view" title="Switch role view">
+          <sl-icon name="arrow-repeat"></sl-icon>
+          <span id="label-active-role">Teacher</span>
+        </button>
+
         <div id="kb-nav-class-selector" class="hidden lg:block"></div>
 
         <button type="button" id="btn-open-cmd-palette" class="kb-search-trigger hidden sm:inline-flex" title="Search and commands (Ctrl+K)" aria-label="Open command palette">
