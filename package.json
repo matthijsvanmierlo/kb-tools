@@ -12,6 +12,8 @@
     "relay": "node server/relay/index.js",
     "relay:add-teacher": "node scripts/relay-add-teacher.mjs",
     "relay:init": "node scripts/relay-init.mjs",
+    "escrow:keygen": "node scripts/escrow-keygen.mjs",
+    "escrow:recover": "node scripts/escrow-recover.mjs",
     "vendor": "node scripts/vendor.mjs",
     "csp": "node scripts/csp.mjs",
     "build:sw": "node scripts/sw-manifest.mjs",

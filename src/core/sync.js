@@ -2,6 +2,7 @@ import { storage } from './storage.js';
 import { toast } from '../utils/toast.js';
 import { isDeviceBoundKey, parseBackup } from './backup.js';
 import { KeyVault } from './keyvault.js';
+import { getPolicy } from './managed-config.js';
 import {
   BACKUP_TARGET_METADATA, createAdapter, writeRotatedBackup, listBackups, FsaFileAdapter
 } from './storage-adapters/index.js';
@@ -142,9 +143,10 @@ export class SyncManager {
   /** A backup is only useful on another device together with the recovery code */
   async promptRecoveryKitIfNeeded() {
     const status = await KeyVault.status(this.storage);
-    if (status.recoveryKitSaved || typeof document === 'undefined') return;
+    // Needs the dialog components (absent in tests and before Shoelace has loaded)
+    if (status.recoveryKitSaved || typeof customElements === 'undefined' || !customElements.get('sl-dialog')) return;
     const { RecoveryKit } = await import('../components/recovery-kit.js');
-    RecoveryKit.open();
+    await RecoveryKit.open().catch((err) => console.warn('Could not show the recovery kit:', err));
   }
 
   /**
@@ -152,18 +154,24 @@ export class SyncManager {
    * and validates the snapshot. Nothing is written yet.
    * @throws {VaultError|BackupError}
    */
-  async openBackupFile(text, { recoveryCode = null } = {}) {
+  async openBackupFile(text, { recoveryCode = null, escrow = null } = {}) {
     if (!KeyVault.isEncryptedBackup(text)) {
       return { ...parseBackup(text), text, encrypted: false, vault: null, usedRecoveryCode: false };
     }
-    const opened = await KeyVault.decryptBackup(this.storage, text, recoveryCode);
-    return { ...parseBackup(opened.text), text: opened.text, encrypted: true, vault: opened.vault, usedRecoveryCode: opened.usedRecoveryCode };
+    const opened = escrow
+      ? await KeyVault.decryptBackupWithEscrow(this.storage, text, escrow.unlockCode, escrow.passphrase)
+      : await KeyVault.decryptBackup(this.storage, text, recoveryCode);
+    return { ...parseBackup(opened.text), text: opened.text, encrypted: true, vault: opened.vault, usedRecoveryCode: opened.usedRecoveryCode, viaEscrow: Boolean(escrow) };
   }
 
   /** Restore a backup returned by openBackupFile */
   async restoreOpenedBackup(opened) {
     await this.storage.restoreMasterSnapshot(opened.text);
-    if (opened.vault) {
+    if (opened.vault && opened.viaEscrow) {
+      // The teacher had lost their kit: show the same recovery code again so they can save it
+      await KeyVault.adoptBackupKey(this.storage, opened.vault, { usedRecoveryCode: false });
+      await KeyVault.markRecoveryCodePending(this.storage);
+    } else if (opened.vault) {
       await KeyVault.adoptBackupKey(this.storage, opened.vault, { usedRecoveryCode: opened.usedRecoveryCode });
     } else {
       // A plaintext backup's key is migrated into the vault on next use
@@ -224,6 +232,7 @@ export class SyncManager {
       const now = Date.now();
       this.lastSyncTimestamp = now;
       await this.storage.setMetadata('last_manual_export_timestamp', now);
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('kb-backup-written'));
 
       this._updateSyncIndicator('synced');
       return true;
@@ -267,6 +276,7 @@ export class SyncManager {
 
       const now = Date.now();
       await this.storage.setMetadata('last_manual_export_timestamp', now);
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('kb-backup-written'));
       toast.success(`Encrypted backup exported as ${filename}`);
       await this.promptRecoveryKitIfNeeded();
       return blob;
@@ -285,8 +295,9 @@ export class SyncManager {
     const snoozeUntil = await this.storage.getMetadata('snooze_backup_until');
     const now = Date.now();
 
-    const THREE_DAYS_MS = 259200000; // 72 hours
-    if (lastExport && (now - lastExport > THREE_DAYS_MS) && now > (snoozeUntil || 0)) {
+    // 72 hours unless school IT set another reminder interval
+    const remindAfterMs = getPolicy().backupReminderHours * 3600 * 1000;
+    if (lastExport && (now - lastExport > remindAfterMs) && now > (snoozeUntil || 0)) {
       this._renderStaleBackupModal();
     }
   }

@@ -2,6 +2,7 @@ import { storage } from '../core/storage.js';
 import { sync } from '../core/sync.js';
 import { Sanitizer } from '../core/sanitizer.js';
 import { toast } from '../utils/toast.js';
+import { getPolicy } from '../core/managed-config.js';
 import {
   FsaFolderAdapter, GoogleDriveAdapter, OneDriveAdapter, LATEST_BACKUP_NAME,
   cloudConfig, supportsFolderAccess, backupExportedAt, isNewerThanLocal
@@ -38,9 +39,10 @@ function modal(label, html, buttons) {
 /** Ask the teacher where backups should go; resolves with an adapter that has access, or null */
 async function chooseLocation({ restoring }) {
   const cloud = cloudConfig();
+  const allowed = new Set(getPolicy().allowedBackupLocations);
   const current = sync.activeAdapter();
   const options = [];
-  if (supportsFolderAccess()) {
+  if (supportsFolderAccess() && allowed.has('folder')) {
     options.push({
       value: 'folder',
       icon: 'folder2-open',
@@ -49,10 +51,10 @@ async function chooseLocation({ restoring }) {
       text: 'Pick a folder that Google Drive for desktop, OneDrive, ChromeOS Files → Google Drive or a school network share already syncs (or a USB stick). No sign-in needed, and backups keep running in the background.'
     });
   }
-  if (cloud.google) {
+  if (cloud.google && allowed.has('gdrive')) {
     options.push({ value: 'gdrive', icon: 'google', title: 'Google Drive', text: 'Saved to a "KennisBoost Backups" folder in your school Google Drive. You will be asked to reconnect about once per session.' });
   }
-  if (cloud.microsoft) {
+  if (cloud.microsoft && allowed.has('onedrive')) {
     options.push({ value: 'onedrive', icon: 'microsoft', title: 'OneDrive', text: 'Saved to Apps/KennisBoost in your school OneDrive. Stays connected for about a day at a time.' });
   }
 

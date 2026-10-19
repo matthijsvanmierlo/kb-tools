@@ -16,6 +16,10 @@
  *
  *  4. Vault secrets — small values (class keys, sync workspace credentials) stored encrypted
  *     under the backup key in `vault_secrets`, so they travel inside backups but never in the clear.
+ *  5. School-assisted recovery (optional, when IT configures an escrow key) — the recovery secret
+ *     encrypted first under a passphrase only the teacher knows, then to the school's offline key.
+ *     It rides along in every backup envelope. Recovering needs both: IT turns the envelope into an
+ *     unlock code with its private key (scripts/escrow-recover.mjs); the teacher adds the passphrase.
  *
  * Backups (format v3) are deflate-raw → AES-256-GCM under the backup key. Restoring on a new
  * device needs the recovery code; restoring on the device that wrote the file needs nothing.
@@ -31,6 +35,10 @@ export const LEGACY_TEACHER_KEY = 'teacher_submission_keypair';
 export const TEACHER_KEY_WRAPPED = 'teacher_key_wrapped';
 export const RECOVERY_KIT_SAVED_AT = 'recovery_kit_saved_at';
 export const VAULT_SECRETS = 'vault_secrets';
+export const RECOVERY_ESCROW = 'recovery_escrow';
+export const ESCROW_UNLOCK_PREFIX = 'KBESC1.';
+export const MIN_ESCROW_PASSPHRASE = 10;
+const ESCROW_PBKDF2_ITERATIONS = 600000;
 export const LINK_BUNDLE_VERSION = 1;
 
 /** Device-bound vault entries: never exported, kept as-is on restore (see backup.js) */
@@ -162,6 +170,14 @@ export class KeyVault {
     return store.getMetadata(M.pendingRecoveryCode);
   }
 
+  /** Show the current code in the recovery kit again (after school-assisted recovery) */
+  static async markRecoveryCodePending(store) {
+    const vault = await store.getMetadata(M.backupKey);
+    if (!vault?.secret) return;
+    await store.setMetadata(M.pendingRecoveryCode, encodeRecoveryCode(vault.secret));
+    await store.setMetadata(RECOVERY_KIT_SAVED_AT, null);
+  }
+
   static async confirmRecoveryKitSaved(store) {
     await store.setMetadata(M.pendingRecoveryCode, null);
     await store.setMetadata(RECOVERY_KIT_SAVED_AT, new Date().toISOString());
@@ -283,12 +299,15 @@ export class KeyVault {
     let bytes = enc.encode(JSON.stringify(snapshot));
     if (compression === 'deflate-raw') bytes = await deflateRaw(bytes);
     const sealed = await aesEncrypt(vault.key, bytes, backupAad(vault.id, compression));
+    const escrow = await store.getMetadata(RECOVERY_ESCROW);
     return JSON.stringify({
       kennisboost_backup: ENCRYPTED_BACKUP_VERSION,
       exported_at: snapshot.exported_at || new Date().toISOString(),
       key_id: vault.id,
       compression,
-      ...sealed
+      ...sealed,
+      // Readable only with the school's escrow key AND the teacher's passphrase
+      ...(escrow?.key_id === vault.id ? { escrow: { admin_fingerprint: escrow.admin_fingerprint, envelope: escrow.envelope } } : {})
     });
   }
 
@@ -501,6 +520,75 @@ export class KeyVault {
     await this._writeAllSecrets(store, vault, merged);
     await this.forgetLocalTeacherKey(store);
     return this.getTeacherKeys(store);
+  }
+
+  // ---------------------------------------------------------------------------
+  // School-assisted recovery (escrow)
+  // ---------------------------------------------------------------------------
+
+  static async _escrowKey(passphrase, salt) {
+    const material = await subtle().importKey('raw', enc.encode(String(passphrase).normalize('NFKC')), 'PBKDF2', false, ['deriveKey']);
+    return subtle().deriveKey({ name: 'PBKDF2', salt, iterations: ESCROW_PBKDF2_ITERATIONS, hash: 'SHA-256' }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+  }
+
+  /**
+   * Register the recovery secret with the school's escrow key, protected by the teacher's
+   * passphrase. Must be repeated after the recovery code changes (escrowStatus says so).
+   */
+  static async setUpEscrow(store, adminPublicJwk, passphrase) {
+    if (String(passphrase || '').length < MIN_ESCROW_PASSPHRASE) {
+      throw new VaultError('WEAK_PASSPHRASE', `Choose a passphrase of at least ${MIN_ESCROW_PASSPHRASE} characters.`);
+    }
+    let vault = await this.ensure(store);
+    if (!vault.secret) {
+      await this.rotateRecoveryCode(store);
+      vault = await this.ensure(store);
+    }
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const inner = await aesEncrypt(await this._escrowKey(passphrase, salt), vault.secret, `kb-escrow-inner|${vault.id}`);
+    const envelope = await SubmissionCrypto.encryptForTeacher(adminPublicJwk, { salt: bytesToB64(salt), inner }, { kind: 'recovery-escrow', key_id: vault.id, v: 1 });
+    await store.setMetadata(RECOVERY_ESCROW, {
+      key_id: vault.id,
+      admin_fingerprint: await SubmissionCrypto.fingerprint(adminPublicJwk),
+      envelope,
+      created_at: new Date().toISOString()
+    });
+  }
+
+  /** @returns {Promise<{ registered: boolean, current: boolean }>} current: matches today's code and the configured school key */
+  static async escrowStatus(store, adminPublicJwk = null) {
+    const escrow = await store.getMetadata(RECOVERY_ESCROW);
+    if (!escrow) return { registered: false, current: false };
+    const vault = await store.getMetadata(M.backupKey);
+    const fpOk = !adminPublicJwk || escrow.admin_fingerprint === await SubmissionCrypto.fingerprint(adminPublicJwk);
+    return { registered: true, current: Boolean(vault && escrow.key_id === vault.id && fpOk) };
+  }
+
+  /**
+   * Open a backup with school-assisted recovery: the unlock code IT produced from this backup's
+   * escrow envelope, plus the teacher's passphrase.
+   */
+  static async decryptBackupWithEscrow(store, text, unlockCode, passphrase) {
+    let outer;
+    let unlock;
+    try {
+      outer = JSON.parse(text);
+      const code = String(unlockCode || '').replace(/\s+/g, '');
+      if (!code.startsWith(ESCROW_UNLOCK_PREFIX)) throw new Error('prefix');
+      unlock = JSON.parse(dec.decode(b64ToBytes(code.slice(ESCROW_UNLOCK_PREFIX.length))));
+    } catch (_) {
+      throw new VaultError('BAD_UNLOCK_CODE', 'That unlock code is incomplete. Copy it again from your IT department.');
+    }
+    if (unlock.key_id && unlock.key_id !== outer.key_id) {
+      throw new VaultError('BAD_UNLOCK_CODE', 'That unlock code was made for a different backup.');
+    }
+    let secret;
+    try {
+      secret = await aesDecrypt(await this._escrowKey(passphrase, b64ToBytes(unlock.salt)), unlock.inner, `kb-escrow-inner|${outer.key_id}`);
+    } catch (_) {
+      throw new VaultError('WRONG_PASSPHRASE', 'That passphrase does not match. Check it and try again.');
+    }
+    return this.decryptBackup(store, text, encodeRecoveryCode(secret));
   }
 
   /** Called after any restore: the local key may belong to the replaced data */

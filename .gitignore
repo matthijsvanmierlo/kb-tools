@@ -3,3 +3,5 @@ node_modules/
 config.js
 relay-deploy/
 data/
+school-escrow-private*.json
+archive-records/

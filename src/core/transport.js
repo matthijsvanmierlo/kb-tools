@@ -332,7 +332,7 @@ let _currentTransport = null;
 
 /**
  * Get the current sync transport instance according to configuration precedence:
- * window.KB_CONFIG -> app_metadata.sync_config -> NullTransport
+ * app_metadata.sync_config (the teacher's own token) -> window.KB_CONFIG with a token -> NullTransport
  *
  * @param {{ forceReload?: boolean }} options
  * @returns {Promise<SyncTransport>}
@@ -342,15 +342,15 @@ export async function getTransport({ forceReload = false } = {}) {
     return _currentTransport;
   }
 
+  // The teacher's own connection (with their token) wins; managed config only pre-fills the URL
   let config = null;
-  if (typeof window !== 'undefined' && window.KB_CONFIG && window.KB_CONFIG.baseUrl) {
+  try {
+    config = await storage.getMetadata('sync_config');
+  } catch {
+    config = null;
+  }
+  if (!config?.baseUrl && typeof window !== 'undefined' && window.KB_CONFIG?.baseUrl && window.KB_CONFIG.token) {
     config = window.KB_CONFIG;
-  } else {
-    try {
-      config = await storage.getMetadata('sync_config');
-    } catch {
-      config = null;
-    }
   }
 
   if (config && config.baseUrl) {

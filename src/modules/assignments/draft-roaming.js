@@ -9,6 +9,7 @@
 import { bytesToB64, b64ToBytes } from '../../core/submission-crypto.js';
 import { normalizeAccessCode } from '../../core/access-codes.js';
 import { RelayTransport } from '../../core/transport.js';
+import { getPolicy } from '../../core/managed-config.js';
 
 export const DRAFT_PREFIX = 'KBDRAFT1.';
 const PBKDF2_ITERATIONS = 100000;
@@ -72,7 +73,7 @@ export class DraftRoamer {
   }
 
   static canRoam(payload, accessCode) {
-    return Boolean(payload?.relay?.drop_id && normalizeAccessCode(accessCode));
+    return Boolean(getPolicy().studentDraftRoaming && payload?.relay?.drop_id && normalizeAccessCode(accessCode));
   }
 
   async _getSecrets() {

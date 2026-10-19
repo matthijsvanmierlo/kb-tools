@@ -68,6 +68,10 @@ async function loadFeedbackModule(...args) {
  */
 async function bootstrapApp() {
   try {
+    // 0. School IT settings (config.json), before anything that reads them
+    const { loadManagedConfig } = await import('./core/managed-config.js');
+    await loadManagedConfig();
+
     // 1. Initialize core storage & OPFS
     await storage.init();
 
@@ -77,6 +81,8 @@ async function bootstrapApp() {
     // Multi-device / co-teacher sync (a no-op that just prunes the outbox until set up)
     const { replication } = await import('./core/replication/manager.js');
     replication.start();
+    const { initDataSafety } = await import('./components/data-safety.js');
+    initDataSafety();
     window.addEventListener('kb-remote-changes', () => {
       // Show changes from other devices, unless the teacher is typing
       const el = document.activeElement;
@@ -349,10 +355,15 @@ async function openBackupWithRecoveryCode(text) {
   } catch (err) {
     if (err?.code !== 'NEEDS_RECOVERY_CODE') throw err;
   }
+  let escrowAvailable = false;
+  try {
+    escrowAvailable = Boolean(JSON.parse(text).escrow?.envelope);
+  } catch (_) {}
   let error = '';
   for (;;) {
-    const code = await promptRecoveryCode(error);
+    const code = await promptRecoveryCode(error, { escrowAvailable });
     if (!code) return null;
+    if (code.useEscrow) return openWithEscrow(text);
     try {
       return await sync.openBackupFile(text, { recoveryCode: code });
     } catch (err) {
@@ -362,7 +373,53 @@ async function openBackupWithRecoveryCode(text) {
   }
 }
 
-function promptRecoveryCode(error = '') {
+/** School-assisted recovery: an unlock code from IT plus the teacher's own passphrase */
+async function openWithEscrow(text) {
+  let error = '';
+  for (;;) {
+    const input = await promptEscrow(error);
+    if (!input) return null;
+    try {
+      return await sync.openBackupFile(text, { escrow: input });
+    } catch (err) {
+      if (!['WRONG_PASSPHRASE', 'BAD_UNLOCK_CODE', 'WRONG_CODE'].includes(err?.code)) throw err;
+      error = err.message;
+    }
+  }
+}
+
+function promptEscrow(error = '') {
+  return new Promise((resolve) => {
+    const dialog = document.createElement('sl-dialog');
+    dialog.label = 'School-assisted recovery';
+    dialog.innerHTML = `
+      <div class="space-y-3 text-sm">
+        <p class="text-slate-700">Send this backup file to your IT department and ask for an <strong>unlock code</strong>. Then enter it here with the passphrase you chose for school-assisted recovery.</p>
+        <sl-textarea id="esc-code" rows="3" label="Unlock code from IT" placeholder="KBESC1.…" class="font-mono"></sl-textarea>
+        <sl-input id="esc-pass" type="password" password-toggle label="Your passphrase" autocomplete="current-password"></sl-input>
+        ${error ? `<p class="text-xs text-rose-700">${Sanitizer.escapeHTML(error)}</p>` : ''}
+      </div>
+      <div slot="footer" class="flex justify-end gap-2">
+        <sl-button id="esc-cancel">Cancel</sl-button>
+        <sl-button variant="primary" id="esc-open">Open backup</sl-button>
+      </div>`;
+    let result = null;
+    dialog.querySelector('#esc-open').addEventListener('click', () => {
+      result = { unlockCode: dialog.querySelector('#esc-code').value.trim(), passphrase: dialog.querySelector('#esc-pass').value };
+      dialog.hide();
+    });
+    dialog.querySelector('#esc-cancel').addEventListener('click', () => dialog.hide());
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target !== dialog) return;
+      dialog.remove();
+      resolve(result);
+    });
+    document.body.appendChild(dialog);
+    dialog.show();
+  });
+}
+
+function promptRecoveryCode(error = '', { escrowAvailable = false } = {}) {
   return new Promise((resolve) => {
     const dialog = document.createElement('sl-dialog');
     dialog.label = 'Enter your recovery code';
@@ -372,11 +429,16 @@ function promptRecoveryCode(error = '') {
         <sl-input id="rc-input" autocomplete="off" spellcheck="false" placeholder="XXXX-XXXX-XXXX-XXXX-XXXX-XXXX-XX" class="font-mono"></sl-input>
         ${error ? `<p class="text-xs text-rose-700">${Sanitizer.escapeHTML(error)}</p>` : ''}
       </form>
-      <div slot="footer" class="flex justify-end gap-2">
+      <div slot="footer" class="flex flex-wrap justify-end gap-2">
+        ${escrowAvailable ? '<sl-button variant="text" id="rc-escrow">Lost your recovery code?</sl-button>' : ''}
         <sl-button id="rc-cancel">Cancel</sl-button>
         <sl-button variant="primary" id="rc-open">Open backup</sl-button>
       </div>`;
     let result = null;
+    dialog.querySelector('#rc-escrow')?.addEventListener('click', () => {
+      result = { useEscrow: true };
+      dialog.hide();
+    });
     const submit = () => {
       result = dialog.querySelector('#rc-input').value.trim() || null;
       dialog.hide();

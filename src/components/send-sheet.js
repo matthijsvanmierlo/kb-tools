@@ -3,6 +3,7 @@ import { toast } from '../utils/toast.js';
 import { RelayTransport } from '../core/transport.js';
 import { encodeQrFrames } from '../core/qr-transfer.js';
 import { supportsDirectTransfer } from '../core/p2p.js';
+import { getPolicy } from '../core/managed-config.js';
 
 const esc = (v) => Sanitizer.escapeHTML(v);
 
@@ -72,7 +73,7 @@ export async function openSendSheet({ text, filename, title, studentName, studen
   const options = rankSendOptions({
     hasRelay: Boolean(relay?.drop_id),
     qrFrames,
-    canDirect: supportsDirectTransfer(),
+    canDirect: supportsDirectTransfer() && getPolicy().allowDirectTransfer,
     canShare: canShareFiles(),
     hasEmail: Boolean(email)
   });

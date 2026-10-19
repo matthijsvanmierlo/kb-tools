@@ -1,0 +1,27 @@
+{
+  "school": {
+    "name": "Riverdale High School",
+    "supportUrl": "https://help.riverdale.example/kennisboost",
+    "itContact": "helpdesk@riverdale.example"
+  },
+  "relay": {
+    "baseUrl": "https://kb.riverdale.example"
+  },
+  "cloud": {
+    "google": { "clientId": "YOUR_CLIENT_ID.apps.googleusercontent.com", "hostedDomain": "riverdale.example" },
+    "microsoft": { "clientId": "00000000-0000-0000-0000-000000000000", "tenant": "organizations" }
+  },
+  "policy": {
+    "requireAutomaticBackup": true,
+    "backupReminderHours": 48,
+    "allowedBackupLocations": ["folder", "gdrive", "onedrive"],
+    "allowDirectTransfer": true,
+    "allowCoTeaching": true,
+    "studentDraftRoaming": true
+  },
+  "escrow": {
+    "adminPublicKey": { "kty": "EC", "crv": "P-256", "x": "REPLACE_WITH_OUTPUT_OF_npm_run_escrow:keygen", "y": "REPLACE_WITH_OUTPUT_OF_npm_run_escrow:keygen" },
+    "label": "the IT department",
+    "archivesReadableBySchool": false
+  }
+}

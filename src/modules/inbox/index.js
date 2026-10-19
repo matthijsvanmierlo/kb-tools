@@ -12,6 +12,7 @@ import { classifyText, expandFiles, splitSubmissionText } from '../../core/envel
 import { importSubmissionTexts } from '../assignments/import.js';
 import { importVideoReceipts, receiptErrorText } from '../video/receipt-import.js';
 import { getTransport } from '../../core/transport.js';
+import { getPolicy } from '../../core/managed-config.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -115,9 +116,9 @@ export async function renderInboxView(params, router, container) {
             <sl-button size="small" id="btn-scan-qr">
               <sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Scan QR codes
             </sl-button>
-            <sl-button size="small" id="btn-receive-direct" title="A student sends straight from their device on the same network">
+            ${getPolicy().allowDirectTransfer ? `<sl-button size="small" id="btn-receive-direct" title="A student sends straight from their device on the same network">
               <sl-icon slot="prefix" name="wifi"></sl-icon> Receive directly
-            </sl-button>
+            </sl-button>` : ''}
             <sl-button size="small" id="btn-paste-codes">
               <sl-icon slot="prefix" name="clipboard-plus"></sl-icon> Paste codes
             </sl-button>

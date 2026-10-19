@@ -22,6 +22,8 @@ function shouldBypassCache(urlString, baseOrigin) {
   try {
     const u = new URL(urlString, origin || 'http://localhost');
     if (u.pathname.startsWith('/api/')) return true;
+    // School IT settings must reach devices as soon as they change (the app keeps an offline copy)
+    if (u.pathname.endsWith('/config.json')) return true;
     return Boolean(origin) && u.origin !== origin;
   } catch (_) {
     return false;

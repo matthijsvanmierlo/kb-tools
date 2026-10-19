@@ -6,6 +6,7 @@ import { createOffer } from '../core/replication/link.js';
 import { KeyVault } from '../core/keyvault.js';
 import { showQrSequence } from './qr-handoff.js';
 import { modal, copyBlock, bindCopy, receiveCode } from './code-exchange.js';
+import { getPolicy } from '../core/managed-config.js';
 
 const esc = (v) => Sanitizer.escapeHTML(v);
 const fmt = (iso) => (iso ? new Date(iso).toLocaleString() : 'never');
@@ -211,6 +212,7 @@ export async function openDevicesDialog() {
       : ws.channel.type === 'location' ? 'Through your backup location'
         : 'Keys only (no automatic sync: set up a backup location or school server)';
   const conflicts = (await replication.conflicts()).length;
+  const policy = getPolicy();
 
   const r = await modal('Devices & sharing', `
     <div class="space-y-5 text-sm">
@@ -222,12 +224,12 @@ export async function openDevicesDialog() {
           <sl-button size="small" data-value="link"><sl-icon slot="prefix" name="phone"></sl-icon>Link a new device</sl-button>
           <sl-button size="small" data-value="setup"><sl-icon slot="prefix" name="laptop"></sl-icon>Set up this device from another one</sl-button>
           ${ws && ws.channel.type !== 'none' ? '<sl-button size="small" data-value="sync"><sl-icon slot="prefix" name="arrow-repeat"></sl-icon>Sync now</sl-button>' : ''}
-          <sl-button size="small" data-value="send-nearby"><sl-icon slot="prefix" name="wifi"></sl-icon>Send your data to a nearby device</sl-button>
-          <sl-button size="small" data-value="receive-nearby"><sl-icon slot="prefix" name="download"></sl-icon>Receive data from a nearby device</sl-button>
+          ${policy.allowDirectTransfer ? `<sl-button size="small" data-value="send-nearby"><sl-icon slot="prefix" name="wifi"></sl-icon>Send your data to a nearby device</sl-button>
+          <sl-button size="small" data-value="receive-nearby"><sl-icon slot="prefix" name="download"></sl-icon>Receive data from a nearby device</sl-button>` : ''}
           ${conflicts ? `<sl-button size="small" variant="warning" data-value="conflicts">Review ${conflicts} grade conflict${conflicts === 1 ? '' : 's'}</sl-button>` : ''}
         </div>
       </section>
-      <section class="space-y-2">
+      ${policy.allowCoTeaching ? `<section class="space-y-2">
         <h3 class="font-semibold text-slate-900">Co-teaching</h3>
         ${shares.length ? `<ul class="space-y-1">${shares.map(s => `
           <li class="flex items-center justify-between gap-2 border border-slate-200 rounded-lg px-3 py-1.5">
@@ -238,7 +240,7 @@ export async function openDevicesDialog() {
           <sl-button size="small" data-value="share"><sl-icon slot="prefix" name="people"></sl-icon>Share a class with a co-teacher</sl-button>
           <sl-button size="small" data-value="join"><sl-icon slot="prefix" name="box-arrow-in-right"></sl-icon>Join a co-teacher's class</sl-button>
         </div>
-      </section>
+      </section>` : ''}
     </div>`, [{ value: 'close', label: 'Close' }], {
     width: '600px',
     onReady: (d) => d.addEventListener('click', async (e) => {

@@ -6,6 +6,7 @@
  *                                 file (run after editing the import map)
  *   KB_RELAY_ORIGIN=https://relay.myschool.edu npm run csp   → same, allowing a cross-origin relay
  *   KB_CLOUD_PROVIDERS=google,microsoft npm run csp            → same, allowing cloud backup APIs
+ *   (a config.json next to index.html adds its relay and cloud providers automatically)
  *
  * Used by server.js (HTTP header, which can also carry frame-ancestors) and the security tests.
  *
@@ -53,9 +54,31 @@ export function cloudOriginsFromEnv(env = process.env) {
     });
 }
 
-/** Everything connect-src needs beyond 'self': relay plus enabled cloud providers */
-export function extraConnectOrigins(env = process.env) {
-  return [...new Set([...relayOriginsFromEnv(env), ...cloudOriginsFromEnv(env)])];
+export const CONFIG_JSON = path.join(root, 'config.json');
+
+/**
+ * Origins implied by the managed config.json (docs/it-deployment.md): its relay and the cloud
+ * providers it enables. A missing file means none; an unreadable one is an error.
+ */
+export function configOrigins(configPath = CONFIG_JSON) {
+  if (!fs.existsSync(configPath)) return [];
+  let cfg;
+  try {
+    cfg = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  } catch (err) {
+    throw new Error(`${path.basename(configPath)} is not valid JSON: ${err.message}`);
+  }
+  const out = [];
+  const relay = cfg.relay?.baseUrl || cfg.baseUrl;
+  if (relay) out.push(new URL(relay).origin);
+  if (cfg.cloud?.google?.clientId) out.push(...CLOUD_ORIGINS.google);
+  if (cfg.cloud?.microsoft?.clientId) out.push(...CLOUD_ORIGINS.microsoft);
+  return out;
+}
+
+/** Everything connect-src needs beyond 'self': relay plus enabled cloud providers (env and config.json) */
+export function extraConnectOrigins(env = process.env, { configPath = CONFIG_JSON } = {}) {
+  return [...new Set([...relayOriginsFromEnv(env), ...cloudOriginsFromEnv(env), ...configOrigins(configPath)])];
 }
 
 /** Hash of the inline import map exactly as the browser sees it (text between the tags). */

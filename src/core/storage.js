@@ -499,7 +499,7 @@ export class StorageManager {
     banner.className = 'kb-temp-session-banner no-print';
     banner.innerHTML = `
       <sl-icon name="exclamation-triangle-fill" aria-hidden="true"></sl-icon>
-      <span><strong>Temporary session detected.</strong> This browser profile may erase everything when you sign out or close it. Download a backup before closing this window.</span>
+      <span><strong>Temporary session detected.</strong> This browser profile may erase everything when you sign out or close it. Download a backup before closing this window. <a href="docs/it-deployment.md#keep-data-on-managed-devices" target="_blank" rel="noopener" class="underline">For IT: how to keep data on managed devices</a>.</span>
       <button type="button" data-action="backup">Download backup</button>
       <button type="button" data-action="dismiss" aria-label="Dismiss warning">✕</button>`;
     banner.querySelector('[data-action="backup"]').addEventListener('click', () => {
