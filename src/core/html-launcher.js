@@ -49,6 +49,20 @@ export function extractEnvelopeFromHtml(htmlText) {
 }
 
 /**
+ * Resolve the default web app URL for launchers based on current browser location or configuration.
+ * @returns {string}
+ */
+export function resolveDefaultAppUrl() {
+  if (typeof window !== 'undefined' && window.location && (window.location.protocol === 'http:' || window.location.protocol === 'https:')) {
+    return `${window.location.origin}${window.location.pathname}`;
+  }
+  if (typeof window !== 'undefined' && window.KB_CONFIG?.appUrl) {
+    return window.KB_CONFIG.appUrl;
+  }
+  return 'https://mvanmierlo.github.io/kb-tools/';
+}
+
+/**
  * Build a self-contained, offline-capable HTML file that opens in any browser on double click.
  *
  * @param {object} opts
@@ -59,6 +73,8 @@ export function extractEnvelopeFromHtml(htmlText) {
  * @param {string} [opts.studentId]
  * @param {string} [opts.instructions]
  * @param {string} [opts.appUrl] - fallback web app URL
+ * @param {string} [opts.shareUrl] - direct share link with #/share hash if available
+ * @param {boolean} [opts.autoLaunch=true] - automatically redirect to app after brief display
  * @returns {string} full HTML document
  */
 export function buildClickableHtmlFile({
@@ -68,7 +84,9 @@ export function buildClickableHtmlFile({
   studentName = '',
   studentId = '',
   instructions = '',
-  appUrl = 'https://mvanmierlo.github.io/kb-tools/'
+  appUrl = resolveDefaultAppUrl(),
+  shareUrl = '',
+  autoLaunch = true
 }) {
   const serialized = typeof payload === 'string' ? payload : JSON.stringify(payload);
   const now = new Date().toLocaleString();
@@ -147,6 +165,13 @@ export function buildClickableHtmlFile({
       margin-bottom: 24px;
       line-height: 1.5;
     }
+    .status-msg {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--primary);
+      margin-bottom: 16px;
+      min-height: 20px;
+    }
     .btn {
       display: inline-flex;
       align-items: center;
@@ -205,6 +230,8 @@ export function buildClickableHtmlFile({
       <div><strong>Created:</strong> ${esc(now)}</div>
     </div>
 
+    <div id="launch-status" class="status-msg">${autoLaunch ? 'Opening in KennisBoost Tools…' : ''}</div>
+
     <button id="btn-open-app" class="btn btn-primary">Open in KennisBoost Tools</button>
     <button id="btn-copy-code" class="btn btn-secondary">Copy Data Code</button>
 
@@ -226,26 +253,55 @@ ${serialized}
       const payloadEl = document.getElementById('kb-payload');
       const payloadText = payloadEl ? payloadEl.textContent.trim() : '';
       const appBaseUrl = ${JSON.stringify(appUrl)};
+      const shareUrl = ${JSON.stringify(shareUrl || '')};
+      const payloadType = ${JSON.stringify(payloadType)};
+      const title = ${JSON.stringify(title)};
+      const autoLaunch = ${JSON.stringify(Boolean(autoLaunch))};
 
       function openInApp() {
-        // Try storing payload in sessionStorage and redirecting to local app or web app
+        const statusEl = document.getElementById('launch-status');
+        if (statusEl) statusEl.textContent = 'Launching…';
+
+        // 1. Cross-Origin Envelope via window.name (persists across file:// -> https:// navigation in the same tab)
+        try {
+          window.name = 'KB_LAUNCH_V1:' + JSON.stringify({
+            payloadType: payloadType,
+            title: title,
+            payload: payloadText
+          });
+        } catch (_) {}
+
+        // 2. Fallback to sessionStorage if on same origin
         try {
           sessionStorage.setItem('kb_incoming_payload', payloadText);
         } catch (_) {}
 
-        // Check if hosted in same origin or local relative path
-        const isFileProtocol = window.location.protocol === 'file:';
-        let targetUrl = isFileProtocol ? appBaseUrl : './index.html';
+        // 3. Determine navigation target
+        let targetUrl = '';
+        if (shareUrl && shareUrl.length <= 32768) {
+          targetUrl = shareUrl;
+        } else {
+          const isFileProtocol = window.location.protocol === 'file:';
+          targetUrl = isFileProtocol ? appBaseUrl : './index.html';
 
-        if (${JSON.stringify(payloadType)} === 'assignment') {
-          targetUrl += '#/assignments/take';
-        } else if (${JSON.stringify(payloadType)} === 'feedback') {
-          targetUrl += '#/student/gradebook';
-        } else if (${JSON.stringify(payloadType)} === 'submission') {
-          targetUrl += '#/inbox';
+          if (!targetUrl.endsWith('/') && !targetUrl.includes('.html')) {
+            targetUrl += '/';
+          }
+
+          if (payloadType === 'assignment') {
+            targetUrl = targetUrl.replace(/#.*$/, '') + '#/assignments/take';
+          } else if (payloadType === 'feedback') {
+            targetUrl = targetUrl.replace(/#.*$/, '') + '#/student/gradebook';
+          } else if (payloadType === 'submission') {
+            targetUrl = targetUrl.replace(/#.*$/, '') + '#/inbox';
+          }
         }
 
-        window.open(targetUrl, '_self');
+        try {
+          window.location.href = targetUrl;
+        } catch (_) {
+          window.open(targetUrl, '_self');
+        }
       }
 
       document.getElementById('btn-open-app').addEventListener('click', openInApp);
@@ -261,8 +317,33 @@ ${serialized}
           alert('Could not copy automatically. Select and copy from the page source.');
         }
       });
+
+      if (autoLaunch) {
+        setTimeout(openInApp, 150);
+      }
     })();
   </script>
 </body>
 </html>`;
+}
+
+/**
+ * Trigger download of a clickable .html launcher file in the browser.
+ * @param {object} opts - parameters for buildClickableHtmlFile
+ * @param {string} [filename] - download filename (e.g. 'lesson.kbshare.html')
+ */
+export function downloadClickableHtmlFile(opts, filename) {
+  const html = buildClickableHtmlFile(opts);
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const defaultBase = (opts.title || 'kennisboost-file').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+  a.download = filename || `${defaultBase}.html`;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    if (a.parentNode) a.parentNode.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 400);
 }

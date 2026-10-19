@@ -2,6 +2,8 @@ import { z } from './zod.js';
 import papaLib from 'papaparse';
 import { Sanitizer } from './sanitizer.js';
 import { defaultAcademicYear } from './academic-year.js';
+import { generateUUID } from '../utils/uuid.js';
+import { validateQuestion } from '../modules/assignments/question-types.js';
 
 const Papa = papaLib.parse ? papaLib : (papaLib.default || papaLib);
 
@@ -347,6 +349,397 @@ export const ROSTER_HEADER_ALIASES = {
   'opmerkingen': 'notes'
 };
 
+export const ASSIGNMENT_HEADER_ALIASES = {
+  'type': 'type',
+  'questiontype': 'type',
+  'qtype': 'type',
+  'kind': 'type',
+  'prompt': 'prompt',
+  'question': 'prompt',
+  'questiontext': 'prompt',
+  'vraag': 'prompt',
+  'points': 'points',
+  'point': 'points',
+  'pts': 'points',
+  'score': 'points',
+  'punten': 'points',
+  'correctanswer': 'correct_answer',
+  'correct': 'correct_answer',
+  'answer': 'correct_answer',
+  'key': 'correct_answer',
+  'correct_answer': 'correct_answer',
+  'antwoord': 'correct_answer',
+  'optiona': 'option_a',
+  'option_a': 'option_a',
+  'option1': 'option_a',
+  'a': 'option_a',
+  'optionb': 'option_b',
+  'option_b': 'option_b',
+  'option2': 'option_b',
+  'b': 'option_b',
+  'optionc': 'option_c',
+  'option_c': 'option_c',
+  'option3': 'option_c',
+  'c': 'option_c',
+  'optiond': 'option_d',
+  'option_d': 'option_d',
+  'option4': 'option_d',
+  'd': 'option_d',
+  'optione': 'option_e',
+  'option_e': 'option_e',
+  'option5': 'option_e',
+  'e': 'option_e',
+  'optionf': 'option_f',
+  'option_f': 'option_f',
+  'option6': 'option_f',
+  'f': 'option_f',
+  'options': 'options',
+  'choices': 'options',
+  'keuzes': 'options',
+  'opties': 'options',
+  'explanation': 'explanation',
+  'feedback': 'explanation',
+  'rationale': 'explanation',
+  'uitleg': 'explanation',
+  'toelichting': 'explanation',
+  'rubric': 'rubric_hint',
+  'rubrichint': 'rubric_hint',
+  'rubric_hint': 'rubric_hint',
+  'tolerance': 'tolerance',
+  'tolerantie': 'tolerance',
+  'tolerancetype': 'tolerance_type',
+  'tolerance_type': 'tolerance_type',
+  'unit': 'unit',
+  'eenheid': 'unit',
+  'scoring': 'scoring',
+  'scoringrule': 'scoring',
+  'distractors': 'distractors',
+  'casesensitive': 'case_sensitive',
+  'case_sensitive': 'case_sensitive',
+  'allowtypo': 'allow_typo',
+  'allow_typo': 'allow_typo'
+};
+
+const TYPE_ALIASES = {
+  single_choice: 'single_choice',
+  mc: 'single_choice',
+  multiple_choice: 'single_choice',
+  single: 'single_choice',
+  choice: 'single_choice',
+
+  multi_choice: 'multi_choice',
+  multi: 'multi_choice',
+  checkbox: 'multi_choice',
+  select_all: 'multi_choice',
+  multiple_select: 'multi_choice',
+
+  true_false: 'true_false',
+  tf: 'true_false',
+  'true/false': 'true_false',
+  boolean: 'true_false',
+
+  short_text: 'short_text',
+  short: 'short_text',
+  short_answer: 'short_text',
+  text: 'short_text',
+
+  numeric: 'numeric',
+  number: 'numeric',
+  math: 'numeric',
+  numeric_value: 'numeric',
+  calc: 'numeric',
+
+  fill_blank: 'fill_blank',
+  blank: 'fill_blank',
+  blanks: 'fill_blank',
+  cloze: 'fill_blank',
+  fill_in_the_blank: 'fill_blank',
+
+  ordering: 'ordering',
+  order: 'ordering',
+  sequence: 'ordering',
+  sort: 'ordering',
+
+  matching: 'matching',
+  match: 'matching',
+  pairs: 'matching',
+
+  long_text: 'long_text',
+  essay: 'long_text',
+  long: 'long_text',
+  open: 'long_text',
+  free_response: 'long_text',
+  long_response: 'long_text'
+};
+
+export function normalizeAssignmentQuestionRow(rawRow) {
+  if (!rawRow || typeof rawRow !== 'object') {
+    return { id: generateUUID(), type: 'short_text', prompt: '', points: 1 };
+  }
+
+  const getField = (...names) => {
+    for (const name of names) {
+      if (rawRow[name] !== undefined && rawRow[name] !== null && String(rawRow[name]).trim() !== '') {
+        return rawRow[name];
+      }
+    }
+    return '';
+  };
+
+  const rawType = String(getField('type', 'questiontype', 'qtype', 'kind')).trim().toLowerCase();
+  const rawPrompt = String(getField('prompt', 'question', 'questiontext', 'vraag')).trim();
+  const rawPoints = getField('points', 'point', 'pts', 'score', 'punten');
+  const rawCorrect = String(getField('correct_answer', 'correctanswer', 'answer', 'key', 'correct', 'antwoord')).trim();
+  const rawExplanation = String(getField('explanation', 'feedback', 'rationale', 'uitleg', 'toelichting')).trim();
+  const rawTolerance = String(getField('tolerance', 'tolerantie')).trim();
+  const rawUnit = String(getField('unit', 'eenheid')).trim();
+  const rawScoring = String(getField('scoring', 'scoringrule')).trim().toLowerCase();
+  const rawRubric = String(getField('rubric_hint', 'rubrichint', 'rubric')).trim();
+  const rawDistractors = String(getField('distractors')).trim();
+
+  // Gather OptionA through OptionF
+  const optionCells = [
+    String(getField('option_a', 'optiona', 'option1', 'a') || '').trim(),
+    String(getField('option_b', 'optionb', 'option2', 'b') || '').trim(),
+    String(getField('option_c', 'optionc', 'option3', 'c') || '').trim(),
+    String(getField('option_d', 'optiond', 'option4', 'd') || '').trim(),
+    String(getField('option_e', 'optione', 'option5', 'e') || '').trim(),
+    String(getField('option_f', 'optionf', 'option6', 'f') || '').trim()
+  ].filter(Boolean);
+
+  const rawOptionsField = String(getField('options', 'choices', 'keuzes', 'opties')).trim();
+  const allOptionTexts = optionCells.length > 0
+    ? optionCells
+    : (rawOptionsField ? rawOptionsField.split(/[|;]/).map(s => s.trim()).filter(Boolean) : []);
+
+  // Normalize prompt: replace 3+ underscores with [[blank]]
+  const normalizedPrompt = rawPrompt.replace(/___+/g, '[[blank]]');
+
+  // Resolve question type alias
+  let resolvedType = TYPE_ALIASES[rawType] || rawType;
+
+  // Auto-infer type if missing
+  if (!resolvedType) {
+    if (normalizedPrompt.includes('[[blank]]')) {
+      resolvedType = 'fill_blank';
+    } else if (rawTolerance || rawUnit) {
+      resolvedType = 'numeric';
+    } else if (/^[-+]?[0-9]*\.?[0-9]+([eE][-+]?[0-9]+)?$/.test(rawCorrect) && allOptionTexts.length === 0) {
+      resolvedType = 'numeric';
+    } else if (/^(true|false|t|f|yes|no|1|0)$/i.test(rawCorrect) && allOptionTexts.length === 0) {
+      resolvedType = 'true_false';
+    } else if (allOptionTexts.some(o => o.includes('->') || o.includes(' : ') || o.includes(' = '))) {
+      resolvedType = 'matching';
+    } else if (allOptionTexts.length >= 2) {
+      if (rawCorrect.includes(';') || rawCorrect.includes('|') || (rawCorrect.includes(',') && !rawCorrect.includes(' '))) {
+        resolvedType = 'multi_choice';
+      } else {
+        resolvedType = 'single_choice';
+      }
+    } else if (rawRubric) {
+      resolvedType = 'long_text';
+    } else if (rawPoints || getField('type', 'questiontype', 'qtype', 'kind')) {
+      resolvedType = 'short_text';
+    } else {
+      resolvedType = '';
+    }
+  }
+
+  const id = (rawRow.id && typeof rawRow.id === 'string' && rawRow.id.length >= 16) ? rawRow.id : generateUUID();
+  const points = (rawPoints !== '' && !Number.isNaN(Number(rawPoints))) ? Math.max(0, Number(rawPoints)) : (
+    resolvedType === 'multi_choice' || resolvedType === 'fill_blank' || resolvedType === 'ordering' ? 2 :
+    resolvedType === 'matching' ? 3 :
+    resolvedType === 'long_text' ? 4 : 1
+  );
+
+  const q = {
+    id,
+    type: resolvedType,
+    prompt: normalizedPrompt,
+    points,
+    explanation: rawExplanation
+  };
+
+  switch (resolvedType) {
+    case 'single_choice': {
+      let correctIdx = -1;
+      const upperCorrect = rawCorrect.toUpperCase();
+      if (/^[A-F]$/.test(upperCorrect)) {
+        correctIdx = upperCorrect.charCodeAt(0) - 65;
+      } else if (/^[1-6]$/.test(rawCorrect)) {
+        correctIdx = parseInt(rawCorrect, 10) - 1;
+      } else if (rawCorrect) {
+        correctIdx = allOptionTexts.findIndex(t => t.toLowerCase() === rawCorrect.toLowerCase());
+      }
+      q.options = allOptionTexts.map((text, idx) => ({
+        id: generateUUID().slice(0, 8),
+        text,
+        is_correct: idx === correctIdx
+      }));
+      break;
+    }
+
+    case 'multi_choice': {
+      const tokens = rawCorrect ? rawCorrect.split(/[;|,]/).map(s => s.trim()).filter(Boolean) : [];
+      const correctIndices = new Set();
+      for (const tok of tokens) {
+        const u = tok.toUpperCase();
+        if (/^[A-F]$/.test(u)) {
+          correctIndices.add(u.charCodeAt(0) - 65);
+        } else if (/^[1-6]$/.test(tok)) {
+          correctIndices.add(parseInt(tok, 10) - 1);
+        } else {
+          const matchIdx = allOptionTexts.findIndex(t => t.toLowerCase() === tok.toLowerCase());
+          if (matchIdx !== -1) correctIndices.add(matchIdx);
+        }
+      }
+      q.options = allOptionTexts.map((text, idx) => ({
+        id: generateUUID().slice(0, 8),
+        text,
+        is_correct: correctIndices.has(idx)
+      }));
+      q.scoring = rawScoring === 'all_or_nothing' ? 'all_or_nothing' : 'partial';
+      break;
+    }
+
+    case 'true_false': {
+      const lower = rawCorrect.toLowerCase();
+      q.correct = ['true', 't', 'yes', '1', 'waar', 'juist'].includes(lower);
+      break;
+    }
+
+    case 'short_text': {
+      const acceptedAnswers = new Set();
+      if (rawCorrect) {
+        rawCorrect.split(/[;|]/).map(s => s.trim()).filter(Boolean).forEach(s => acceptedAnswers.add(s));
+      }
+      allOptionTexts.forEach(s => {
+        if (s) acceptedAnswers.add(s);
+      });
+      q.accepted = Array.from(acceptedAnswers);
+      q.case_sensitive = rawScoring === 'case_sensitive' || rawRow.case_sensitive === true || rawRow.case_sensitive === 'true';
+      q.allow_typo = rawRow.allow_typo !== false && rawRow.allow_typo !== 'false';
+      break;
+    }
+
+    case 'numeric': {
+      const cleanNum = rawCorrect.replace(/,/g, '.');
+      q.target = cleanNum !== '' && !Number.isNaN(Number(cleanNum)) ? Number(cleanNum) : NaN;
+      if (rawTolerance.endsWith('%')) {
+        q.tolerance = parseFloat(rawTolerance) || 0;
+        q.tolerance_type = 'percent';
+      } else {
+        q.tolerance = rawTolerance !== '' ? parseFloat(rawTolerance.replace(/,/g, '.')) || 0 : 0;
+        q.tolerance_type = 'absolute';
+      }
+      q.unit = rawUnit;
+      break;
+    }
+
+    case 'fill_blank': {
+      const blankCount = (normalizedPrompt.match(/\[\[blank\]\]/gi) || []).length;
+      const blanks = [];
+      const correctParts = rawCorrect ? rawCorrect.split(';').map(p => p.trim()) : [];
+
+      const count = Math.max(blankCount, allOptionTexts.length, correctParts.length, 1);
+      for (let i = 0; i < count; i++) {
+        const accepted = new Set();
+        if (correctParts[i]) {
+          correctParts[i].split('|').map(s => s.trim()).filter(Boolean).forEach(s => accepted.add(s));
+        }
+        if (allOptionTexts[i]) {
+          allOptionTexts[i].split('|').map(s => s.trim()).filter(Boolean).forEach(s => accepted.add(s));
+        }
+        blanks.push({ accepted: Array.from(accepted) });
+      }
+      q.blanks = blanks;
+      q.scoring = rawScoring === 'all_or_nothing' ? 'all_or_nothing' : 'partial';
+      q.allow_typo = false;
+      break;
+    }
+
+    case 'ordering': {
+      const items = allOptionTexts.length > 0
+        ? allOptionTexts
+        : (rawCorrect ? rawCorrect.split(/[;|]/).map(s => s.trim()).filter(Boolean) : []);
+      q.items = items.map(text => ({ id: generateUUID().slice(0, 8), text }));
+      q.scoring = rawScoring === 'all_or_nothing' ? 'all_or_nothing' : 'partial';
+      break;
+    }
+
+    case 'matching': {
+      const rawPairs = allOptionTexts.length > 0 ? allOptionTexts : (rawCorrect ? rawCorrect.split(';').map(s => s.trim()).filter(Boolean) : []);
+      const pairs = [];
+      const distractors = new Set();
+
+      for (const item of rawPairs) {
+        let left = '';
+        let right = '';
+        if (item.includes('->')) {
+          [left, right] = item.split('->').map(s => s.trim());
+        } else if (item.includes(' : ')) {
+          [left, right] = item.split(' : ').map(s => s.trim());
+        } else if (item.includes(' = ')) {
+          [left, right] = item.split(' = ').map(s => s.trim());
+        } else if (item.includes(':')) {
+          [left, right] = item.split(':').map(s => s.trim());
+        } else {
+          distractors.add(item);
+          continue;
+        }
+        if (left && right) {
+          pairs.push({ id: generateUUID().slice(0, 8), left, right });
+        } else if (item) {
+          distractors.add(item);
+        }
+      }
+
+      if (rawDistractors) {
+        rawDistractors.split(/[;|]/).map(s => s.trim()).filter(Boolean).forEach(d => distractors.add(d));
+      }
+
+      q.pairs = pairs;
+      q.distractors = Array.from(distractors);
+      q.scoring = rawScoring === 'all_or_nothing' ? 'all_or_nothing' : 'partial';
+      break;
+    }
+
+    case 'long_text': {
+      q.rubric_hint = rawRubric || rawCorrect || '';
+      break;
+    }
+
+    default:
+      break;
+  }
+
+  return q;
+}
+
+export const AssignmentQuestionRowSchema = z.any().transform(rawRow => {
+  return normalizeAssignmentQuestionRow(rawRow);
+}).superRefine((q, ctx) => {
+  const validTypes = ['single_choice', 'multi_choice', 'true_false', 'numeric', 'short_text', 'fill_blank', 'ordering', 'matching', 'long_text'];
+  if (!validTypes.includes(q.type)) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `Invalid or missing question type: "${q.type}"`,
+      path: ['Type']
+    });
+    return;
+  }
+  const issues = validateQuestion(q);
+  if (issues && issues.length > 0) {
+    for (const msg of issues) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: msg,
+        path: ['CorrectAnswer']
+      });
+    }
+  }
+});
+
 /**
  * Universal CSV Import Pipeline with deterministic schema validation and error reporting
  * @param {string} csvString
@@ -356,11 +749,14 @@ export const ROSTER_HEADER_ALIASES = {
  */
 export function parseCSVWithValidation(csvString, schema, options = {}) {
   const { aliases, dynamicTyping, ...papaOpts } = options;
-
-  const activeAliases = aliases || (schema === RosterRowSchema ? ROSTER_HEADER_ALIASES : HEADER_ALIASES);
+  const activeAliases = aliases || (
+    schema === RosterRowSchema ? ROSTER_HEADER_ALIASES :
+    schema === AssignmentQuestionRowSchema ? ASSIGNMENT_HEADER_ALIASES :
+    HEADER_ALIASES
+  );
   const effectiveDynamicTyping = dynamicTyping !== undefined
     ? dynamicTyping
-    : (schema === RosterRowSchema ? false : true);
+    : (schema === RosterRowSchema || schema === AssignmentQuestionRowSchema ? false : true);
 
   // Check if first row is a header row or raw data
   const rawParsed = Papa.parse(csvString, {
@@ -433,6 +829,19 @@ export function parseCSVWithValidation(csvString, schema, options = {}) {
         if (r[4] !== undefined) obj.description = r[4];
         if (r[5] !== undefined) obj.color = r[5];
         if (r[6] !== undefined) obj.citations = r[6];
+      } else if (schema === AssignmentQuestionRowSchema) {
+        obj.type = r[0];
+        obj.prompt = r[1];
+        if (r[2] !== undefined) obj.points = r[2];
+        if (r[3] !== undefined) obj.correct_answer = r[3];
+        if (r[4] !== undefined) obj.option_a = r[4];
+        if (r[5] !== undefined) obj.option_b = r[5];
+        if (r[6] !== undefined) obj.option_c = r[6];
+        if (r[7] !== undefined) obj.option_d = r[7];
+        if (r[8] !== undefined) obj.explanation = r[8];
+        if (r[9] !== undefined) obj.tolerance = r[9];
+        if (r[10] !== undefined) obj.unit = r[10];
+        if (r[11] !== undefined) obj.scoring = r[11];
       } else {
         r.forEach((val, idx) => { obj[`col_${idx}`] = val; });
       }
@@ -606,6 +1015,142 @@ export class Exporter {
     return Papa.unparse(flattened, {
       quotes: true,
       header: true
+    });
+  }
+
+  /**
+   * Export an assignment or questions array to canonical 12-column spreadsheet CSV
+   * @param {object|Array<object>} assignmentOrQuestions
+   * @returns {string} CSV text
+   */
+  static assignmentToCSV(assignmentOrQuestions) {
+    const questions = Array.isArray(assignmentOrQuestions)
+      ? assignmentOrQuestions
+      : (assignmentOrQuestions?.questions || []);
+
+    const rows = questions.map(q => {
+      const type = q.type || 'single_choice';
+      const prompt = q.prompt || '';
+      const points = q.points !== undefined ? q.points : 1;
+      const explanation = q.explanation || '';
+      let correctAnswer = '';
+      let optA = '';
+      let optB = '';
+      let optC = '';
+      let optD = '';
+      let tolerance = '';
+      let unit = '';
+      let scoring = q.scoring || '';
+
+      switch (type) {
+        case 'single_choice': {
+          const opts = q.options || [];
+          optA = opts[0]?.text || '';
+          optB = opts[1]?.text || '';
+          optC = opts[2]?.text || '';
+          optD = opts[3]?.text || '';
+          const correctIdx = opts.findIndex(o => o.is_correct);
+          if (correctIdx >= 0) {
+            correctAnswer = String.fromCharCode(65 + correctIdx);
+          }
+          break;
+        }
+
+        case 'multi_choice': {
+          const opts = q.options || [];
+          optA = opts[0]?.text || '';
+          optB = opts[1]?.text || '';
+          optC = opts[2]?.text || '';
+          optD = opts[3]?.text || '';
+          const correctLetters = opts
+            .map((o, idx) => o.is_correct ? String.fromCharCode(65 + idx) : null)
+            .filter(Boolean);
+          correctAnswer = correctLetters.join('; ');
+          scoring = q.scoring || 'partial';
+          break;
+        }
+
+        case 'true_false': {
+          correctAnswer = q.correct ? 'True' : 'False';
+          break;
+        }
+
+        case 'short_text': {
+          correctAnswer = (q.accepted || []).join(' | ');
+          if (q.case_sensitive) scoring = 'case_sensitive';
+          break;
+        }
+
+        case 'numeric': {
+          correctAnswer = q.target !== undefined && q.target !== null ? String(q.target) : '';
+          tolerance = q.tolerance !== undefined && q.tolerance !== null
+            ? (q.tolerance_type === 'percent' ? `${q.tolerance}%` : String(q.tolerance))
+            : '';
+          unit = q.unit || '';
+          break;
+        }
+
+        case 'fill_blank': {
+          const blanks = q.blanks || [];
+          correctAnswer = blanks.map(b => (b.accepted || []).join(' | ')).join('; ');
+          optA = (blanks[0]?.accepted || []).join(' | ');
+          optB = (blanks[1]?.accepted || []).join(' | ');
+          optC = (blanks[2]?.accepted || []).join(' | ');
+          optD = (blanks[3]?.accepted || []).join(' | ');
+          scoring = q.scoring || 'partial';
+          break;
+        }
+
+        case 'ordering': {
+          const items = q.items || [];
+          optA = items[0]?.text || '';
+          optB = items[1]?.text || '';
+          optC = items[2]?.text || '';
+          optD = items[3]?.text || '';
+          scoring = q.scoring || 'partial';
+          break;
+        }
+
+        case 'matching': {
+          const pairs = q.pairs || [];
+          optA = pairs[0] ? `${pairs[0].left} -> ${pairs[0].right}` : '';
+          optB = pairs[1] ? `${pairs[1].left} -> ${pairs[1].right}` : '';
+          optC = pairs[2] ? `${pairs[2].left} -> ${pairs[2].right}` : '';
+          optD = pairs[3] ? `${pairs[3].left} -> ${pairs[3].right}` : '';
+          correctAnswer = (q.distractors || []).join(' | ');
+          scoring = q.scoring || 'partial';
+          break;
+        }
+
+        case 'long_text': {
+          correctAnswer = q.rubric_hint || '';
+          break;
+        }
+
+        default:
+          break;
+      }
+
+      return {
+        Type: type,
+        Prompt: prompt,
+        Points: points,
+        CorrectAnswer: correctAnswer,
+        OptionA: optA,
+        OptionB: optB,
+        OptionC: optC,
+        OptionD: optD,
+        Explanation: explanation,
+        Tolerance: tolerance,
+        Unit: unit,
+        Scoring: scoring
+      };
+    });
+
+    return Papa.unparse(rows, {
+      quotes: true,
+      header: true,
+      columns: ['Type', 'Prompt', 'Points', 'CorrectAnswer', 'OptionA', 'OptionB', 'OptionC', 'OptionD', 'Explanation', 'Tolerance', 'Unit', 'Scoring']
     });
   }
 

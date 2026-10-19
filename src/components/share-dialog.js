@@ -1,6 +1,7 @@
 import { CryptoShareEngine } from '../core/crypto-share.js';
 import { Sanitizer } from '../core/sanitizer.js';
 import { toast } from '../utils/toast.js';
+import { downloadClickableHtmlFile } from '../core/html-launcher.js';
 
 /**
  * Unified ShareModal Component
@@ -64,6 +65,9 @@ export class ShareModal {
             <sl-button size="small" id="btn-copy-share-url" variant="primary">
               <sl-icon slot="prefix" name="clipboard-check"></sl-icon> Copy Link
             </sl-button>
+            <sl-button size="small" id="btn-download-html-file" variant="default">
+              <sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Clickable File (.html)
+            </sl-button>
             <sl-button size="small" id="btn-download-kbshare-file" variant="default">
               <sl-icon slot="prefix" name="file-earmark-arrow-down"></sl-icon> Download .kbshare
             </sl-button>
@@ -82,6 +86,7 @@ export class ShareModal {
     const safetyMeter = dialog.querySelector('#kb-url-safety-meter');
     const copyBtn = dialog.querySelector('#btn-copy-share-url');
     const dlBtn = dialog.querySelector('#btn-download-kbshare-file');
+    const dlHtmlBtn = dialog.querySelector('#btn-download-html-file');
 
     let currentPayload = null;
 
@@ -137,6 +142,19 @@ export class ShareModal {
         const cleanName = (title || 'lesson').replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
         CryptoShareEngine.downloadKbShareFile(currentPayload.rawFileContent, `${cleanName}.kbshare`);
         toast.success('Downloaded .kbshare file!');
+      }
+    });
+
+    dlHtmlBtn?.addEventListener('click', () => {
+      if (currentPayload && currentPayload.rawFileContent) {
+        const cleanName = (title || 'lesson').replace(/[^a-zA-Z0-9_-]/g, '_').toLowerCase();
+        downloadClickableHtmlFile({
+          title: title || 'KennisBoost Lesson',
+          payloadType: moduleType === 'flashcards' || moduleType === 'timeline' || moduleType === 'video' ? 'lesson' : moduleType,
+          payload: currentPayload.rawFileContent,
+          shareUrl: currentPayload.url
+        }, `${cleanName}.kbshare.html`);
+        toast.success('Downloaded clickable .html launcher!');
       }
     });
 

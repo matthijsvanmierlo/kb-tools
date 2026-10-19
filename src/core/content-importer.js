@@ -11,6 +11,7 @@ import { Sanitizer } from './sanitizer.js';
 import { generateUUID } from '../utils/uuid.js';
 import { splitSubmissionText, classifyText } from './envelope-router.js';
 import { extractEnvelopeFromHtml } from './html-launcher.js';
+import { cloneQuestion } from '../modules/assignments/question-types.js';
 
 export class ContentImportError extends Error {
   constructor(message, code) {
@@ -357,5 +358,21 @@ export class ContentImporter {
 
     targetDeck.updated_at = new Date().toISOString();
     return formatted.length;
+  }
+
+  /**
+   * Merge imported questions into an existing or new assignment, ensuring fresh UUIDs
+   * @param {object} targetAssignment
+   * @param {Array<object>} newQuestions
+   * @returns {object} updated assignment
+   */
+  static mergeQuestionsIntoAssignment(targetAssignment, newQuestions = []) {
+    const cloned = (newQuestions || []).map(q => cloneQuestion(q));
+    const questions = [...(targetAssignment.questions || []), ...cloned];
+    return {
+      ...targetAssignment,
+      questions,
+      updated_at: new Date().toISOString()
+    };
   }
 }

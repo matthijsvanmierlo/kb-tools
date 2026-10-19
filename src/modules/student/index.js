@@ -10,6 +10,7 @@ import { toast } from '../../utils/toast.js';
 import { StudentProfile } from '../../core/student-profile.js';
 import { StudentLedger } from './ledger.js';
 import { RoleMode } from '../../state/role-mode.js';
+import { openIncomingFiles } from '../../core/pwa.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -86,13 +87,20 @@ export async function renderStudentHubView(params, router, container) {
       </div>
 
       <!-- Quick Assignment / Share Launch Bar -->
-      <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-        <div class="flex items-center gap-2">
-          <sl-icon name="link-45deg" class="text-blue-600 text-lg"></sl-icon>
-          <h2 class="font-bold text-slate-900 text-base">Open Shared Assignment or Lesson</h2>
+      <div id="student-drop-zone" class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4 transition-all">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <sl-icon name="link-45deg" class="text-blue-600 text-lg"></sl-icon>
+            <h2 class="font-bold text-slate-900 text-base">Open Shared Assignment or Lesson</h2>
+          </div>
+          <span class="text-xs text-slate-400 hidden sm:inline">Drag &amp; drop files here</span>
         </div>
         <form id="form-quick-launch" class="flex flex-col sm:flex-row gap-3">
-          <sl-input id="input-quick-link" placeholder="Paste link (https://...#/share?...) or .kbshare file" class="flex-1" clearable></sl-input>
+          <sl-input id="input-quick-link" placeholder="Paste link (https://...#/share?...) or .kbshare text" class="flex-1" clearable></sl-input>
+          <input type="file" id="input-student-file-picker" accept=".kbshare,.kbfeedback,.kbsub,.kbr,.html,.htm,.json,.txt" class="hidden">
+          <sl-button type="button" id="btn-student-pick-file" variant="default">
+            <sl-icon slot="prefix" name="folder2-open"></sl-icon> Choose File
+          </sl-button>
           <sl-button type="submit" variant="primary">Open Lesson</sl-button>
         </form>
       </div>
@@ -143,18 +151,63 @@ export async function renderStudentHubView(params, router, container) {
     </div>
   `;
 
-  // Bind Quick Launch Form
+  // Bind Quick Launch Form & File Picker
   const form = container.querySelector('#form-quick-launch');
-  form?.addEventListener('submit', (e) => {
+  const filePicker = container.querySelector('#input-student-file-picker');
+  const pickFileBtn = container.querySelector('#btn-student-pick-file');
+
+  pickFileBtn?.addEventListener('click', () => {
+    filePicker?.click();
+  });
+
+  filePicker?.addEventListener('change', async (e) => {
+    const files = Array.from(e.target.files || []);
+    if (files.length) {
+      await openIncomingFiles(files, router);
+    }
+    filePicker.value = '';
+  });
+
+  form?.addEventListener('submit', async (e) => {
     e.preventDefault();
     const val = container.querySelector('#input-quick-link').value.trim();
-    if (!val) { toast.warning('Please enter a share link.'); return; }
+    if (!val) { toast.warning('Please enter a share link or choose a file.'); return; }
     if (val.includes('#/')) {
       router.navigate(val.slice(val.indexOf('#/')));
+    } else if (val.startsWith('{') || val.startsWith('KBSUB1.') || val.includes('kb-payload')) {
+      const fakeFile = new File([val], 'pasted-payload.json', { type: 'application/json' });
+      await openIncomingFiles([fakeFile], router);
     } else {
-      toast.warning('Invalid share link format.');
+      await router.openShareFile(val);
     }
   });
+
+  // Drag and drop support on Student Hub drop zone
+  const dropZone = container.querySelector('#student-drop-zone');
+  if (dropZone) {
+    ['dragenter', 'dragover'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.add('border-blue-500', 'bg-blue-50/40');
+      });
+    });
+
+    ['dragleave', 'drop'].forEach(eventName => {
+      dropZone.addEventListener(eventName, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dropZone.classList.remove('border-blue-500', 'bg-blue-50/40');
+      });
+    });
+
+    dropZone.addEventListener('drop', async (e) => {
+      const files = Array.from(e.dataTransfer?.files || []);
+      if (files.length) {
+        await openIncomingFiles(files, router);
+      }
+    });
+  }
 
   // Switch to teacher
   container.querySelector('#btn-switch-to-teacher')?.addEventListener('click', () => {

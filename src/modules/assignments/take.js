@@ -865,7 +865,8 @@ export async function renderTakeView(params, router, container) {
                 <div class="font-semibold text-amber-900">Hand it in to your teacher${payload.relay?.drop_id ? ' (if you did not use the button above)' : ''}:</div>
                 <p class="text-xs text-amber-800 mt-1">Download the file and upload it to your school's LMS (e.g. Google Classroom, Canvas), or pick another way: QR codes, straight to your teacher's device, email…</p>
                 <div class="mt-2 flex flex-wrap gap-2">
-                  <sl-button variant="primary" size="medium" id="res-download"><sl-icon slot="prefix" name="download"></sl-icon> Download submission file (.kbsub)</sl-button>
+                  <sl-button variant="primary" size="medium" id="res-download-html"><sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Download Clickable File (.html)</sl-button>
+                  <sl-button variant="default" size="medium" id="res-download"><sl-icon slot="prefix" name="download"></sl-icon> Download .kbsub</sl-button>
                   <sl-button size="medium" id="res-more"><sl-icon slot="prefix" name="send"></sl-icon> More ways to hand in…</sl-button>
                 </div>
               </li>
@@ -940,6 +941,19 @@ export async function renderTakeView(params, router, container) {
     });
 
     const subFilename = `${payload.title}_${state.student.id}`.replace(/[^a-z0-9_-]+/gi, '_') + '.kbsub';
+
+    container.querySelector('#res-download-html')?.addEventListener('click', async () => {
+      const { downloadClickableHtmlFile } = await import('../../core/html-launcher.js');
+      downloadClickableHtmlFile({
+        title: `${payload.title} - Submission`,
+        payloadType: 'submission',
+        payload: r.text,
+        studentName: state.student.name,
+        studentId: state.student.id,
+        instructions: 'Student submission package for KennisBoost Tools.'
+      }, `${subFilename}.html`);
+      toast.success('Clickable submission file downloaded (.kbsub.html). Now hand it in.');
+    });
 
     container.querySelector('#res-download')?.addEventListener('click', async () => {
       const { downloadText } = await import('../../components/send-sheet.js');

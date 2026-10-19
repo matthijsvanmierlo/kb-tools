@@ -26,7 +26,8 @@ export function rankSendOptions({ hasRelay, qrFrames, canDirect, canShare, hasEm
   if (qrOk) options.push({ id: 'qr', icon: 'qr-code', title: 'Show QR codes to your teacher', text: qrFrames > 1 ? `Your teacher scans ${qrFrames} codes with their camera.` : 'Your teacher scans one code with their camera.' });
   if (canDirect) options.push({ id: 'direct', icon: 'wifi', title: 'Send directly to your teacher\'s device', text: 'Same Wi-Fi or network. Good for large work; may be blocked on some school networks.' });
   if (!qrOk && qrFrames !== null) options.push({ id: 'qr', icon: 'qr-code', title: 'Show QR codes to your teacher', text: `Needs ${qrFrames} codes, which takes a while to scan.` });
-  options.push({ id: 'download', icon: 'download', title: 'Download the submission file', text: 'Upload the .kbsub file to your LMS (Google Classroom, Canvas, …).' });
+  options.push({ id: 'download-html', icon: 'file-earmark-code', title: 'Download clickable submission file (.html)', text: 'Opens in any browser on double click; upload to LMS or hand in to teacher.' });
+  options.push({ id: 'download', icon: 'download', title: 'Download raw submission file (.kbsub)', text: 'Upload the .kbsub file to your LMS (Google Classroom, Canvas, …).' });
   if (canShare) options.push({ id: 'share', icon: 'share', title: 'Share the file', text: 'Send it with another app on this device.' });
   if (hasEmail) options.push({ id: 'email', icon: 'envelope', title: 'Email your teacher', text: 'Opens your email; attach the downloaded file.' });
   options.push({ id: 'copy', icon: 'clipboard', title: 'Copy the submission code', text: 'Paste it wherever your teacher asked.' });
@@ -122,6 +123,17 @@ export async function openSendSheet({ text, filename, title, studentName, studen
         });
         if (result === 'sent') done('direct');
         else if (result === 'unreachable') openSendSheet({ text, filename, title, studentName, studentId, receiptId, relay, email, onHandedIn });
+      } else if (method === 'download-html') {
+        const { downloadClickableHtmlFile } = await import('../core/html-launcher.js');
+        downloadClickableHtmlFile({
+          title: `${title} - Submission`,
+          payloadType: 'submission',
+          payload: text,
+          studentName,
+          studentId,
+          instructions: 'Student submission package for KennisBoost Tools.'
+        }, (filename || 'submission.kbsub') + '.html');
+        toast.success('Clickable submission file downloaded (.kbsub.html). Now hand it in.');
       } else if (method === 'download') {
         downloadText(text, filename);
         toast.success('Submission file downloaded. Now hand it in.');

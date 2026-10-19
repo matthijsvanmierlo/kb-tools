@@ -4,7 +4,7 @@ import { router } from './router.js';
 import { store } from './state/store.js';
 import { toast } from './utils/toast.js';
 import { Sanitizer } from './core/sanitizer.js';
-import { registerServiceWorker, initLaunchHandlers } from './core/pwa.js';
+import { registerServiceWorker, initLaunchHandlers, canInstallPwa, promptPwaInstall, openIncomingFiles } from './core/pwa.js';
 import { getTransport, setTransportConfig, RelayTransport } from './core/transport.js';
 import { RoleMode } from './state/role-mode.js';
 import { WelcomeRoleChooser } from './components/welcome-role-chooser.js';
@@ -106,6 +106,7 @@ async function bootstrapApp() {
     router.register('#/', loadHomeModule);
     router.register('#/home', loadHomeModule);
     router.register('#/about', loadAboutModule);
+    router.register('#/philosophy', loadAboutModule);
     router.register('#/flashcards', loadFlashcardsModule);
     router.register('#/flashcards/edit', loadFlashcardsModule);
     router.register('#/flashcards/study', loadFlashcardsModule);
@@ -127,11 +128,11 @@ async function bootstrapApp() {
     router.register('#/student', loadStudentHubModule);
     router.register('#/student/gradebook', loadStudentGradebookModule);
 
-    // Global drag-and-drop listener for home and assignments navigating to #/inbox (§6.4)
+    // Global drag-and-drop listener for home, assignments, and student hub (§6.4)
     if (typeof window !== 'undefined') {
       window.addEventListener('dragover', (e) => {
         const hash = window.location.hash || '#/';
-        if (hash === '#/' || hash === '#/home' || hash.startsWith('#/assignments')) {
+        if (hash === '#/' || hash === '#/home' || hash.startsWith('#/assignments') || hash.startsWith('#/student')) {
           if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
             e.preventDefault();
           }
@@ -145,6 +146,12 @@ async function bootstrapApp() {
             e.preventDefault();
             store.setState('inboxDrop', files);
             router.navigate('#/inbox');
+          }
+        } else if (hash.startsWith('#/student')) {
+          const files = Array.from(e.dataTransfer?.files || []);
+          if (files.length > 0) {
+            e.preventDefault();
+            openIncomingFiles(files, router);
           }
         }
       });
@@ -639,12 +646,30 @@ export async function updateRelayStatusIndicator() {
 
 function bindHelpControls() {
   const helpMenu = document.getElementById('kb-help-menu');
+  const installPwaItem = document.getElementById('kb-menu-install-pwa');
+
+  const updatePwaInstallVisibility = (canInstall) => {
+    if (installPwaItem) {
+      if (canInstall) installPwaItem.classList.remove('hidden');
+      else installPwaItem.classList.add('hidden');
+    }
+  };
+
+  updatePwaInstallVisibility(canInstallPwa());
+  window.addEventListener('kb-pwa-installable', (e) => {
+    updatePwaInstallVisibility(Boolean(e.detail));
+  });
+
   helpMenu?.addEventListener('sl-select', async (e) => {
     const val = e.detail.item.value;
     if (val === 'guide') {
       router.navigate('#/guide');
     } else if (val === 'about') {
       router.navigate('#/about');
+    } else if (val === 'philosophy') {
+      router.navigate('#/philosophy');
+    } else if (val === 'install-pwa') {
+      await promptPwaInstall();
     } else if (val === 'shortcuts') {
       document.getElementById('menu-btn-keyboard-shortcuts')?.click();
     } else if (val === 'load-sample') {

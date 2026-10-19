@@ -90,7 +90,11 @@ export async function openIncomingFiles(files, router) {
       if (extracted) {
         if (typeof extracted === 'object') {
           if (extracted.kind === 'assignment_feedback' || extracted.type === 'assignment_feedback') {
-            router._activateSharedPayload?.({ type: 'assignment_feedback', payload: extracted });
+            if (typeof router._activateSharedPayload === 'function') {
+              router._activateSharedPayload({ type: 'assignment_feedback', payload: extracted });
+            } else {
+              router.navigate('#/student/gradebook');
+            }
             return;
           }
           if (extracted.kbsub === 1 || extracted.epk) {
@@ -114,6 +118,38 @@ export async function openIncomingFiles(files, router) {
       goToInbox(router, [file]);
       continue;
     }
+
+    // Inspect parsed JSON objects for feedback, grade reports, and assignment envelopes
+    try {
+      const parsed = typeof text === 'object' ? text : JSON.parse(text);
+      if (parsed && typeof parsed === 'object') {
+        if (parsed.kind === 'assignment_feedback' || parsed.type === 'assignment_feedback') {
+          if (typeof router._activateSharedPayload === 'function') {
+            router._activateSharedPayload({ type: 'assignment_feedback', payload: parsed });
+          } else {
+            router.navigate('#/student/gradebook');
+          }
+          return;
+        }
+        if (parsed.kind === 'student_grade_report' || parsed.type === 'student_grade_report') {
+          if (typeof router._activateSharedPayload === 'function') {
+            router._activateSharedPayload({ type: 'student_grade_report', payload: parsed });
+          } else {
+            router.navigate('#/student/gradebook');
+          }
+          return;
+        }
+        if (parsed.kind === 'kb-assignment' || (parsed.type === 'assignment' && parsed.assignment)) {
+          if (typeof router._activateSharedPayload === 'function') {
+            router._activateSharedPayload({ type: 'assignment', payload: parsed.assignment || parsed });
+          } else if (typeof router.openShareFile === 'function') {
+            await router.openShareFile(text);
+          }
+          return;
+        }
+      }
+    } catch (_) {}
+
     await router.openShareFile(text);
   }
 }
@@ -136,8 +172,56 @@ export async function takeSharedFiles() {
   return files;
 }
 
+/**
+ * Check if the window was launched with a payload in window.name or sessionStorage.
+ * @param {{ navigate: Function }} router
+ */
+export async function consumeWindowLaunchPayload(router) {
+  if (typeof window === 'undefined') return false;
+
+  let rawPayload = null;
+  let filename = 'incoming-payload.json';
+  let payloadType = '';
+
+  // 1. Check window.name envelope (cross-origin bridge)
+  if (typeof window.name === 'string' && window.name.startsWith('KB_LAUNCH_V1:')) {
+    try {
+      const data = JSON.parse(window.name.slice('KB_LAUNCH_V1:'.length));
+      rawPayload = data.payload;
+      payloadType = data.payloadType || data.type || '';
+      filename = (data.title ? data.title.toLowerCase().replace(/[^a-z0-9_-]+/g, '-') : 'incoming') +
+        (payloadType === 'submission' ? '.kbsub' : payloadType === 'feedback' ? '.kbfeedback' : '.kbshare');
+    } catch (e) {
+      console.warn('Could not parse window.name launch payload:', e);
+    }
+    try { window.name = ''; } catch (_) {}
+  }
+
+  // 2. Check sessionStorage fallback
+  if (!rawPayload) {
+    try {
+      const stored = sessionStorage.getItem('kb_incoming_payload');
+      if (stored) {
+        rawPayload = stored;
+        sessionStorage.removeItem('kb_incoming_payload');
+      }
+    } catch (_) {}
+  }
+
+  if (rawPayload) {
+    const content = typeof rawPayload === 'string' ? rawPayload : JSON.stringify(rawPayload);
+    const file = new File([content], filename, { type: 'application/json' });
+    await openIncomingFiles([file], router);
+    return true;
+  }
+  return false;
+}
+
 export function initLaunchHandlers(router) {
   if (typeof window === 'undefined') return;
+
+  // Consume any incoming launch payload passed via window.name or sessionStorage
+  consumeWindowLaunchPayload(router);
 
   if ('launchQueue' in window && typeof window.launchQueue.setConsumer === 'function') {
     window.launchQueue.setConsumer(async (params) => {

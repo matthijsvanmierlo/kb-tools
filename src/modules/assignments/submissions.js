@@ -634,8 +634,9 @@ export async function renderSubmissions(assignment, router, container) {
         <sl-textarea id="review-feedback" label="Overall feedback" rows="3" resize="auto" value="${esc(draft.feedback)}" placeholder="Shown to the student with their grade"></sl-textarea>
       </div>
       <div slot="footer" class="flex flex-wrap items-center justify-between gap-2 w-full">
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
           <sl-button size="small" id="review-copy-feedback-link"><sl-icon slot="prefix" name="link-45deg"></sl-icon> Copy feedback link</sl-button>
+          <sl-button size="small" id="review-download-feedback-html"><sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Download feedback (.html)</sl-button>
         </div>
         <div class="flex items-center gap-2">
           <sl-button id="review-cancel">Cancel</sl-button>
@@ -666,6 +667,27 @@ export async function renderSubmissions(assignment, router, container) {
         toast.success('Feedback link copied to clipboard!');
       } catch (err) {
         toast.danger('Could not create feedback link: ' + err.message);
+      }
+    });
+
+    drawer.querySelector('#review-download-feedback-html')?.addEventListener('click', async () => {
+      try {
+        const student = roster.find(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase());
+        const link = await createFeedbackLink({ assignment: a, submission: { ...sub, manual: draft.manual, feedback: draft.feedback }, student, course });
+        const { downloadClickableHtmlFile } = await import('../../core/html-launcher.js');
+        const studentName = sub.student_name || sub.claimed_name || sub.student_id || 'Student';
+        const cleanName = `${a.title || 'feedback'}_${studentName}`.replace(/[^a-z0-9_-]+/gi, '_').toLowerCase();
+        downloadClickableHtmlFile({
+          title: `Feedback: ${a.title || 'Assignment'}`,
+          payloadType: 'feedback',
+          payload: link.payload,
+          studentName,
+          studentId: sub.student_id,
+          shareUrl: link.url
+        }, `${cleanName}.kbfeedback.html`);
+        toast.success('Downloaded feedback launcher file (.kbfeedback.html)!');
+      } catch (err) {
+        toast.danger('Could not download feedback file: ' + err.message);
       }
     });
 

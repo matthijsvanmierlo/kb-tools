@@ -22,6 +22,17 @@ export const TIMELINE_CSV_TEMPLATE = `Title,Start Date,End Date,Category,Descrip
 "World War II","1939-09-01","1945-09-02","History","Global military conflict involving the vast majority of the world's countries.","#e11d48","National Archives"
 "Invention of the Printing Press","1440","","Technology","Johannes Gutenberg introduces movable type printing to Europe, revolutionizing communication.","#7c3aed","British Library"`;
 
+export const ASSIGNMENT_CSV_TEMPLATE = `Type,Prompt,Points,CorrectAnswer,OptionA,OptionB,OptionC,OptionD,Explanation,Tolerance,Unit,Scoring
+"single_choice","What is the primary powerhouse of a eukaryotic cell?",1,"B","Nucleus","Mitochondria","Ribosome","Golgi apparatus","Mitochondria generate most of the cell's ATP via oxidative phosphorylation.","","",""
+"multi_choice","Which of the following are noble gases? (Select all that apply)",2,"A; C","Helium (He)","Nitrogen (N)","Neon (Ne)","Oxygen (O)","Helium and Neon are in Group 18 of the periodic table.","","","partial"
+"true_false","In a vacuum, all objects fall with the same acceleration regardless of mass.",1,"True","","","","","Galileo's principle of equivalence shows gravity accelerates all masses equally.","","",""
+"numeric","Calculate the molar mass of water ($\\\\ce{H2O}$).",2,"18.015","","","","","2 × 1.008 (H) + 15.999 (O) = 18.015 g/mol","0.05","g/mol",""
+"short_text","What organelle is responsible for photosynthesis in plant cells?",1,"chloroplast | chloroplasts","","","","","Chloroplasts contain chlorophyll and capture light energy.","","",""
+"fill_blank","During cellular respiration, glucose is broken down in the [[blank]] to produce [[blank]].",2,"cytoplasm | cytosol; pyruvate | ATP","cytoplasm | cytosol","pyruvate | ATP","","","Glycolysis occurs in the cytoplasm and yields pyruvate and ATP.","","","partial"
+"ordering","Arrange the phases of mitosis in chronological order from first to last.",2,"","Prophase","Metaphase","Anaphase","Telophase","PMAT: Prophase -> Metaphase -> Anaphase -> Telophase.","","","partial"
+"matching","Match each chemical formula to its common name.",3,"","H2O -> Water","NaCl -> Table Salt","CO2 -> Carbon Dioxide","NH3 -> Ammonia","Standard IUPAC and common chemical names.","","","partial"
+"long_text","Explain how Newton's Third Law applies when a rocket launches into space.",4,"Look for: (1) exhaust gases pushed downward (action), (2) rocket pushed upward with equal and opposite force (reaction), (3) conservation of momentum.","","","","","Grading rubric for teacher review.","","",""`;
+
 export const STANDARDS_CSV_TEMPLATE = `Code,Description
 "HS-PS1-1","Use the periodic table as a model to predict the relative properties of elements based on patterns of electrons in the outermost energy level."
 "HS-PS1-2","Construct and revise an explanation for the outcome of a simple chemical reaction based on outermost electron states and periodic trends."`;

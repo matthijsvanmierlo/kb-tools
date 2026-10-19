@@ -85,6 +85,7 @@ export class CommandPalette {
     const staticActions = [
       { category: 'Navigation', title: 'Go to Home Hub', icon: 'house-door', run: () => router.navigate('#/') },
       { category: 'Navigation', title: 'About KennisBoost Tools', icon: 'info-circle', run: () => router.navigate('#/about') },
+      { category: 'Navigation', title: 'Local-First Philosophy & Privacy Architecture', icon: 'shield-check', run: () => router.navigate('#/philosophy') },
       { category: 'Navigation', title: 'Open Inbox (Collect Student Work)', icon: 'inbox', run: () => router.navigate('#/inbox') },
       { category: 'Navigation', title: 'Open Flashcards Library', icon: 'stack', run: () => router.navigate('#/flashcards') },
       { category: 'Navigation', title: 'Open Timeline Maker', icon: 'bar-chart-steps', run: () => router.navigate('#/timeline') },

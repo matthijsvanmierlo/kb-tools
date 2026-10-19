@@ -8,8 +8,19 @@ import { ContentImporter, ContentImportError } from '../core/content-importer.js
 import { Sanitizer } from '../core/sanitizer.js';
 import { ClassManager } from './class-manager.js';
 import { toast } from '../utils/toast.js';
-import { router } from '../router.js';
-import { parseCSVWithValidation, FlashcardItemSchema } from '../core/validator.js';
+import {
+  parseCSVWithValidation,
+  FlashcardItemSchema,
+  TimelineEventSchema,
+  AssignmentQuestionRowSchema
+} from '../core/validator.js';
+import {
+  downloadCSVTemplate,
+  ASSIGNMENT_CSV_TEMPLATE,
+  FLASHCARDS_CSV_TEMPLATE,
+  TIMELINE_CSV_TEMPLATE,
+  ROSTER_CSV_TEMPLATE
+} from '../core/csv-templates.js';
 
 export class UniversalImportDialog {
   /**
@@ -114,7 +125,20 @@ export class UniversalImportDialog {
       </div>
 
       <div slot="footer" class="flex items-center justify-between w-full">
-        <sl-button variant="default" id="btn-univ-cancel">Cancel</sl-button>
+        <div class="flex items-center gap-2">
+          <sl-dropdown id="univ-template-dropdown">
+            <sl-button slot="trigger" size="small" caret variant="default">
+              <sl-icon slot="prefix" name="download"></sl-icon> Templates
+            </sl-button>
+            <sl-menu id="univ-template-menu">
+              <sl-menu-item value="assignment">Assignment CSV Template</sl-menu-item>
+              <sl-menu-item value="flashcards">Flashcards CSV Template</sl-menu-item>
+              <sl-menu-item value="timeline">Timeline CSV Template</sl-menu-item>
+              <sl-menu-item value="roster">Class Roster CSV Template</sl-menu-item>
+            </sl-menu>
+          </sl-dropdown>
+          <sl-button variant="default" id="btn-univ-cancel" size="small">Cancel</sl-button>
+        </div>
         <sl-button variant="primary" id="btn-univ-submit" disabled>
           <sl-icon slot="prefix" name="cloud-download"></sl-icon>
           <span id="btn-univ-submit-text">Import to Library</span>
@@ -302,11 +326,34 @@ export class UniversalImportDialog {
 
       // Case D: CSV / TSV spreadsheet
       if (inspectionResult.kind === 'csv') {
-        const validated = parseCSVWithValidation(trimmed, FlashcardItemSchema);
-        if (validated.success && validated.data?.length > 0) {
+        // 1. Try AssignmentQuestionRowSchema first
+        const asgValidated = parseCSVWithValidation(trimmed, AssignmentQuestionRowSchema);
+        if (asgValidated.success && asgValidated.data?.length > 0) {
+          const asgPayload = {
+            title: filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ') || 'Imported Assignment',
+            questions: asgValidated.data
+          };
+          renderPreviewForUnpacked('assignment', asgPayload, filename);
+          return;
+        }
+
+        // 2. Try TimelineEventSchema next
+        const timelineValidated = parseCSVWithValidation(trimmed, TimelineEventSchema);
+        if (timelineValidated.success && timelineValidated.data?.length > 0) {
+          const timelinePayload = {
+            title: filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ') || 'Imported Timeline',
+            events: timelineValidated.data
+          };
+          renderPreviewForUnpacked('timeline', timelinePayload, filename);
+          return;
+        }
+
+        // 3. Try FlashcardItemSchema
+        const flashcardValidated = parseCSVWithValidation(trimmed, FlashcardItemSchema);
+        if (flashcardValidated.success && flashcardValidated.data?.length > 0) {
           const deckPayload = {
             title: filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ') || 'Imported Flashcards',
-            cards: validated.data
+            cards: flashcardValidated.data
           };
           renderPreviewForUnpacked('flashcards', deckPayload, filename);
           return;
@@ -318,7 +365,7 @@ export class UniversalImportDialog {
           </span>
         `;
         previewError.classList.remove('hidden');
-        previewError.textContent = validated.errors?.[0]?.message || 'CSV format not recognized.';
+        previewError.textContent = asgValidated.errors?.[0]?.message || timelineValidated.errors?.[0]?.message || flashcardValidated.errors?.[0]?.message || 'CSV format not recognized.';
         return;
       }
 
@@ -467,6 +514,20 @@ export class UniversalImportDialog {
       } finally {
         isProcessing = false;
         submitBtn.loading = false;
+      }
+    });
+
+    const templateMenu = dialog.querySelector('#univ-template-menu');
+    templateMenu?.addEventListener('sl-select', (e) => {
+      const val = e.detail?.item?.value;
+      if (val === 'assignment') {
+        downloadCSVTemplate('assignment_template.csv', ASSIGNMENT_CSV_TEMPLATE);
+      } else if (val === 'flashcards') {
+        downloadCSVTemplate('flashcards_template.csv', FLASHCARDS_CSV_TEMPLATE);
+      } else if (val === 'timeline') {
+        downloadCSVTemplate('timeline_template.csv', TIMELINE_CSV_TEMPLATE);
+      } else if (val === 'roster') {
+        downloadCSVTemplate('roster_template.csv', ROSTER_CSV_TEMPLATE);
       }
     });
 

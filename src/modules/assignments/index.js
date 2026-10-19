@@ -6,6 +6,11 @@ import { ClassManager } from '../../components/class-manager.js';
 import { ensureSampleAssignment } from './seed.js';
 import { cloneQuestion } from './question-types.js';
 import { totalPoints } from './grading.js';
+import { CSVImportDialog } from '../../components/csv-import-dialog.js';
+import { ASSIGNMENT_CSV_TEMPLATE } from '../../core/csv-templates.js';
+import { AssignmentQuestionRowSchema } from '../../core/validator.js';
+import { ContentImporter } from '../../core/content-importer.js';
+import { normalizeSharedEnvelope } from '../../core/shared-payload.js';
 
 /**
  * Assignments Module Controller (KB-ASSIGN-000)
@@ -95,6 +100,64 @@ async function renderLibrary(container) {
       const n = item.questions?.length || 0;
       const sub = counts.get(item.id) || 0;
       return `${n} question${n === 1 ? '' : 's'} • ${totalPoints(item)} pts${sub ? ` • ${sub} submitted` : ''}`;
+    },
+    onImport: () => {
+      CSVImportDialog.open({
+        title: 'Import Assignment',
+        subtitle: 'Upload a .kbshare assignment file, CSV/JSON file, or paste rows from Google Sheets or Excel.',
+        templateFilename: 'assignment_template.csv',
+        templateContent: ASSIGNMENT_CSV_TEMPLATE,
+        schema: AssignmentQuestionRowSchema,
+        acceptJson: true,
+        acceptKbShare: true,
+        onImport: async (resultData, rawText, { filename, isJson, isKbShare }) => {
+          const activeClass = ClassManager.getActiveFilter() || null;
+          if (isKbShare) {
+            const res = await ContentImporter.importRecordToLibrary('assignment', resultData, {
+              classId: activeClass,
+              filename
+            });
+            toast.success(`Imported assignment "${res.title}" with ${res.count} questions from .kbshare!`);
+          } else if (isJson) {
+            const parsed = normalizeSharedEnvelope({ type: 'assignment', payload: resultData }).payload;
+            const now = new Date().toISOString();
+            const newAsg = {
+              ...createBlankAssignment(),
+              ...parsed,
+              id: generateUUID(),
+              title: parsed.title || (filename || 'Imported Assignment').replace(/\.[^/.]+$/, ''),
+              class_id: activeClass || parsed.class_id || null,
+              created_at: now,
+              updated_at: now
+            };
+            await storage.table('assignments').put(newAsg);
+            toast.success(`Imported assignment "${newAsg.title}" with ${newAsg.questions?.length || 0} questions from JSON!`);
+          } else {
+            let title = (filename || 'Imported Assignment').replace(/\.[^/.]+$/, '');
+            if (title === 'pasted_data') title = 'Pasted Assignment';
+            else if (title === 'assignment_template' || title === 'template') title = 'Assignment';
+            else {
+              title = title.replace(/[_\-]+/g, ' ');
+              title = title.charAt(0).toUpperCase() + title.slice(1);
+            }
+            const now = new Date().toISOString();
+            const newAsg = {
+              ...createBlankAssignment(),
+              title,
+              class_id: activeClass,
+              questions: Array.isArray(resultData) ? resultData : [],
+              created_at: now,
+              updated_at: now
+            };
+            await storage.table('assignments').put(newAsg);
+            toast.success(`Imported assignment "${title}" with ${newAsg.questions.length} questions!`);
+          }
+          library.searchQuery = '';
+          library.selectedClassId = activeClass;
+          library.sortBy = 'updated';
+          await library.render(container);
+        }
+      });
     },
     // The generic share would send the full record (answer key included); publish safely instead
     onShare: async (item) => {

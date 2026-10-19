@@ -7,6 +7,7 @@ import { buildStudentPayload, totalPoints } from './grading.js';
 import { validateQuestion } from './question-types.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { syncContentClassLink } from '../gradebook/bridge.js';
+import { downloadClickableHtmlFile } from '../../core/html-launcher.js';
 
 /**
  * Publish & Share (KB-ASSIGN-003)
@@ -200,6 +201,9 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
 
         <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-emerald-200/60">
           <div class="flex gap-2 flex-wrap">
+            <sl-button size="small" id="btn-publish-download-html" variant="primary">
+              <sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Download Clickable File (.html)
+            </sl-button>
             <sl-button size="small" id="btn-publish-download" variant="default">
               <sl-icon slot="prefix" name="file-earmark-arrow-down"></sl-icon> Download .kbshare
             </sl-button>
@@ -426,6 +430,18 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
     if (!share) return;
     const name = (assignment.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_').toLowerCase();
     CryptoShareEngine.downloadKbShareFile(share.rawFileContent, `${name}.kbshare`);
+  });
+
+  dialog.querySelector('#btn-publish-download-html')?.addEventListener('click', () => {
+    if (!share) return;
+    const name = (assignment.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_').toLowerCase();
+    downloadClickableHtmlFile({
+      title: assignment.title || 'Assignment',
+      payloadType: 'assignment',
+      payload: share.rawFileContent,
+      shareUrl: activeUrl || share.url
+    }, `${name}.kbshare.html`);
+    toast.success('Downloaded clickable lesson (.kbshare.html)!');
   });
 
   dialog.querySelector('#btn-publish-per-student-csv')?.addEventListener('click', () => {

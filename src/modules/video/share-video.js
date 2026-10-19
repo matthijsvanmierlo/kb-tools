@@ -10,6 +10,7 @@ import { splitName, joinName } from '../../core/names.js';
 import { getTransport } from '../../core/transport.js';
 import { replication } from '../../core/replication/manager.js';
 import { syncContentClassLink } from '../gradebook/bridge.js';
+import { downloadClickableHtmlFile } from '../../core/html-launcher.js';
 
 /**
  * Student-safe sharing for video assessments (KB-VID-005).
@@ -77,6 +78,9 @@ export async function openVideoShareDialog(assessment) {
 
         <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-emerald-200/60">
           <div class="flex gap-2 flex-wrap">
+            <sl-button size="small" id="vs-download-html" variant="primary">
+              <sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Clickable File (.html)
+            </sl-button>
             <sl-button size="small" id="vs-download" variant="default">
               <sl-icon slot="prefix" name="file-earmark-arrow-down"></sl-icon> Download .kbshare
             </sl-button>
@@ -281,6 +285,18 @@ export async function openVideoShareDialog(assessment) {
   dialog.querySelector('#vs-download')?.addEventListener('click', () => {
     if (!result) return;
     CryptoShareEngine.downloadKbShareFile(result.rawFileContent, `${(assessment.title || 'video').replace(/[^a-z0-9]+/gi, '_').toLowerCase()}.kbshare`);
+  });
+
+  dialog.querySelector('#vs-download-html')?.addEventListener('click', () => {
+    if (!result) return;
+    const cleanName = (assessment.title || 'video').replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    downloadClickableHtmlFile({
+      title: assessment.title || 'Video Assessment',
+      payloadType: 'lesson',
+      payload: result.rawFileContent,
+      shareUrl: activeUrl || result.url
+    }, `${cleanName}.kbshare.html`);
+    toast.success('Downloaded clickable video assessment (.kbshare.html)!');
   });
 
   dialog.querySelector('#vs-per-student-csv')?.addEventListener('click', () => {

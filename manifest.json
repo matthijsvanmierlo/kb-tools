@@ -26,7 +26,9 @@
       "name": "KennisBoost lesson",
       "icons": [{ "src": "icons/file-kbshare-96.png", "sizes": "96x96", "type": "image/png" }],
       "accept": {
-        "application/vnd.kennisboost.share+json": [".kbshare"]
+        "application/vnd.kennisboost.share+json": [".kbshare"],
+        "application/json": [".kbshare"],
+        "text/plain": [".kbshare"]
       }
     },
     {
@@ -36,7 +38,9 @@
       "accept": {
         "application/vnd.kennisboost.submission": [".kbsub"],
         "application/vnd.kennisboost.receipt": [".kbr"],
-        "application/vnd.kennisboost.feedback": [".kbfeedback"]
+        "application/vnd.kennisboost.feedback": [".kbfeedback"],
+        "application/json": [".kbfeedback", ".kbr"],
+        "text/plain": [".kbsub", ".kbr", ".kbfeedback"]
       }
     }
   ],

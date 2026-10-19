@@ -7,6 +7,11 @@ import { QUESTION_TYPE_META, QUESTION_TYPE_ORDER, createQuestion, cloneQuestion,
 import { countBlanks, totalPoints } from './grading.js';
 import { openPublishDialog, computeRosterHash } from './publish.js';
 import { syncContentClassLink } from '../gradebook/bridge.js';
+import { CSVImportDialog } from '../../components/csv-import-dialog.js';
+import { downloadCSVTemplate, ASSIGNMENT_CSV_TEMPLATE } from '../../core/csv-templates.js';
+import { AssignmentQuestionRowSchema, Exporter } from '../../core/validator.js';
+import { ContentImporter } from '../../core/content-importer.js';
+import { downloadCSV } from '../../core/csv.js';
 
 export function resolveAssignmentCourseId(assignment) {
   if (!assignment) return null;
@@ -96,6 +101,23 @@ export async function renderEditor(assignment, router, container) {
         </div>
         <div class="flex items-center gap-2 flex-wrap">
           <span class="text-xs text-slate-400 mr-1" id="asg-save-state" aria-live="polite">Saved</span>
+          <sl-dropdown placement="bottom-end" hoist id="asg-import-export-dropdown">
+            <sl-button slot="trigger" size="small" caret variant="default">
+              <sl-icon slot="prefix" name="arrow-down-up"></sl-icon> Import / Export
+            </sl-button>
+            <sl-menu id="asg-import-export-menu">
+              <sl-menu-item value="import-csv">
+                <sl-icon slot="prefix" name="upload"></sl-icon> Import Questions from CSV…
+              </sl-menu-item>
+              <sl-menu-item value="download-template">
+                <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Download Assignment CSV Template
+              </sl-menu-item>
+              <sl-divider></sl-divider>
+              <sl-menu-item value="export-csv">
+                <sl-icon slot="prefix" name="download"></sl-icon> Export Questions to CSV
+              </sl-menu-item>
+            </sl-menu>
+          </sl-dropdown>
           <sl-button size="small" id="asg-preview"><sl-icon slot="prefix" name="eye"></sl-icon> Preview</sl-button>
           <sl-button size="small" id="asg-submissions">
             <sl-icon slot="prefix" name="inbox"></sl-icon> Submissions
@@ -138,7 +160,12 @@ export async function renderEditor(assignment, router, container) {
         <section class="lg:col-span-8 space-y-4" aria-label="Questions">
           <div class="flex items-center justify-between gap-3">
             <h2 class="font-semibold text-slate-900">Questions</h2>
-            ${addQuestionMenu('asg-add-top')}
+            <div class="flex items-center gap-2">
+              <sl-button size="small" variant="default" id="asg-quick-import-csv">
+                <sl-icon slot="prefix" name="upload"></sl-icon> Import CSV
+              </sl-button>
+              ${addQuestionMenu('asg-add-top')}
+            </div>
           </div>
           <div id="asg-questions" class="space-y-4"></div>
           <div class="flex justify-center pt-2">${addQuestionMenu('asg-add-bottom', true)}</div>
@@ -363,7 +390,15 @@ export async function renderEditor(assignment, router, container) {
           <span class="w-12 h-12 mx-auto rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-2xl"><sl-icon name="ui-checks"></sl-icon></span>
           <h3 class="font-semibold text-slate-900">No questions yet</h3>
           <p class="text-sm text-slate-500 max-w-sm mx-auto">Add multiple choice, short answer, numeric, fill-in-the-blank, ordering, matching, or long-response questions.</p>
+          <div class="pt-2">
+            <sl-button size="small" variant="default" id="asg-empty-import-csv">
+              <sl-icon slot="prefix" name="upload"></sl-icon> Import from CSV / Spreadsheet…
+            </sl-button>
+          </div>
         </div>`;
+      listEl.querySelector('#asg-empty-import-csv')?.addEventListener('click', () => {
+        openImportQuestionsDialog();
+      });
       updateSummary();
       return;
     }
@@ -609,6 +644,52 @@ export async function renderEditor(assignment, router, container) {
     card?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     setTimeout(() => card?.querySelector('[data-prompt]')?.focus(), 300);
   }));
+
+  function openImportQuestionsDialog() {
+    CSVImportDialog.open({
+      title: 'Import Questions into Assignment',
+      subtitle: 'Upload a CSV file or paste rows from Google Sheets or Excel to append questions to this assignment.',
+      templateFilename: 'assignment_template.csv',
+      templateContent: ASSIGNMENT_CSV_TEMPLATE,
+      schema: AssignmentQuestionRowSchema,
+      acceptJson: false,
+      acceptKbShare: false,
+      onImport: async (resultData) => {
+        const questionsToAdd = Array.isArray(resultData) ? resultData : [];
+        if (questionsToAdd.length === 0) {
+          toast.warning('No valid questions found to import.');
+          return;
+        }
+        ContentImporter.mergeQuestionsIntoAssignment(a, questionsToAdd);
+        await save(true);
+        renderQuestions();
+        toast.success(`Imported ${questionsToAdd.length} question${questionsToAdd.length === 1 ? '' : 's'}!`);
+      }
+    });
+  }
+
+  const importExportMenu = container.querySelector('#asg-import-export-menu');
+  importExportMenu?.addEventListener('sl-select', (e) => {
+    const val = e.detail?.item?.value;
+    if (val === 'import-csv') {
+      openImportQuestionsDialog();
+    } else if (val === 'download-template') {
+      downloadCSVTemplate('assignment_template.csv', ASSIGNMENT_CSV_TEMPLATE);
+    } else if (val === 'export-csv') {
+      if (!a.questions || a.questions.length === 0) {
+        toast.warning('This assignment has no questions to export.');
+        return;
+      }
+      const csvStr = Exporter.assignmentToCSV(a.questions);
+      const safeTitle = (a.title || 'assignment').trim().replace(/[^a-zA-Z0-9_\-]+/g, '_');
+      downloadCSV(`${safeTitle}_questions.csv`, csvStr);
+      toast.success('Questions exported to CSV!');
+    }
+  });
+
+  on('#asg-quick-import-csv', 'click', () => {
+    openImportQuestionsDialog();
+  });
 
   on('#asg-back', 'click', async () => { await save(true); router.navigate('#/assignments'); });
   on('#asg-preview', 'click', async () => { await save(true); router.navigate(`#/assignments/take?preview=${a.id}`); });
