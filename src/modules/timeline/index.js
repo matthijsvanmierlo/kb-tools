@@ -47,30 +47,42 @@ export async function renderTimelineView(params, router, container) {
           schema: TimelineEventSchema,
           acceptJson: true,
           onImport: async (resultData, rawText, { filename, isJson }) => {
+            const activeClass = ClassManager.getActiveFilter() || null;
             if (isJson) {
               const parsed = resultData;
               const newTimeline = {
                 version: 1,
                 id: generateUUID(),
                 title: parsed.title || (filename || 'Imported Timeline').replace(/\.[^/.]+$/, ''),
+                class_id: activeClass,
                 events: Array.isArray(parsed.events) ? parsed.events : [],
                 updated_at: new Date().toISOString()
               };
               await storage.table('timelines').put(newTimeline);
               toast.success('Imported timeline JSON!');
             } else {
-              const title = (filename || 'Imported Timeline').replace(/\.[^/.]+$/, '');
+              let title = (filename || 'Imported Timeline').replace(/\.[^/.]+$/, '');
+              if (title === 'pasted_data') title = 'Pasted Timeline';
+              else if (title === 'timeline_events_template' || title === 'template') title = 'Timeline';
+              else {
+                title = title.replace(/[_\-]+/g, ' ');
+                title = title.charAt(0).toUpperCase() + title.slice(1);
+              }
               const newTimeline = {
                 version: 1,
                 id: generateUUID(),
-                title: title === 'pasted_data' ? 'Pasted Timeline' : title,
-                events: resultData.map(ev => ({ ...ev, id: ev.id || generateUUID() })),
+                title,
+                class_id: activeClass,
+                events: (resultData || []).map(ev => ({ ...ev, id: ev.id || generateUUID() })),
                 updated_at: new Date().toISOString()
               };
               await storage.table('timelines').put(newTimeline);
-              toast.success(`Imported timeline with ${resultData.length} events!`);
+              toast.success(`Imported timeline "${title}" with ${newTimeline.events.length} events!`);
             }
-            library.render(container);
+            library.searchQuery = '';
+            library.selectedClassId = activeClass;
+            library.sortBy = 'updated';
+            await library.render(container);
           }
         });
       }

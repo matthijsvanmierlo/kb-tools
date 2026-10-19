@@ -223,35 +223,60 @@ export const HEADER_ALIASES = {
   'event': 'title',
   'eventname': 'title',
   'event_name': 'title',
+  'titel': 'title',
   'startdate': 'start_date',
   'start_date': 'start_date',
   'start date': 'start_date',
   'start': 'start_date',
   'begin': 'start_date',
   'date': 'start_date',
+  'datum': 'start_date',
+  'begindatum': 'start_date',
   'enddate': 'end_date',
   'end_date': 'end_date',
   'end date': 'end_date',
   'end': 'end_date',
+  'einddatum': 'end_date',
   'category': 'category',
   'tag': 'category',
   'type': 'category',
+  'categorie': 'category',
   'description': 'description',
   'desc': 'description',
   'notes': 'description',
+  'beschrijving': 'description',
+  'notities': 'description',
   'color': 'color',
   'colour': 'color',
+  'kleur': 'color',
   'citations': 'citations',
   'citation': 'citations',
   'sources': 'citations',
   'source': 'citations',
+  'bron': 'citations',
+  'bronnen': 'citations',
   'question': 'front',
   'front': 'front',
   'term': 'front',
   'prompt': 'front',
+  'cardfront': 'front',
+  'fronttext': 'front',
+  'prompttext': 'front',
+  'vraag': 'front',
+  'begrip': 'front',
+  'woord': 'front',
+  'concept': 'front',
+  'card': 'front',
   'answer': 'back',
   'back': 'back',
-  'definition': 'back'
+  'definition': 'back',
+  'cardback': 'back',
+  'backtext': 'back',
+  'response': 'back',
+  'antwoord': 'back',
+  'definitie': 'back',
+  'betekenis': 'back',
+  'uitleg': 'back'
 };
 
 export const ROSTER_HEADER_ALIASES = {
@@ -312,24 +337,17 @@ export function parseCSVWithValidation(csvString, schema, options = {}) {
     ? dynamicTyping
     : (schema === RosterRowSchema ? false : true);
 
-  const parsed = Papa.parse(csvString, {
-    header: true,
+  // Check if first row is a header row or raw data
+  const rawParsed = Papa.parse(csvString, {
+    header: false,
     dynamicTyping: effectiveDynamicTyping,
     skipEmptyLines: 'greedy',
-    transformHeader: (h) => {
-      const raw = (h || '').trim();
-      const normalized = raw.toLowerCase().replace(/[\s_\-\.]+/g, '');
-      if (activeAliases[normalized]) return activeAliases[normalized];
-      const lower = raw.toLowerCase();
-      if (activeAliases[lower]) return activeAliases[lower];
-      return raw;
-    },
     ...papaOpts
   });
 
-  if (parsed.errors && parsed.errors.length > 0) {
-    const csvErrors = parsed.errors.map(err => ({
-      rowNumber: (err.row ?? 0) + 2, // header is row 1
+  if (rawParsed.errors && rawParsed.errors.length > 0) {
+    const csvErrors = rawParsed.errors.map(err => ({
+      rowNumber: (err.row ?? 0) + 1,
       fieldPath: 'csv_syntax',
       message: err.message,
       receivedValue: null
@@ -337,36 +355,112 @@ export function parseCSVWithValidation(csvString, schema, options = {}) {
     return { success: false, errors: csvErrors };
   }
 
+  const matrix = rawParsed.data || [];
+  if (matrix.length === 0) {
+    return { success: true, data: [] };
+  }
+
+  const firstRow = matrix[0] || [];
+  const matchCount = firstRow.filter(cell => {
+    const raw = String(cell || '').trim().replace(/^\uFEFF/, '');
+    const normalized = raw.toLowerCase().replace(/[\s_\-\.]+/g, '');
+    const lower = raw.toLowerCase();
+    return Boolean(activeAliases[normalized] || activeAliases[lower]);
+  }).length;
+
+  const hasHeaderRow = matchCount >= 1 && (firstRow.length <= 2 || matchCount >= 2);
+
+  let parsedRows = [];
+  let headerOffset = 1;
+
+  if (hasHeaderRow) {
+    headerOffset = 2;
+    const headerCols = firstRow.map(h => {
+      const raw = String(h || '').trim().replace(/^\uFEFF/, '');
+      const normalized = raw.toLowerCase().replace(/[\s_\-\.]+/g, '');
+      if (activeAliases[normalized]) return activeAliases[normalized];
+      const lower = raw.toLowerCase();
+      if (activeAliases[lower]) return activeAliases[lower];
+      return raw;
+    });
+
+    const dataRows = matrix.slice(1);
+    parsedRows = dataRows.map((r, rowIdx) => {
+      const obj = {};
+      headerCols.forEach((col, cIdx) => {
+        obj[col] = r[cIdx];
+      });
+      return { obj, rowNumber: rowIdx + headerOffset };
+    });
+  } else {
+    // No explicit header row: map positional columns based on schema
+    headerOffset = 1;
+    parsedRows = matrix.map((r, rowIdx) => {
+      const obj = {};
+      if (schema === FlashcardItemSchema) {
+        obj.front = r[0];
+        obj.back = r[1];
+      } else if (schema === TimelineEventSchema) {
+        obj.title = r[0];
+        obj.start_date = r[1];
+        if (r[2] !== undefined) obj.end_date = r[2];
+        if (r[3] !== undefined) obj.category = r[3];
+        if (r[4] !== undefined) obj.description = r[4];
+        if (r[5] !== undefined) obj.color = r[5];
+        if (r[6] !== undefined) obj.citations = r[6];
+      } else {
+        r.forEach((val, idx) => { obj[`col_${idx}`] = val; });
+      }
+      return { obj, rowNumber: rowIdx + headerOffset };
+    });
+  }
+
   const errors = [];
   const validatedData = [];
 
-  parsed.data.forEach((row, idx) => {
-    const rowNumber = idx + 2; // 1-indexed, header is line 1
+  for (const { obj: rawRow, rowNumber } of parsedRows) {
+    let row = { ...rawRow };
 
     // Specific pre-normalizations for common entities:
     // 1. Flashcards: front & back text objects
-    if (row.front !== undefined && typeof row.front === 'string' && schema === FlashcardItemSchema) {
+    if (schema === FlashcardItemSchema || row.front !== undefined || row.back !== undefined) {
+      const frontVal = row.front !== undefined && row.front !== null
+        ? (typeof row.front === 'object' && row.front.text !== undefined ? row.front.text : String(row.front).trim())
+        : '';
+      const backVal = row.back !== undefined && row.back !== null
+        ? (typeof row.back === 'object' && row.back.text !== undefined ? row.back.text : String(row.back).trim())
+        : '';
+
+      // Skip completely empty lines
+      if (!frontVal && !backVal) continue;
+
       row = {
-        id: row.id || crypto.randomUUID(),
+        id: (typeof row.id === 'string' && row.id.length >= 32) ? row.id : crypto.randomUUID(),
         type: row.type || 'text',
-        front: { text: String(row.front || ''), ttsLang: row.tts_lang || 'en-US' },
-        back: { text: String(row.back || ''), ttsLang: row.tts_lang || 'en-US' }
+        front: { text: frontVal, ttsLang: row.tts_lang || (row.front?.ttsLang) || 'en-US' },
+        back: { text: backVal, ttsLang: row.tts_lang || (row.back?.ttsLang) || 'en-US' }
       };
     }
 
-    // 2. Timelines: empty end_date to null and stringify numeric dates
+    // 2. Timelines: empty end_date to null and stringify numeric dates/titles
     if (schema === TimelineEventSchema || row.start_date !== undefined) {
+      if (!row.id) {
+        row.id = crypto.randomUUID();
+      }
+      if (row.title !== undefined && row.title !== null && typeof row.title !== 'string') {
+        row.title = String(row.title).trim();
+      }
       if (row.start_date !== undefined && row.start_date !== null && typeof row.start_date !== 'string') {
-        row.start_date = String(row.start_date);
+        row.start_date = String(row.start_date).trim();
       }
       if (row.end_date === '' || row.end_date === undefined || row.end_date === null) {
         row.end_date = null;
       } else if (typeof row.end_date !== 'string') {
-        row.end_date = String(row.end_date);
+        row.end_date = String(row.end_date).trim();
       }
-    }
-    if (row.color && !row.color.startsWith('#')) {
-      row.color = `#${row.color}`;
+      if (row.color && !row.color.startsWith('#')) {
+        row.color = `#${row.color}`;
+      }
     }
 
     const result = schema.safeParse(row);
@@ -382,7 +476,7 @@ export function parseCSVWithValidation(csvString, schema, options = {}) {
     } else {
       validatedData.push(result.data);
     }
-  });
+  }
 
   if (errors.length > 0) {
     return { success: false, errors };

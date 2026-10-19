@@ -170,17 +170,19 @@ async function renderLibrary(container, router) {
         schema: FlashcardItemSchema,
         acceptJson: true,
         onImport: async (resultData, rawText, { filename, isJson }) => {
+          const activeClass = ClassManager.getActiveFilter() || null;
           if (isJson) {
             const parsed = normalizeSharedEnvelope({ type: 'flashcards', payload: resultData }).payload;
             const newDeck = {
               version: 1,
               id: generateUUID(),
               title: parsed.title || (filename || 'Imported Deck').replace(/\.[^/.]+$/, ''),
+              class_id: activeClass,
               cards: Array.isArray(parsed.cards) ? parsed.cards.map(c => ({
                 id: generateUUID(),
                 type: 'text',
-                front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : c.front,
-                back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : c.back,
+                front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : (c.front || { text: '', ttsLang: 'en-US' }),
+                back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : (c.back || { text: '', ttsLang: 'en-US' }),
                 fsrs: { state: 0, stability: 0, difficulty: 0, due: new Date().toISOString() }
               })) : [],
               updated_at: new Date().toISOString()
@@ -188,25 +190,35 @@ async function renderLibrary(container, router) {
             await storage.table('flashcards').put(newDeck);
             toast.success('Deck imported from JSON!');
           } else {
-            const title = (filename || 'Imported Flashcards').replace(/\.[^/.]+$/, '');
+            let title = (filename || 'Imported Flashcards').replace(/\.[^/.]+$/, '');
+            if (title === 'pasted_data') title = 'Pasted Flashcards Deck';
+            else if (title === 'flashcards_template' || title === 'template') title = 'Flashcard Deck';
+            else {
+              title = title.replace(/[_\-]+/g, ' ');
+              title = title.charAt(0).toUpperCase() + title.slice(1);
+            }
             const newDeck = {
               version: 1,
               id: generateUUID(),
-              title: title === 'pasted_data' ? 'Pasted Flashcards Deck' : title,
-              cards: resultData.map(c => ({
+              title,
+              class_id: activeClass,
+              cards: (resultData || []).map(c => ({
                 id: generateUUID(),
                 type: 'text',
-                front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : c.front,
-                back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : c.back,
+                front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : (c.front || { text: '', ttsLang: 'en-US' }),
+                back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : (c.back || { text: '', ttsLang: 'en-US' }),
                 fsrs: { state: 0, stability: 0, difficulty: 0, due: new Date().toISOString() }
               })),
               updated_at: new Date().toISOString()
             };
             await storage.table('flashcards').put(newDeck);
-            toast.success(`Imported deck with ${resultData.length} cards!`);
+            toast.success(`Imported deck "${title}" with ${newDeck.cards.length} cards!`);
           }
-          library.render(libraryEl);
-          renderStudyPlanner(plannerEl);
+          library.searchQuery = '';
+          library.selectedClassId = activeClass;
+          library.sortBy = 'updated';
+          await library.render(libraryEl);
+          await renderStudyPlanner(plannerEl);
         }
       });
     }

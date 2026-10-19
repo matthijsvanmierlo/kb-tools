@@ -43,7 +43,11 @@ export class FlashcardEditor {
   }
 
   unmount() {
-    clearTimeout(this.autoSaveTimer);
+    if (this.autoSaveTimer) {
+      clearTimeout(this.autoSaveTimer);
+      this.autoSaveTimer = null;
+      this.saveDeck(false).catch(err => console.error('Unmount save error:', err));
+    }
     if (this.frontEditor) this.frontEditor.destroy();
     if (this.backEditor) this.backEditor.destroy();
     if (this._keyHandler) window.removeEventListener('keydown', this._keyHandler);
@@ -413,20 +417,39 @@ export class FlashcardEditor {
           templateContent: FLASHCARDS_CSV_TEMPLATE,
           schema: FlashcardItemSchema,
           acceptJson: false,
-          onImport: async (resultData) => {
+          onImport: async (resultData, rawText, { filename } = {}) => {
             if (!Array.isArray(resultData) || resultData.length === 0) return;
             const newCards = resultData.map(c => ({
               id: generateUUID(),
               type: 'text',
-              front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : c.front,
-              back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : c.back,
+              front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : (c.front || { text: '', ttsLang: 'en-US' }),
+              back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : (c.back || { text: '', ttsLang: 'en-US' }),
               fsrs: { state: 0, stability: 0, difficulty: 0, due: new Date().toISOString() }
             }));
-            this.deck.cards.push(...newCards);
-            this.selectedCardIndex = this.deck.cards.length - 1;
+
+            // If deck has only 1 empty card, replace it with the imported cards
+            const hasOnlyEmptyCard = this.deck.cards.length === 1 &&
+              (!this.deck.cards[0].front?.text || this.deck.cards[0].front.text.trim() === '') &&
+              (!this.deck.cards[0].back?.text || this.deck.cards[0].back.text.trim() === '');
+
+            if (hasOnlyEmptyCard) {
+              this.deck.cards = newCards;
+            } else {
+              this.deck.cards.push(...newCards);
+            }
+
+            // Update title if still untitled and a meaningful filename is provided
+            if ((!this.deck.title || this.deck.title === 'Untitled Flashcard Deck') && filename) {
+              const clean = filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ');
+              if (clean && !clean.includes('template') && !clean.includes('pasted')) {
+                this.deck.title = clean.charAt(0).toUpperCase() + clean.slice(1);
+              }
+            }
+
+            this.selectedCardIndex = 0;
             this._render();
-            this._scheduleAutoSave();
-            toast.success(`Added ${newCards.length} cards from CSV!`);
+            await this.saveDeck(false);
+            toast.success(`Imported ${newCards.length} cards from CSV!`);
           }
         });
       } else if (val === 'export-csv') {

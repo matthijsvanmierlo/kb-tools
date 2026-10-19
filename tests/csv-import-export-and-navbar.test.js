@@ -138,6 +138,44 @@ describe('Part 2B: Copy-Pasting from Spreadsheets (TSV/CSV) & File Imports', () 
     expect(validated.data[1].front.text).toBe('Thermodynamics');
   });
 
+  it('parses CSV with numeric questions and answers without type errors', () => {
+    const csvWithNumbers = "Question,Answer\n1984,George Orwell novel\nWhat is 2+2?,4\n100,Boiling point of water";
+    const validated = parseCSVWithValidation(csvWithNumbers, FlashcardItemSchema);
+    expect(validated.success).toBe(true);
+    expect(validated.data.length).toBe(3);
+    expect(validated.data[0].front.text).toBe('1984');
+    expect(validated.data[0].back.text).toBe('George Orwell novel');
+    expect(validated.data[1].front.text).toBe('What is 2+2?');
+    expect(validated.data[1].back.text).toBe('4');
+    expect(validated.data[2].front.text).toBe('100');
+  });
+
+  it('parses headerless spreadsheet paste (raw 2-column data) for flashcards', () => {
+    const rawTSVWithoutHeader = "Photosynthesis\tPlant solar energy process\nMitochondria\tPowerhouse of the cell";
+    const validated = parseCSVWithValidation(rawTSVWithoutHeader, FlashcardItemSchema);
+    expect(validated.success).toBe(true);
+    expect(validated.data.length).toBe(2);
+    expect(validated.data[0].front.text).toBe('Photosynthesis');
+    expect(validated.data[0].back.text).toBe('Plant solar energy process');
+    expect(validated.data[1].front.text).toBe('Mitochondria');
+  });
+
+  it('parses Dutch educational header aliases (Vraag, Antwoord) for flashcards', () => {
+    const dutchCSV = "Vraag;Antwoord\nHoofdstad van Nederland;Amsterdam\nBelangrijkste gas in fotosynthese;Koolstofdioxide";
+    const validated = parseCSVWithValidation(dutchCSV, FlashcardItemSchema);
+    expect(validated.success).toBe(true);
+    expect(validated.data.length).toBe(2);
+    expect(validated.data[0].front.text).toBe('Hoofdstad van Nederland');
+    expect(validated.data[0].back.text).toBe('Amsterdam');
+  });
+
+  it('skips blank empty lines in spreadsheets gracefully', () => {
+    const csvWithBlankLines = "Question,Answer\nPhotosynthesis,Process\n\n\nNewton,Physics\n\n";
+    const validated = parseCSVWithValidation(csvWithBlankLines, FlashcardItemSchema);
+    expect(validated.success).toBe(true);
+    expect(validated.data.length).toBe(2);
+  });
+
   it('parses pasted tab-separated values from Google Sheets / Excel for timeline events', () => {
     const tsvFromSheets = "Title\tStart Date\tEnd Date\tCategory\tDescription\nMars Rover Landing\t2021-02-18\t\tSpace\tPerseverance touches down in Jezero crater";
 

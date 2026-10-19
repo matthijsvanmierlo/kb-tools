@@ -140,7 +140,22 @@ export function registerServiceWorker() {
       <strong>A new version of KennisBoost is ready.</strong><br>
       Save your work, then reload to update.
       <div class="mt-2"><sl-button size="small" variant="primary">Reload now</sl-button></div>`;
-    alert.querySelector('sl-button').addEventListener('click', () => worker.postMessage('SKIP_WAITING'));
+    const reloadBtn = alert.querySelector('sl-button');
+    reloadBtn?.addEventListener('click', () => {
+      reloadBtn.loading = true;
+      reloadBtn.disabled = true;
+      try {
+        worker.postMessage('SKIP_WAITING');
+      } catch (err) {
+        console.warn('SKIP_WAITING postMessage error:', err);
+      }
+      setTimeout(() => {
+        if (!reloading) {
+          reloading = true;
+          window.location.reload();
+        }
+      }, 600);
+    });
     document.body.append(alert);
     alert.toast?.();
   };

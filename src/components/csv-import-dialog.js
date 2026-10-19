@@ -88,11 +88,21 @@ export class CSVImportDialog {
               <sl-textarea id="csv-paste-textarea" rows="7" placeholder="Paste spreadsheet cells or CSV content here..."></sl-textarea>
               <div class="flex items-center justify-between text-xs text-slate-500">
                 <span id="paste-row-count">0 rows detected</span>
-                <span class="text-[11px] text-slate-400">Header row will be auto-detected</span>
+                <span class="text-[11px] text-slate-400">Headers auto-detected (or plain 2-column data)</span>
               </div>
             </div>
           </sl-tab-panel>
         </sl-tab-group>
+
+        <!-- Live Preview & Parsing Status -->
+        <div id="csv-preview-container" class="hidden border border-slate-200 rounded-xl bg-slate-50/50 p-3.5 space-y-2.5">
+          <div class="flex items-center justify-between text-xs">
+            <div id="csv-preview-status" class="flex items-center gap-1.5 font-medium text-slate-700"></div>
+            <span class="text-[11px] text-slate-400">Preview (up to 4 items)</span>
+          </div>
+          <div id="csv-preview-content" class="overflow-x-auto max-h-44 text-xs bg-white rounded-lg border border-slate-200 shadow-2xs divide-y divide-slate-100"></div>
+          <div id="csv-preview-error" class="hidden text-xs text-red-600 bg-red-50 p-2.5 rounded-lg border border-red-200"></div>
+        </div>
       </div>
 
       <div slot="footer" class="flex flex-wrap items-center justify-between gap-2 w-full">
@@ -102,7 +112,7 @@ export class CSVImportDialog {
         <div class="flex items-center gap-2">
           <sl-button variant="default" id="btn-csv-import-cancel">Cancel</sl-button>
           <sl-button variant="primary" id="btn-csv-import-submit">
-            <sl-icon slot="prefix" name="check-lg"></sl-icon> Import Data
+            <sl-icon slot="prefix" name="check-lg"></sl-icon> <span id="btn-csv-import-text">Import Data</span>
           </sl-button>
         </div>
       </div>
@@ -120,9 +130,17 @@ export class CSVImportDialog {
     const pasteTextarea = dialog.querySelector('#csv-paste-textarea');
     const pasteRowCount = dialog.querySelector('#paste-row-count');
     const submitBtn = dialog.querySelector('#btn-csv-import-submit');
+    const submitBtnText = dialog.querySelector('#btn-csv-import-text');
     const cancelBtn = dialog.querySelector('#btn-csv-import-cancel');
     const topTemplateBtn = dialog.querySelector('#btn-top-download-template');
     const footerTemplateBtn = dialog.querySelector('#btn-footer-download-template');
+
+    const previewContainer = dialog.querySelector('#csv-preview-container');
+    const previewStatus = dialog.querySelector('#csv-preview-status');
+    const previewContent = dialog.querySelector('#csv-preview-content');
+    const previewError = dialog.querySelector('#csv-preview-error');
+
+    let parsedCache = null;
 
     // Handle Template Download
     const doDownloadTemplate = () => {
@@ -132,19 +150,127 @@ export class CSVImportDialog {
     topTemplateBtn?.addEventListener('click', doDownloadTemplate);
     footerTemplateBtn?.addEventListener('click', doDownloadTemplate);
 
+    // Reactive Live Preview Helper
+    const updatePreview = (text, isJsonFile, displayFilename) => {
+      const trimmed = (text || '').trim();
+      parsedCache = null;
+
+      if (!trimmed) {
+        previewContainer.classList.add('hidden');
+        previewContent.innerHTML = '';
+        previewError.classList.add('hidden');
+        previewError.textContent = '';
+        if (submitBtnText) submitBtnText.textContent = 'Import Data';
+        return;
+      }
+
+      previewContainer.classList.remove('hidden');
+
+      if (isJsonFile || (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
+        try {
+          const parsed = JSON.parse(trimmed);
+          const items = Array.isArray(parsed) ? parsed : (parsed.cards || parsed.events || [parsed]);
+          parsedCache = { isJson: true, data: parsed, items, filename: displayFilename };
+
+          previewStatus.innerHTML = `
+            <span class="inline-flex items-center gap-1 text-emerald-700 bg-emerald-100 font-semibold px-2 py-0.5 rounded-full text-[11px]">
+              <sl-icon name="check-circle"></sl-icon> JSON Payload (${items.length} items)
+            </span>
+          `;
+          previewError.classList.add('hidden');
+
+          previewContent.innerHTML = items.slice(0, 4).map((it, idx) => {
+            const fText = it.title || it.name || it.front?.text || it.front || `Item #${idx + 1}`;
+            const bText = it.description || it.back?.text || it.back || (it.start_date ? `Date: ${it.start_date}` : '');
+            return `
+              <div class="p-2 flex items-center justify-between text-xs gap-3">
+                <span class="font-medium text-slate-800 truncate">${Sanitizer.escapeHTML(String(fText))}</span>
+                <span class="text-slate-500 truncate max-w-xs text-[11px]">${Sanitizer.escapeHTML(String(bText))}</span>
+              </div>
+            `;
+          }).join('');
+
+          if (submitBtnText) submitBtnText.textContent = `Import ${items.length} Items`;
+          return;
+        } catch {
+          // Fall through to CSV parser if JSON parsing fails
+        }
+      }
+
+      // CSV parsing with validation
+      if (schema) {
+        const res = parseCSVWithValidation(trimmed, schema);
+        if (res.success && res.data && res.data.length > 0) {
+          parsedCache = { isJson: false, data: res.data, filename: displayFilename };
+          previewError.classList.add('hidden');
+          previewStatus.innerHTML = `
+            <span class="inline-flex items-center gap-1 text-emerald-700 bg-emerald-100 font-semibold px-2 py-0.5 rounded-full text-[11px]">
+              <sl-icon name="check-circle"></sl-icon> ${res.data.length} valid ${res.data.length === 1 ? 'row' : 'rows'} detected
+            </span>
+          `;
+
+          previewContent.innerHTML = res.data.slice(0, 4).map((it, idx) => {
+            const fText = it.title || it.name || it.front?.text || it.front || `Row #${idx + 1}`;
+            const bText = it.description || it.back?.text || it.back || (it.start_date ? `${it.start_date} ${it.category ? `(${it.category})` : ''}` : '');
+            return `
+              <div class="p-2 flex items-center justify-between text-xs gap-3">
+                <div class="truncate flex items-center gap-2">
+                  <span class="text-slate-400 font-mono text-[10px]">#${idx + 1}</span>
+                  <span class="font-semibold text-slate-800 truncate">${Sanitizer.escapeHTML(String(fText))}</span>
+                </div>
+                <span class="text-slate-500 truncate max-w-xs text-[11px] font-mono">${Sanitizer.escapeHTML(String(bText))}</span>
+              </div>
+            `;
+          }).join('');
+
+          if (submitBtnText) submitBtnText.textContent = `Import ${res.data.length} ${res.data.length === 1 ? 'Item' : 'Items'}`;
+        } else {
+          parsedCache = null;
+          previewStatus.innerHTML = `
+            <span class="inline-flex items-center gap-1 text-rose-700 bg-rose-100 font-semibold px-2 py-0.5 rounded-full text-[11px]">
+              <sl-icon name="exclamation-triangle"></sl-icon> Validation Issues Found
+            </span>
+          `;
+          const firstErr = res.errors?.[0];
+          previewError.classList.remove('hidden');
+          previewError.textContent = firstErr
+            ? `Row ${firstErr.rowNumber}: ${firstErr.message} (${firstErr.fieldPath})`
+            : 'Could not validate rows against required format.';
+          previewContent.innerHTML = '';
+          if (submitBtnText) submitBtnText.textContent = 'Import Data';
+        }
+      } else {
+        if (submitBtnText) submitBtnText.textContent = 'Import Data';
+      }
+    };
+
     // Tab change
     tabs?.addEventListener('sl-tab-show', (e) => {
       activeTab = e.detail.name === 'tab-paste' ? 'paste' : 'file';
+      if (activeTab === 'paste') {
+        updatePreview(pasteTextarea?.value || '', false, 'pasted_data.csv');
+      } else if (currentFile) {
+        currentFile.text().then(t => updatePreview(t, currentFile.name.endsWith('.json'), currentFile.name));
+      } else {
+        updatePreview('', false, '');
+      }
     });
 
     // File selection
-    const handleFile = (file) => {
+    const handleFile = async (file) => {
       if (!file) return;
       currentFile = file;
       fileNameEl.textContent = file.name;
       fileSizeEl.textContent = `(${Math.round(file.size / 1024)} KB)`;
       fileInfo.classList.remove('hidden');
       dropZone.classList.add('hidden');
+
+      try {
+        const text = await file.text();
+        updatePreview(text, acceptJson && file.name.endsWith('.json'), file.name);
+      } catch (err) {
+        console.warn('File read preview warning:', err);
+      }
     };
 
     dropZone?.addEventListener('click', () => fileInput?.click());
@@ -172,6 +298,7 @@ export class CSVImportDialog {
       fileInput.value = '';
       fileInfo.classList.add('hidden');
       dropZone.classList.remove('hidden');
+      updatePreview('', false, '');
     });
 
     // Paste Textarea live update
@@ -180,6 +307,7 @@ export class CSVImportDialog {
       const lines = val.trim().split(/\r?\n/).filter(Boolean);
       const rows = lines.length > 1 ? lines.length - 1 : lines.length;
       pasteRowCount.textContent = `${rows} ${rows === 1 ? 'row' : 'rows'} detected`;
+      updatePreview(val, false, 'pasted_data.csv');
     });
 
     // Submit Handler
@@ -227,28 +355,33 @@ export class CSVImportDialog {
 
       isProcessing = true;
       submitBtn.loading = true;
+      submitBtn.disabled = true;
 
       try {
         if (isJson) {
           // JSON path
           const parsed = JSON.parse(text);
           await onImport(parsed, text, { filename, isJson: true });
-          dialog.hide();
+          await dialog.hide();
         } else if (schema) {
-          // Validated CSV path
-          const res = parseCSVWithValidation(text, schema);
+          // Validated CSV path (use cache if available and matches)
+          const res = (parsedCache && !parsedCache.isJson && parsedCache.data)
+            ? { success: true, data: parsedCache.data }
+            : parseCSVWithValidation(text, schema);
+
           if (!res.success) {
             showImportErrorsDialog(res.errors);
             isProcessing = false;
             submitBtn.loading = false;
+            submitBtn.disabled = false;
             return;
           }
           await onImport(res.data, text, { filename, isJson: false });
-          dialog.hide();
+          await dialog.hide();
         } else {
           // Generic CSV path without explicit schema
           await onImport(null, text, { filename, isJson: false });
-          dialog.hide();
+          await dialog.hide();
         }
       } catch (err) {
         console.error('CSV import error:', err);
@@ -256,6 +389,7 @@ export class CSVImportDialog {
       } finally {
         isProcessing = false;
         submitBtn.loading = false;
+        submitBtn.disabled = false;
       }
     });
 
