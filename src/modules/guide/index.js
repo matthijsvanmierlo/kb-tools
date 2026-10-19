@@ -11,6 +11,7 @@ const SECTIONS = [
   { id: 'guide-setup', label: 'Set up a class', icon: 'mortarboard' },
   { id: 'guide-tools', label: 'Choose a tool', icon: 'signpost-split' },
   { id: 'guide-assignments', label: 'Auto-graded work', icon: 'ui-checks' },
+  { id: 'guide-assigning', label: 'Delivery & Hand-in Matrix', icon: 'diagram-3' },
   { id: 'guide-video', label: 'Video lessons', icon: 'play-circle' },
   { id: 'guide-rubric', label: 'Hand-graded work', icon: 'grid-3x3' },
   { id: 'guide-sbg', label: 'Standards-based', icon: 'bullseye' },
@@ -19,6 +20,7 @@ const SECTIONS = [
   { id: 'guide-defaults', label: 'Recommended settings', icon: 'check2-square' },
   { id: 'guide-safety', label: 'Keep data safe', icon: 'shield-lock' },
   { id: 'guide-server', label: 'Connect to a school server', icon: 'cloud-arrow-up' },
+  { id: 'guide-faq', label: 'Interactive FAQ', icon: 'patch-question' },
   { id: 'guide-help', label: 'Troubleshooting', icon: 'life-preserver' }
 ];
 
@@ -205,6 +207,139 @@ export async function renderGuideView(params, router, container) {
             ]
           })}
 
+          <!-- Delivery & Hand-in Matrix -->
+          <section id="guide-assigning" class="kb-guide-section bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-6 scroll-mt-24">
+            <header class="flex items-start gap-4">
+              <span class="w-11 h-11 rounded-xl bg-violet-50 text-violet-700 flex items-center justify-center text-xl flex-shrink-0">
+                <sl-icon name="diagram-3"></sl-icon>
+              </span>
+              <div class="min-w-0">
+                <h2 class="text-xl font-bold text-slate-900">Assignment Delivery &amp; Hand-in Matrix</h2>
+                <p class="text-sm text-slate-500 mt-1">Choose the optimal delivery and collection method for your classroom, school firewall, and LMS setup.</p>
+              </div>
+            </header>
+
+            <!-- Delivery Methods Table -->
+            <div class="space-y-3">
+              <h3 class="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                <sl-icon name="send" class="text-violet-600"></sl-icon> 1. Delivery Methods (How Students Open the Work)
+              </h3>
+              <div class="overflow-x-auto rounded-xl border border-slate-200">
+                <table class="w-full text-xs text-left">
+                  <thead class="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200 uppercase tracking-wider">
+                    <tr>
+                      <th class="p-3">Delivery Method</th>
+                      <th class="p-3">Format</th>
+                      <th class="p-3">Best Used When</th>
+                      <th class="p-3">Guarantees &amp; Trade-offs</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100 text-slate-600">
+                    <tr>
+                      <td class="p-3 font-semibold text-slate-900">Standard Web Link (Fragment)</td>
+                      <td class="p-3 font-mono text-[11px]">#/assignments/take#...</td>
+                      <td class="p-3">Google Classroom, LMS assignments, student dashboards, email.</td>
+                      <td class="p-3">Entire assignment is packed in the URL hash. 100% offline-ready once loaded. No backend or accounts required.</td>
+                    </tr>
+                    <tr>
+                      <td class="p-3 font-semibold text-slate-900">Short Relay Link</td>
+                      <td class="p-3 font-mono text-[11px]">https://relay.school.edu/s/...</td>
+                      <td class="p-3">Character-limited messaging (SMS, Twitter, strict LMS link validators).</td>
+                      <td class="p-3">Short URL redirected through your school relay server. Requires school server setup.</td>
+                    </tr>
+                    <tr>
+                      <td class="p-3 font-semibold text-slate-900">Personalized Direct Link</td>
+                      <td class="p-3 font-mono text-[11px]">?sid=STU101&amp;sname=Alice...</td>
+                      <td class="p-3">Mail-merge emails, LMS personalized announcements.</td>
+                      <td class="p-3">Student name &amp; ID auto-fill automatically. Student only types access code. Eliminates student typos.</td>
+                    </tr>
+                    <tr>
+                      <td class="p-3 font-semibold text-slate-900">Offline .kbshare File</td>
+                      <td class="p-3 font-mono text-[11px]">assignment.kbshare</td>
+                      <td class="p-3">No internet access, air-gapped exams, or strict school content filters.</td>
+                      <td class="p-3">Students open file directly in KennisBoost. Zero network traffic required.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- Collection Methods Table -->
+            <div class="space-y-3">
+              <h3 class="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                <sl-icon name="inbox" class="text-amber-600"></sl-icon> 2. Collection &amp; Hand-in Methods (How You Get Work Back)
+              </h3>
+              <div class="overflow-x-auto rounded-xl border border-slate-200">
+                <table class="w-full text-xs text-left">
+                  <thead class="bg-slate-50 text-slate-700 font-semibold border-b border-slate-200 uppercase tracking-wider">
+                    <tr>
+                      <th class="p-3">Collection Method</th>
+                      <th class="p-3">Format</th>
+                      <th class="p-3">How Teacher Collects</th>
+                      <th class="p-3">Cryptographic Protection</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-100 text-slate-600">
+                    <tr>
+                      <td class="p-3 font-semibold text-slate-900">.kbsub File Download</td>
+                      <td class="p-3 font-mono text-[11px]">student_work.kbsub</td>
+                      <td class="p-3">Students submit file to LMS dropbox; teacher clicks <strong>Import .kbsub files</strong>.</td>
+                      <td class="p-3">ECIES asymmetric encryption (AES-GCM + ECDH) + HMAC signature. Tamper-evident.</td>
+                    </tr>
+                    <tr>
+                      <td class="p-3 font-semibold text-slate-900">Pasted Submission Code</td>
+                      <td class="p-3 font-mono text-[11px]">KBSUB1.eyJrYnN1YiI6MS...</td>
+                      <td class="p-3">Students paste text into LMS submission box or email; teacher clicks <strong>Paste codes</strong>.</td>
+                      <td class="p-3">Identical ECIES security in base64url string format. Convenient for mobile devices.</td>
+                    </tr>
+                    <tr>
+                      <td class="p-3 font-semibold text-slate-900">Relay Drop-Box Auto-Upload</td>
+                      <td class="p-3 font-mono text-[11px]">Direct Relay Push</td>
+                      <td class="p-3">Submissions appear live in your Inbox tab automatically when connected to school server.</td>
+                      <td class="p-3">Drop-box only accepts encrypted envelopes; server cannot read answers or decrypt data.</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- LMS Integration Recipes -->
+            <div class="space-y-3">
+              <h3 class="text-sm font-semibold text-slate-900 flex items-center gap-2">
+                <sl-icon name="journal-code" class="text-emerald-600"></sl-icon> 3. Step-by-Step LMS Recipes
+              </h3>
+              <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+                <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+                  <div class="font-bold text-slate-900 flex items-center gap-1.5"><sl-icon name="google" class="text-emerald-600"></sl-icon> Google Classroom</div>
+                  <ol class="list-decimal pl-4 space-y-1 text-slate-600">
+                    <li>Create <strong>Assignment</strong> in Classwork.</li>
+                    <li>Paste the KennisBoost Student Link in instructions or as a Link attachment.</li>
+                    <li>Instruct students to hand in their <code>.kbsub</code> file as the assignment attachment or paste their <code>KBSUB1.</code> code in private comments.</li>
+                    <li>Download all files as a ZIP or copy codes, then click <strong>Import .kbsub files</strong> in KennisBoost.</li>
+                  </ol>
+                </div>
+                <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+                  <div class="font-bold text-slate-900 flex items-center gap-1.5"><sl-icon name="circle-half" class="text-rose-600"></sl-icon> Canvas LMS</div>
+                  <ol class="list-decimal pl-4 space-y-1 text-slate-600">
+                    <li>Create an <strong>Assignment</strong>.</li>
+                    <li>Set Submission Type to <strong>Online</strong> $\rightarrow$ check <strong>File Uploads</strong> (restrict extensions to <code>kbsub</code>) and/or <strong>Text Entry</strong>.</li>
+                    <li>Put the Take link in the assignment description.</li>
+                    <li>In Gradebook, click <strong>Download Submissions</strong> $\rightarrow$ drag the ZIP directly into KennisBoost Inbox.</li>
+                  </ol>
+                </div>
+                <div class="p-4 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+                  <div class="font-bold text-slate-900 flex items-center gap-1.5"><sl-icon name="microsoft" class="text-blue-600"></sl-icon> Microsoft Teams</div>
+                  <ol class="list-decimal pl-4 space-y-1 text-slate-600">
+                    <li>Create a new <strong>Assignment</strong> in Teams.</li>
+                    <li>Add the KennisBoost Take link as a <strong>Link resource</strong>.</li>
+                    <li>Instruct students to click "+ Add work" and upload their downloaded <code>.kbsub</code> file before clicking "Turn in".</li>
+                    <li>Download submissions from Teams folder and import into KennisBoost.</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <!-- 5. Video -->
           ${workflow({
             id: 'guide-video',
@@ -351,6 +486,160 @@ export async function renderGuideView(params, router, container) {
             </div>
           </section>
 
+          <!-- Interactive FAQ -->
+          <section id="guide-faq" class="kb-guide-section bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 space-y-6 scroll-mt-24">
+            <header class="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div class="flex items-start gap-4">
+                <span class="w-11 h-11 rounded-xl bg-blue-50 text-blue-700 flex items-center justify-center text-xl flex-shrink-0">
+                  <sl-icon name="patch-question"></sl-icon>
+                </span>
+                <div>
+                  <h2 class="text-xl font-bold text-slate-900">Interactive FAQ</h2>
+                  <p class="text-sm text-slate-500 mt-1">Instant answers on assignment editing, answer keys, student matching, and zero-trust security.</p>
+                </div>
+              </div>
+              <div class="w-full sm:w-72">
+                <sl-input id="faq-search" size="small" placeholder="Search questions &amp; keywords..." clearable>
+                  <sl-icon slot="prefix" name="search"></sl-icon>
+                </sl-input>
+              </div>
+            </header>
+
+            <div id="faq-categories-container" class="space-y-6">
+              <!-- Category 1 -->
+              <div class="faq-category-block space-y-3">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <sl-icon name="pencil-square" class="text-amber-500"></sl-icon> Assignments, Versions &amp; Answer Keys
+                </h3>
+                <div class="space-y-2">
+                  <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="edit assignment answer key typo regrade reconcile manual override score feedback">
+                    <summary class="flex items-center justify-between gap-3 cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      <span>What happens if I edit an assignment or fix an answer key after students submit?</span>
+                      <sl-icon name="chevron-down" class="text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0"></sl-icon>
+                    </summary>
+                    <div class="text-sm text-slate-600 leading-relaxed mt-2 pt-2 border-t border-slate-200/60">
+                      When you open the <strong>Submissions Inbox</strong>, KennisBoost automatically reconciles all student submissions against the updated answer key using the students' original decrypted answers. Any manual score overrides or written comments you previously added are strictly preserved. The gradebook sync status is flagged so you can sync the updated scores with one click.
+                    </div>
+                  </details>
+
+                  <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="v2 publish update draft preserve answers wipe lost student">
+                    <summary class="flex items-center justify-between gap-3 cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      <span>If I publish an updated version (v2), will students lose their in-progress drafts?</span>
+                      <sl-icon name="chevron-down" class="text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0"></sl-icon>
+                    </summary>
+                    <div class="text-sm text-slate-600 leading-relaxed mt-2 pt-2 border-t border-slate-200/60">
+                      No! KennisBoost uses non-destructive cross-version draft migration. When a student opens a v2 link, it scans for their earlier drafts by stable question IDs and restores them into the v2 draft, displaying an <em>“Updated assignment loaded — your previous answers were preserved”</em> notice. Earlier draft files remain in local storage as backups.
+                    </div>
+                  </details>
+
+                  <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="answer key inspect element student link cheat instant feedback hash sha256">
+                    <summary class="flex items-center justify-between gap-3 cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      <span>Can a student open browser DevTools to find the correct answers in the link?</span>
+                      <sl-icon name="chevron-down" class="text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0"></sl-icon>
+                    </summary>
+                    <div class="text-sm text-slate-600 leading-relaxed mt-2 pt-2 border-t border-slate-200/60">
+                      No. The true answer key is never included in the published student payload. If you enable “Instant Feedback”, the payload contains only one-way cryptographic SHA-256 hashes of the answers, allowing the student's browser to verify their guess locally without revealing the solution. If instant feedback is disabled (e.g. for exams), no hashes are included at all.
+                    </div>
+                  </details>
+                </div>
+              </div>
+
+              <!-- Category 2 -->
+              <div class="faq-category-block space-y-3">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <sl-icon name="mortarboard" class="text-emerald-500"></sl-icon> Class Linking &amp; Roster Management
+                </h3>
+                <div class="space-y-2">
+                  <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="class linking roster guarantee sync gradebook course access code">
+                    <summary class="flex items-center justify-between gap-3 cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      <span>What does linking an assignment to a class guarantee?</span>
+                      <sl-icon name="chevron-down" class="text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0"></sl-icon>
+                    </summary>
+                    <div class="text-sm text-slate-600 leading-relaxed mt-2 pt-2 border-t border-slate-200/60">
+                      Linking binds the assignment to that course's roster, enables student identity verification via access codes, matches student names automatically, detects roster additions/removals with a staleness warning banner, and unlocks 1-click grade syncing directly into the gradebook.
+                    </div>
+                  </details>
+
+                  <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="name change nickname alias typo student id match suggested">
+                    <summary class="flex items-center justify-between gap-3 cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      <span>What if a student changes their name, uses a nickname, or mistypes their ID?</span>
+                      <sl-icon name="chevron-down" class="text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0"></sl-icon>
+                    </summary>
+                    <div class="text-sm text-slate-600 leading-relaxed mt-2 pt-2 border-t border-slate-200/60">
+                      KennisBoost's 5-stage student matcher resolves them automatically. First, it checks their cryptographic access code HMAC signature against roster cards. If a nickname was used, the inbox suggests the closest roster match. Clicking <strong>Link student</strong> saves the nickname as a permanent alias so all future work from that student links automatically.
+                    </div>
+                  </details>
+
+                  <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="duplicate work badge copy answers cheating same fingerprint">
+                    <summary class="flex items-center justify-between gap-3 cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      <span>What does the “DUPLICATE ANSWERS” badge mean?</span>
+                      <sl-icon name="chevron-down" class="text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0"></sl-icon>
+                    </summary>
+                    <div class="text-sm text-slate-600 leading-relaxed mt-2 pt-2 border-t border-slate-200/60">
+                      When two or more students submit an identical set of answers, KennisBoost computes matching cryptographic answer fingerprints and displays a <strong>DUPLICATE</strong> chip in the submissions table and review drawer, alerting you to potential collaboration or copying.
+                    </div>
+                  </details>
+                </div>
+              </div>
+
+              <!-- Category 3 -->
+              <div class="faq-category-block space-y-3">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <sl-icon name="shield-lock" class="text-violet-500"></sl-icon> Access Codes &amp; Cryptographic Security
+                </h3>
+                <div class="space-y-2">
+                  <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="rotate access code regenerate new code previous historical code mismatch">
+                    <summary class="flex items-center justify-between gap-3 cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      <span>What happens when I rotate or regenerate a student's access code?</span>
+                      <sl-icon name="chevron-down" class="text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0"></sl-icon>
+                    </summary>
+                    <div class="text-sm text-slate-600 leading-relaxed mt-2 pt-2 border-t border-slate-200/60">
+                      The previous code is safely stored in the student's rotation history. Submissions signed with an earlier access code remain verified with an explanatory note (<em>“Signed with previous access code”</em>), ensuring no past work is invalidated.
+                    </div>
+                  </details>
+
+                  <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="encryption local first zero trust privacy server relay ecies ec-dh aes-gcm">
+                    <summary class="flex items-center justify-between gap-3 cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      <span>How does local-first zero-trust encryption work in practice?</span>
+                      <sl-icon name="chevron-down" class="text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0"></sl-icon>
+                    </summary>
+                    <div class="text-sm text-slate-600 leading-relaxed mt-2 pt-2 border-t border-slate-200/60">
+                      All grading and scoring execute entirely inside your browser. Submissions are encrypted using ECIES (ECDH key exchange + AES-256-GCM). Only the teacher who published the assignment holds the private key in their browser's IndexedDB. School relay servers and cloud drops only carry encrypted blobs and cannot decrypt student names or answers.
+                    </div>
+                  </details>
+                </div>
+              </div>
+
+              <!-- Category 4 -->
+              <div class="faq-category-block space-y-3">
+                <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                  <sl-icon name="journal-bookmark" class="text-blue-500"></sl-icon> Student Gradebook &amp; Feedback Ledger
+                </h3>
+                <div class="space-y-2">
+                  <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="student gradebook feedback link ledger duplicate row history receipt kbsub">
+                    <summary class="flex items-center justify-between gap-3 cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      <span>How do feedback links update the student's personal gradebook?</span>
+                      <sl-icon name="chevron-down" class="text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0"></sl-icon>
+                    </summary>
+                    <div class="text-sm text-slate-600 leading-relaxed mt-2 pt-2 border-t border-slate-200/60">
+                      Feedback links contain stable course and assignment identifiers. When a student opens an updated feedback link (e.g. after a regrade or new comment), the student's ledger updates the existing record without creating duplicate entries, appending prior scores and comments to their revision timeline.
+                    </div>
+                  </details>
+
+                  <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="receipt proof submission download kbsub backup evidence dispute">
+                    <summary class="flex items-center justify-between gap-3 cursor-pointer list-none text-sm font-semibold text-slate-900">
+                      <span>Can students prove they submitted on time if a file gets lost?</span>
+                      <sl-icon name="chevron-down" class="text-slate-400 transition-transform group-open:rotate-180 flex-shrink-0"></sl-icon>
+                    </summary>
+                    <div class="text-sm text-slate-600 leading-relaxed mt-2 pt-2 border-t border-slate-200/60">
+                      Yes. When a student submits work, KennisBoost immediately records a cryptographic receipt ID, timestamp, and .kbsub backup directly in the student's IndexedDB. In the Student Gradebook (<code>#/gradebook/student</code>), students can view their submission receipt and re-download their <code>.kbsub</code> file at any time.
+                    </div>
+                  </details>
+                </div>
+              </div>
+            </div>
+          </section>
+
           <!-- 13. Troubleshooting -->
           <section id="guide-help" class="kb-guide-section space-y-3 scroll-mt-24">
             <h2 class="text-xl font-bold text-slate-900">Troubleshooting</h2>
@@ -399,6 +688,31 @@ export async function renderGuideView(params, router, container) {
   container.querySelector('#guide-backup')?.addEventListener('click', () => {
     document.getElementById('menu-btn-export-backup')?.click();
   });
+
+  const faqSearch = container.querySelector('#faq-search');
+  if (faqSearch) {
+    const handleFaqFilter = (e) => {
+      const q = (e.target.value || '').trim().toLowerCase();
+      const items = container.querySelectorAll('[data-faq-item]');
+      items.forEach(item => {
+        if (!q) {
+          item.classList.remove('hidden');
+        } else {
+          const text = (item.textContent || '').toLowerCase();
+          const keywords = (item.dataset.keywords || '').toLowerCase();
+          const match = text.includes(q) || keywords.includes(q);
+          item.classList.toggle('hidden', !match);
+          if (match) item.open = true;
+        }
+      });
+      container.querySelectorAll('.faq-category-block').forEach(block => {
+        const hasVisible = block.querySelectorAll('[data-faq-item]:not(.hidden)').length > 0;
+        block.classList.toggle('hidden', !hasVisible);
+      });
+    };
+    faqSearch.addEventListener('sl-input', handleFaqFilter);
+    faqSearch.addEventListener('sl-clear', handleFaqFilter);
+  }
 
   return () => observer?.disconnect();
 }

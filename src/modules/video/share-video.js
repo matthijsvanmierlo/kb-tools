@@ -180,9 +180,28 @@ export async function openVideoShareDialog(assessment) {
     try {
       const teacherKeys = await replication.publishKeysFor(assessment.class_id);
       const isInstant = feedbackSwitch ? feedbackSwitch.checked : true;
+
+      let rosterCards = null;
+      if (students?.length) {
+        rosterCards = {};
+        for (const s of students) {
+          if (s.access_code) {
+            const card = await SubmissionCrypto.buildRosterCard(assessment.id, s, s.access_code);
+            if (card?.tag) rosterCards[card.tag] = card.ct;
+          }
+        }
+      }
+      const courseMeta = course ? {
+        course_id: course.id,
+        course_name: course.name || '',
+        section: course.section || ''
+      } : null;
+
       const payload = await buildStudentVideoPayload(assessment, {
         teacherKeys,
         rosterChecks: checks,
+        rosterCards,
+        courseMeta,
         instantFeedback: isInstant
       });
 

@@ -10,7 +10,7 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { toast } from '../../utils/toast.js';
 import { StudentProfile } from '../../core/student-profile.js';
 import { StudentLedger } from './ledger.js';
-import { toCSV, downloadCSV } from '../../core/csv.js';
+import { toCSV, downloadCSV, downloadBlob } from '../../core/csv.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -246,6 +246,24 @@ export async function renderStudentGradebookView(params, router, container) {
           ` : ''}
         </div>
 
+        <!-- Submission Receipt & Backup -->
+        ${(item.receipt_id || item.submission_text || item.submitted_at) ? `
+          <div class="p-4 rounded-xl border border-blue-200 bg-blue-50/40 text-xs space-y-2">
+            <div class="flex items-center justify-between gap-2">
+              <div class="font-bold text-slate-800 flex items-center gap-1.5">
+                <sl-icon name="receipt" class="text-blue-600"></sl-icon> Submission Receipt
+              </div>
+              ${item.receipt_id ? `<span class="font-mono bg-blue-100 text-blue-800 px-2 py-0.5 rounded font-bold">${esc(item.receipt_id)}</span>` : ''}
+            </div>
+            ${item.submitted_at ? `<div class="text-slate-600">Turned in: <span class="font-medium text-slate-800">${esc(new Date(item.submitted_at).toLocaleString())}</span></div>` : ''}
+            ${item.submission_text ? `
+              <sl-button size="small" variant="default" id="btn-download-submission-backup" class="mt-1">
+                <sl-icon slot="prefix" name="download"></sl-icon> Download my submitted .kbsub backup
+              </sl-button>
+            ` : ''}
+          </div>
+        ` : ''}
+
         <!-- Question Breakdown -->
         ${item.questions && item.questions.length ? `
           <div class="space-y-3">
@@ -293,6 +311,26 @@ export async function renderStudentGradebookView(params, router, container) {
         ` : `
           <div class="text-xs text-slate-400 italic">No question-level breakdown available for this score.</div>
         `}
+
+        <!-- Revision History Timeline -->
+        ${item.history && item.history.length ? `
+          <div class="space-y-2 pt-4 border-t border-slate-200">
+            <h3 class="font-bold text-slate-900 text-xs uppercase tracking-wider flex items-center gap-1.5 text-slate-500">
+              <sl-icon name="clock-history"></sl-icon> Grade & Feedback Revision History
+            </h3>
+            <ul class="space-y-2 text-xs">
+              ${item.history.slice().reverse().map(h => `
+                <li class="p-3 bg-slate-50 border border-slate-200 rounded-lg space-y-1">
+                  <div class="flex justify-between items-center text-slate-600">
+                    <span class="font-semibold text-slate-800">Prior score: ${h.score?.earned} / ${h.score?.possible} pts</span>
+                    <span class="text-[11px] text-slate-400">${esc(new Date(h.received_at).toLocaleDateString())}</span>
+                  </div>
+                  ${h.overall_feedback ? `<div class="text-slate-700 italic">"${esc(h.overall_feedback)}"</div>` : ''}
+                </li>
+              `).join('')}
+            </ul>
+          </div>
+        ` : ''}
       </div>
       <div slot="footer" class="flex justify-between items-center w-full">
         <sl-button size="small" variant="danger" outline id="btn-delete-ledger-item">
@@ -307,6 +345,13 @@ export async function renderStudentGradebookView(params, router, container) {
     drawer.show();
 
     drawer.querySelector('#btn-close-drawer')?.addEventListener('click', () => drawer.hide());
+    drawer.querySelector('#btn-download-submission-backup')?.addEventListener('click', () => {
+      if (!item.submission_text) return;
+      const filename = `${(item.title || 'submission').replace(/[^a-z0-9_-]/gi, '_')}_${item.receipt_id || 'receipt'}.kbsub`;
+      const blob = new Blob([item.submission_text], { type: 'text/plain;charset=utf-8' });
+      downloadBlob(filename, blob);
+      toast.success('Downloaded submission backup.');
+    });
     drawer.querySelector('#btn-delete-ledger-item')?.addEventListener('click', async () => {
       await StudentLedger.deleteLedgerItem(item.id);
       drawer.hide();

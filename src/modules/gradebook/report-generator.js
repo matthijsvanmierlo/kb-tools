@@ -234,6 +234,10 @@ export class GradebookReportGenerator {
         };
       }
       return {
+        id: a.source?.id || a.id,
+        assignment_id: a.source?.id || a.id,
+        gradebook_column_id: a.id,
+        source: a.source || null,
         title: a.title,
         category: category?.name || '',
         due_date: a.due_date || '',
@@ -259,6 +263,8 @@ export class GradebookReportGenerator {
       generated_at: new Date().toISOString(),
       student: { student_id: student.student_id, full_name: student.full_name },
       course: {
+        id: course.id || course.course_id || '',
+        course_id: course.id || course.course_id || '',
         name: course.name,
         section: course.section || '',
         academic_year: course.academic_year || '',

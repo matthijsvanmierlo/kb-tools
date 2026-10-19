@@ -236,8 +236,13 @@ export class ReplicationEngine {
   }
 
   _newer(incoming, sourceDevice, local) {
-    const a = incoming?.updated_at || '';
+    let a = incoming?.updated_at || '';
     const b = local?.updated_at || '';
+    // Clamp future clock skew: allow at most localNow + 5 minutes
+    const maxFuture = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    if (a > maxFuture) {
+      a = maxFuture;
+    }
     if (a !== b) return a > b;
     return sourceDevice > this.deviceId;
   }
@@ -262,7 +267,8 @@ export class ReplicationEngine {
 
     const incomingWins = !local || this._newer(op.record, sourceDevice, local);
     let conflict = 0;
-    if (local && op.table === 'gradebook_grades' && pending.has(`${op.table}|${keyString(op.key)}`)
+    const conflictTables = ['gradebook_grades', 'assignments', 'gradebook_assignments'];
+    if (local && conflictTables.includes(op.table) && pending.has(`${op.table}|${keyString(op.key)}`)
       && comparable(local) !== comparable(op.record)) {
       await this._recordConflict(op, local, incomingWins, sourceDevice);
       conflict = 1;

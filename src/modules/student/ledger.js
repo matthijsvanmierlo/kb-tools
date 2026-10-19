@@ -54,31 +54,68 @@ export class StudentLedger {
 
     // 2. Upsert ledger entry in student_ledger
     const assignmentId = asgMeta.id || feedbackPayload.assignment_id || generateUUID();
+    let existing = null;
     const existingArr = await storage.table('student_ledger')
       .where('[course_id+assignment_id]')
       .equals([courseId, assignmentId])
       .toArray()
       .catch(() => []);
-    const existing = existingArr?.[0] || null;
+    if (existingArr?.length) {
+      existing = existingArr[0];
+    } else {
+      // Fallback matching by normalized title within the course
+      const titleTarget = String(asgMeta.title || feedbackPayload.title || '').trim().toLowerCase();
+      if (titleTarget) {
+        const courseEntries = await storage.table('student_ledger').where('course_id').equals(courseId).toArray().catch(() => []);
+        const matched = courseEntries.find(e => String(e.title || '').trim().toLowerCase() === titleTarget);
+        if (matched) existing = matched;
+      }
+    }
+
+    const newScore = {
+      earned: Number(feedbackPayload.score?.earned) || 0,
+      possible: Number(feedbackPayload.score?.possible) || Number(asgMeta.total_points) || 0,
+      pending: Number(feedbackPayload.score?.pending) || 0
+    };
+    const newOverallFeedback = feedbackPayload.overall_feedback || feedbackPayload.feedback || '';
+
+    // Record revision history if the score or overall comment was updated
+    const history = Array.isArray(existing?.history) ? [...existing.history] : [];
+    if (existing && existing.score && (
+      existing.score.earned !== newScore.earned ||
+      existing.score.possible !== newScore.possible ||
+      (existing.overall_feedback || '') !== newOverallFeedback
+    )) {
+      history.push({
+        score: { ...existing.score },
+        overall_feedback: existing.overall_feedback || '',
+        received_at: existing.received_at || existing.updated_at || now,
+        updated_by: 'teacher'
+      });
+    }
+
+    const questions = (Array.isArray(feedbackPayload.questions) && feedbackPayload.questions.length > 0)
+      ? feedbackPayload.questions
+      : (Array.isArray(existing?.questions) ? existing.questions : []);
 
     const item = {
       id: existing?.id || generateUUID(),
       course_id: courseId,
       assignment_id: assignmentId,
-      title: asgMeta.title || feedbackPayload.title || 'Assignment Feedback',
+      title: asgMeta.title || feedbackPayload.title || existing?.title || 'Assignment Feedback',
       item_type: 'assignment_feedback',
-      student_id: sMeta.student_id || feedbackPayload.student_id || '',
-      student_name: sMeta.full_name || feedbackPayload.student_name || '',
-      score: {
-        earned: Number(feedbackPayload.score?.earned) || 0,
-        possible: Number(feedbackPayload.score?.possible) || Number(asgMeta.total_points) || 0,
-        pending: Number(feedbackPayload.score?.pending) || 0
-      },
-      overall_feedback: feedbackPayload.overall_feedback || feedbackPayload.feedback || '',
-      questions: Array.isArray(feedbackPayload.questions) ? feedbackPayload.questions : [],
-      due_date: asgMeta.due_date || null,
+      student_id: sMeta.student_id || feedbackPayload.student_id || existing?.student_id || '',
+      student_name: sMeta.full_name || feedbackPayload.student_name || existing?.student_name || '',
+      score: newScore,
+      overall_feedback: newOverallFeedback,
+      questions,
+      history,
+      due_date: asgMeta.due_date || existing?.due_date || null,
       submitted_at: feedbackPayload.submission?.submitted_at || existing?.submitted_at || null,
       received_at: feedbackPayload.generated_at || now,
+      receipt_id: existing?.receipt_id || null,
+      submission_text: existing?.submission_text || null,
+      local_answers: existing?.local_answers || null,
       updated_at: now
     };
 
@@ -104,16 +141,26 @@ export class StudentLedger {
 
   /**
    * Ingest a multi-assignment student grade report.
+   * Supports both reportPayload.assignments and reportPayload.grades.
    * @param {object} reportPayload
    * @returns {Promise<{ count: number }>}
    */
   static async ingestGradeReport(reportPayload) {
-    if (!reportPayload || !Array.isArray(reportPayload.grades)) {
+    if (!reportPayload) {
+      throw new Error('INVALID_GRADE_REPORT');
+    }
+
+    const gradesList = Array.isArray(reportPayload.assignments)
+      ? reportPayload.assignments
+      : (Array.isArray(reportPayload.grades) ? reportPayload.grades : null);
+
+    if (!gradesList) {
       throw new Error('INVALID_GRADE_REPORT');
     }
 
     let count = 0;
-    const courseId = reportPayload.course?.id || reportPayload.course_id || 'reported_course';
+    const now = new Date().toISOString();
+    const courseId = reportPayload.course?.id || reportPayload.course?.course_id || reportPayload.course_id || 'reported_course';
     const courseName = reportPayload.course?.name || reportPayload.course_name || 'Enrolled Course';
 
     let course = await storage.table('student_courses').get(courseId).catch(() => null);
@@ -123,37 +170,69 @@ export class StudentLedger {
         course_id: courseId,
         course_name: courseName,
         section: reportPayload.course?.section || '',
-        updated_at: new Date().toISOString()
+        updated_at: now
       };
       await storage.table('student_courses').put(course);
     }
 
-    for (const g of reportPayload.grades) {
-      const asgId = g.assignment_id || generateUUID();
+    for (const g of gradesList) {
+      const asgId = g.assignment_id || g.id || generateUUID();
+      let existing = null;
       const existingArr = await storage.table('student_ledger')
         .where('[course_id+assignment_id]')
         .equals([courseId, asgId])
         .toArray()
         .catch(() => []);
-      const existing = existingArr?.[0] || null;
+
+      if (existingArr?.length) {
+        existing = existingArr[0];
+      } else {
+        const titleTarget = String(g.assignment_title || g.title || '').trim().toLowerCase();
+        if (titleTarget) {
+          const courseEntries = await storage.table('student_ledger').where('course_id').equals(courseId).toArray().catch(() => []);
+          const matched = courseEntries.find(e => String(e.title || '').trim().toLowerCase() === titleTarget);
+          if (matched) existing = matched;
+        }
+      }
+
+      const earned = g.grade?.raw_score != null ? Number(g.grade.raw_score) : (g.score != null ? Number(g.score) : Number(g.earned || 0));
+      const possible = g.max_score != null ? Number(g.max_score) : (g.possible != null ? Number(g.possible) : (existing?.score?.possible || 0));
+      const overall_feedback = g.grade?.feedback || g.feedback || existing?.overall_feedback || '';
+
+      const history = Array.isArray(existing?.history) ? [...existing.history] : [];
+      if (existing && existing.score && (existing.score.earned !== earned || existing.score.possible !== possible)) {
+        history.push({
+          score: { ...existing.score },
+          overall_feedback: existing.overall_feedback || '',
+          received_at: existing.received_at || existing.updated_at || now,
+          updated_by: 'report'
+        });
+      }
 
       const item = {
         id: existing?.id || generateUUID(),
         course_id: courseId,
         assignment_id: asgId,
-        title: g.assignment_title || g.title || 'Assignment',
-        item_type: 'report_grade',
-        student_id: reportPayload.student?.student_id || '',
-        student_name: reportPayload.student?.full_name || '',
+        title: g.assignment_title || g.title || existing?.title || 'Assignment',
+        item_type: existing?.item_type === 'assignment_feedback' ? 'assignment_feedback' : 'report_grade',
+        student_id: reportPayload.student?.student_id || existing?.student_id || '',
+        student_name: reportPayload.student?.full_name || existing?.student_name || '',
         score: {
-          earned: Number(g.score) || Number(g.earned) || 0,
-          possible: Number(g.max_score) || Number(g.possible) || 0,
-          pending: 0
+          earned,
+          possible,
+          pending: existing?.score?.pending || 0
         },
-        overall_feedback: g.feedback || '',
-        questions: [],
-        received_at: reportPayload.generated_at || new Date().toISOString(),
-        updated_at: new Date().toISOString()
+        overall_feedback,
+        // Never wipe question-level breakdown if student previously ingested detailed feedback
+        questions: Array.isArray(existing?.questions) && existing.questions.length > 0 ? existing.questions : [],
+        history,
+        due_date: g.due_date || existing?.due_date || null,
+        submitted_at: existing?.submitted_at || null,
+        receipt_id: existing?.receipt_id || null,
+        submission_text: existing?.submission_text || null,
+        local_answers: existing?.local_answers || null,
+        received_at: reportPayload.generated_at || now,
+        updated_at: now
       };
 
       await storage.table('student_ledger').put(item);
@@ -179,7 +258,9 @@ export class StudentLedger {
     studentName,
     clientScore = null,
     submittedAt = new Date().toISOString(),
-    receiptId = null
+    receiptId = null,
+    answers = null,
+    submissionText = null
   }) {
     const cId = courseId || 'self_study';
     let course = await storage.table('student_courses').get(cId).catch(() => null);
@@ -204,16 +285,21 @@ export class StudentLedger {
       id: existing?.id || generateUUID(),
       course_id: cId,
       assignment_id: assignmentId,
-      title: title || 'Submitted Assignment',
+      title: title || existing?.title || 'Submitted Assignment',
       item_type: existing?.item_type === 'assignment_feedback' ? 'assignment_feedback' : 'submission',
-      student_id: studentId || '',
-      student_name: studentName || '',
+      student_id: studentId || existing?.student_id || '',
+      student_name: studentName || existing?.student_name || '',
       score: existing?.score || {
         earned: clientScore?.earned ?? 0,
         possible: clientScore?.possible ?? 0,
         pending: clientScore?.pending ?? 0
       },
-      receipt_id: receiptId || null,
+      overall_feedback: existing?.overall_feedback || '',
+      questions: Array.isArray(existing?.questions) ? existing.questions : [],
+      history: Array.isArray(existing?.history) ? existing.history : [],
+      receipt_id: receiptId || existing?.receipt_id || null,
+      submission_text: submissionText || existing?.submission_text || null,
+      local_answers: answers || existing?.local_answers || null,
       submitted_at: submittedAt,
       received_at: existing?.received_at || null,
       updated_at: new Date().toISOString()

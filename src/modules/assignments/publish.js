@@ -41,6 +41,16 @@ import { splitName, joinName } from '../../core/names.js';
 import { getTransport } from '../../core/transport.js';
 import { replication } from '../../core/replication/manager.js';
 
+export async function computeRosterHash(students = []) {
+  if (!Array.isArray(students) || !students.length) return '';
+  const sorted = [...students]
+    .map(s => `${String(s.student_id || '').toUpperCase()}:${String(s.access_code || '')}`)
+    .sort()
+    .join('|');
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sorted));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
+}
+
 /**
  * Bump the publish version and build the student payload.
  * @param {object} assignment
@@ -54,13 +64,16 @@ export async function publishAssignment(assignment, roster, { handinEmail = '', 
   const activeTransport = transport || await getTransport();
   // A class shared with co-teachers gets work encrypted to the class key they all hold
   const keys = await replication.publishKeysFor(assignment.class_id);
+  const rosterStudents = roster?.students || roster?.withCode || [];
+  const rosterHash = await computeRosterHash(rosterStudents);
   const next = {
     ...assignment,
     publish: {
       version: (assignment.publish?.version || 0) + 1,
       salt: randomSalt(),
       published_at: new Date().toISOString(),
-      fingerprint: keys.fingerprint
+      fingerprint: keys.fingerprint,
+      roster_hash: rosterHash
     },
     updated_at: new Date().toISOString()
   };

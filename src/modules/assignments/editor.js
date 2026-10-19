@@ -5,8 +5,21 @@ import { ConfirmDialog } from '../../utils/dialogs.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { QUESTION_TYPE_META, QUESTION_TYPE_ORDER, createQuestion, cloneQuestion, validateQuestion } from './question-types.js';
 import { countBlanks, totalPoints } from './grading.js';
-import { openPublishDialog } from './publish.js';
+import { openPublishDialog, computeRosterHash } from './publish.js';
 import { syncContentClassLink } from '../gradebook/bridge.js';
+
+export function resolveAssignmentCourseId(assignment) {
+  if (!assignment) return null;
+  return assignment.gradebook?.course_id || assignment.class_id || null;
+}
+
+export function syncAssignmentCourseId(assignment, courseId) {
+  if (!assignment) return;
+  const cid = courseId || null;
+  assignment.class_id = cid;
+  assignment.gradebook = assignment.gradebook || {};
+  assignment.gradebook.course_id = cid;
+}
 
 /**
  * Assignment Editor (KB-ASSIGN-004)
@@ -18,14 +31,25 @@ const shortId = () => generateUUID().slice(0, 8);
 
 export async function renderEditor(assignment, router, container) {
   const a = assignment;
+  const currentCourseId = resolveAssignmentCourseId(a);
+  syncAssignmentCourseId(a, currentCourseId);
   a.settings = { feedback_mode: 'after_submit', shuffle_options: true, require_access_code: true, release_grade_immediately: true, ...(a.settings || {}) };
-  a.gradebook = { course_id: a.class_id || null, category_id: null, column_id: null, ...(a.gradebook || {}) };
+  a.gradebook = { category_id: null, column_id: null, ...(a.gradebook || {}), course_id: currentCourseId };
   a.questions = a.questions || [];
 
-  const [courses, submissionCount] = await Promise.all([
+  const [courses, submissionCount, rosterStudents] = await Promise.all([
     storage.table('gradebook_courses').toArray().catch(() => []),
-    storage.table('assignment_submissions').where('assignment_id').equals(a.id).count().catch(() => 0)
+    storage.table('assignment_submissions').where('assignment_id').equals(a.id).count().catch(() => 0),
+    currentCourseId ? storage.table('gradebook_students').where('course_id').equals(currentCourseId).toArray().catch(() => []) : []
   ]);
+
+  let isRosterStale = false;
+  if (a.publish?.published_at && currentCourseId && a.publish?.roster_hash) {
+    const currentHash = await computeRosterHash(rosterStudents);
+    if (currentHash && currentHash !== a.publish.roster_hash) {
+      isRosterStale = true;
+    }
+  }
 
   let saveTimer = null;
   const setSaveState = (text) => {
@@ -49,6 +73,18 @@ export async function renderEditor(assignment, router, container) {
 
   container.innerHTML = `
     <div class="space-y-6 max-w-7xl mx-auto">
+      ${isRosterStale ? `
+        <div class="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900" id="asg-roster-stale-banner">
+          <div class="flex items-center gap-2">
+            <sl-icon name="exclamation-triangle" class="text-amber-600 text-lg flex-shrink-0"></sl-icon>
+            <span><strong>Class roster or access codes were modified since this assignment was published.</strong> Students added or re-keyed since then will not be recognized until you publish an updated version.</span>
+          </div>
+          <sl-button size="small" variant="warning" id="asg-republish-stale-btn" class="flex-shrink-0">
+            <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Re-publish
+          </sl-button>
+        </div>
+      ` : ''}
+
       <!-- Header -->
       <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
         <div class="flex items-center gap-3 min-w-0">
@@ -546,9 +582,14 @@ export async function renderEditor(assignment, router, container) {
   on('#asg-title', 'sl-input', (e) => { a.title = e.target.value.trim() || 'Untitled assignment'; save(); });
   on('#asg-instructions', 'sl-input', (e) => { a.instructions = e.target.value; save(); });
   on('#asg-course', 'sl-change', async (e) => {
-    await syncContentClassLink(a, 'assignments', e.target.value || null);
+    const cid = e.target.value || null;
+    syncAssignmentCourseId(a, cid);
+    await syncContentClassLink(a, 'assignments', cid);
     renderCategory();
     save();
+  });
+  on('#asg-republish-stale-btn', 'click', () => {
+    container.querySelector('#asg-publish')?.click();
   });
   on('#asg-due', 'sl-change', (e) => { a.settings.due_date = e.target.value || ''; save(); });
   on('#asg-feedback', 'sl-change', (e) => { a.settings.feedback_mode = e.target.value; save(); });

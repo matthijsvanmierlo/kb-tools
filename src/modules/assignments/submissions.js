@@ -3,7 +3,7 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { toast } from '../../utils/toast.js';
 import { GradebookBridge } from '../gradebook/bridge.js';
-import { evaluateSubmission, splitSubmissionText, IDENTITY_LABELS, DECRYPT_ERRORS } from './pipeline.js';
+import { evaluateSubmission, splitSubmissionText, reconcileSubmissionWithAssignment, IDENTITY_LABELS, DECRYPT_ERRORS } from './pipeline.js';
 import { finalScore, totalPoints, describeCorrectAnswer, BLANK_TOKEN } from './grading.js';
 import { QUESTION_TYPE_META } from './question-types.js';
 import { importSubmissionTexts } from './import.js';
@@ -51,6 +51,10 @@ export async function renderSubmissions(assignment, router, container) {
   let course = null;
   let roster = [];
   let submissions = [];
+  let viewMode = 'students'; // 'students' | 'speedgrader' | 'item_analysis'
+  let speedgraderQIndex = 0;
+  let blindGrading = false;
+  let fingerprintCounts = new Map();
 
   const load = async () => {
     [course, roster, submissions] = await Promise.all([
@@ -59,6 +63,20 @@ export async function renderSubmissions(assignment, router, container) {
       storage.table('assignment_submissions').where('assignment_id').equals(a.id).toArray().catch(() => [])
     ]);
     roster.sort((x, y) => (x.full_name || '').localeCompare(y.full_name || ''));
+
+    for (let i = 0; i < submissions.length; i++) {
+      const sub = submissions[i];
+      const updated = await reconcileSubmissionWithAssignment(sub, a, roster);
+      if (updated.auto?.earned !== sub.auto?.earned ||
+          updated.auto?.possible !== sub.auto?.possible ||
+          updated.identity !== sub.identity ||
+          updated.student_id !== sub.student_id ||
+          updated.student_name !== sub.student_name ||
+          (updated.archived_answers && Object.keys(updated.archived_answers).length !== Object.keys(sub.archived_answers || {}).length)) {
+        submissions[i] = updated;
+        await storage.table('assignment_submissions').put(updated);
+      }
+    }
   };
 
   const latestFor = (studentId) => submissions
@@ -66,6 +84,225 @@ export async function renderSubmissions(assignment, router, container) {
     .sort((x, y) => (y.submitted_at || '').localeCompare(x.submitted_at || ''))[0] || null;
 
   let filterMode = 'all'; // 'all' | 'submitted' | 'not_submitted'
+
+  const renderSpeedgraderView = (latest) => {
+    const questions = a.questions || [];
+    if (!questions.length) {
+      return `<div class="p-10 text-center text-slate-500 bg-white rounded-2xl border border-slate-200">This assignment has no questions.</div>`;
+    }
+    if (speedgraderQIndex < 0 || speedgraderQIndex >= questions.length) speedgraderQIndex = 0;
+    const q = questions[speedgraderQIndex];
+    const meta = QUESTION_TYPE_META[q.type] || {};
+
+    const qPills = questions.map((question, idx) => {
+      const pendingCount = latest.filter(s => {
+        const auto = s.auto?.per_question?.[question.id];
+        const m = s.manual?.[question.id];
+        return auto?.needs_manual && (m?.points === undefined || m?.points === null);
+      }).length;
+      const isSelected = idx === speedgraderQIndex;
+      return `
+        <button type="button" class="speedgrader-q-btn px-3 py-1.5 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${isSelected ? 'bg-amber-500 text-white shadow-xs' : 'bg-slate-100 text-slate-700 hover:bg-slate-200'}" data-q-index="${idx}">
+          <span>Q${idx + 1}</span>
+          ${pendingCount ? `<span class="px-1.5 py-0.2 rounded-full text-[10px] ${isSelected ? 'bg-amber-600 text-white' : 'bg-amber-100 text-amber-800 font-bold'}">${pendingCount}</span>` : ''}
+        </button>`;
+    }).join('');
+
+    const sortedSubmissions = [...latest].sort((x, y) => (x.student_name || x.student_id || '').localeCompare(y.student_name || y.student_id || ''));
+
+    const responseCards = sortedSubmissions.map((sub, sIdx) => {
+      const auto = sub.auto?.per_question?.[q.id] || { earned: 0, possible: q.points || 0, needs_manual: q.type === 'long_text' };
+      const m = sub.manual?.[q.id] || {};
+      const tone = auto.needs_manual ? 'border-amber-300' : auto.correct ? 'border-emerald-200' : auto.earned > 0 ? 'border-blue-200' : 'border-rose-200';
+      const displayName = blindGrading ? `Student #${sIdx + 1}` : esc(sub.student_name || sub.claimed_name || sub.student_id);
+      const displayId = blindGrading ? '' : `<span class="text-xs text-slate-400 tabular-nums ml-2">${esc(sub.student_id)}</span>`;
+
+      return `
+        <div class="bg-white rounded-xl border ${tone} p-4 space-y-3" data-speedgrader-sub="${esc(sub.id)}" data-speedgrader-qid="${esc(q.id)}">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="font-semibold text-slate-900">${displayName}</span>
+              ${displayId}
+              ${!blindGrading ? identityChip(sub.identity) : ''}
+            </div>
+            <span class="text-xs font-semibold tabular-nums ${auto.needs_manual ? 'text-amber-700' : 'text-slate-500'}">
+              ${auto.needs_manual ? 'Needs review' : `Auto: ${auto.earned} / ${auto.possible}`}
+            </span>
+          </div>
+          <div class="p-3 rounded-lg bg-slate-50 border border-slate-200 text-sm text-slate-800">
+            <div class="text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">Student Answer</div>
+            <div>${formatAnswer(q, sub.answers?.[q.id])}</div>
+          </div>
+          <div class="flex flex-col sm:flex-row gap-3">
+            <sl-input size="small" type="number" min="0" max="${auto.possible}" step="0.5" class="sm:w-36" data-sg-points label="Points" placeholder="${auto.needs_manual ? '' : `${auto.earned} (auto)`}" value="${m.points ?? ''}" help-text="${auto.needs_manual ? 'Required' : 'Leave empty to keep auto'}">
+              <span slot="suffix" class="text-xs text-slate-400">/ ${auto.possible}</span>
+            </sl-input>
+            <sl-textarea size="small" rows="1" resize="auto" class="flex-1" data-sg-feedback label="Feedback" placeholder="Optional notes for the student" value="${esc(m.feedback || '')}"></sl-textarea>
+          </div>
+        </div>`;
+    }).join('');
+
+    return `
+      <div class="space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+          <div class="flex items-center gap-1.5 flex-wrap overflow-x-auto py-1">
+            ${qPills}
+          </div>
+          <div class="flex items-center gap-3 flex-shrink-0">
+            <sl-switch id="speedgrader-blind" ${blindGrading ? 'checked' : ''} class="text-xs font-medium text-slate-700">Blind Grading</sl-switch>
+            <div class="flex items-center gap-1">
+              <sl-button size="small" id="speedgrader-prev-q" ${speedgraderQIndex === 0 ? 'disabled' : ''}><sl-icon slot="prefix" name="chevron-left"></sl-icon> Prev</sl-button>
+              <sl-button size="small" id="speedgrader-next-q" ${speedgraderQIndex >= questions.length - 1 ? 'disabled' : ''}>Next <sl-icon slot="suffix" name="chevron-right"></sl-icon></sl-button>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-amber-50/50 rounded-2xl border border-amber-200 p-5 space-y-3">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-slate-900 text-base">Question ${speedgraderQIndex + 1} of ${questions.length}</span>
+              <span class="text-xs px-2 py-0.5 rounded-full bg-white border border-slate-200 text-slate-700 font-medium flex items-center gap-1"><sl-icon name="${meta.icon || 'question'}"></sl-icon>${esc(meta.label || q.type)}</span>
+            </div>
+            <span class="text-sm font-semibold text-slate-700 tabular-nums">${q.points || 1} pt${(q.points || 1) === 1 ? '' : 's'}</span>
+          </div>
+          <div class="text-sm text-slate-900 kb-prose [&_p]:m-0">${Sanitizer.renderSTEMMarkdown(String(q.prompt || '').replace(BLANK_TOKEN, '____'))}</div>
+          <div class="text-xs text-slate-600 bg-white p-3 rounded-xl border border-amber-200">
+            <strong>${q.type === 'long_text' ? 'Grading notes / rubric:' : 'Answer key:'}</strong> ${esc(q.type === 'long_text' ? (q.rubric_hint || '—') : describeCorrectAnswer(q))}
+          </div>
+        </div>
+
+        <div class="space-y-3">
+          <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider flex justify-between items-center">
+            <span>Student Responses (${sortedSubmissions.length})</span>
+            <span class="text-[11px] text-slate-400">Edits save automatically</span>
+          </div>
+          ${sortedSubmissions.length ? responseCards : '<div class="p-8 text-center text-slate-400 bg-white rounded-xl border border-slate-200">No submissions yet for this question.</div>'}
+        </div>
+      </div>`;
+  };
+
+  const renderItemAnalysisView = (latest) => {
+    if (!latest.length) {
+      return `<div class="p-10 text-center text-slate-500 bg-white rounded-2xl border border-slate-200">No submissions yet to analyze.</div>`;
+    }
+    const questions = a.questions || [];
+    if (!questions.length) {
+      return `<div class="p-10 text-center text-slate-500 bg-white rounded-2xl border border-slate-200">This assignment has no questions.</div>`;
+    }
+
+    const items = questions.map((q, idx) => {
+      const meta = QUESTION_TYPE_META[q.type] || {};
+      const totalSub = latest.length;
+      let earnedSum = 0;
+      let correctCount = 0;
+      const choiceCounts = {};
+      if (Array.isArray(q.options)) {
+        q.options.forEach(opt => { choiceCounts[opt.id] = 0; });
+      } else if (q.type === 'true_false') {
+        choiceCounts['true'] = 0;
+        choiceCounts['false'] = 0;
+      }
+      const textAnswers = {};
+
+      latest.forEach(s => {
+        const auto = s.auto?.per_question?.[q.id] || { earned: 0, possible: q.points || 0 };
+        const m = s.manual?.[q.id];
+        const earned = (m?.points !== undefined && m?.points !== null) ? Number(m.points) : (auto.earned || 0);
+        earnedSum += earned;
+        if (auto.correct || earned >= (q.points || 1)) correctCount++;
+
+        const ans = s.answers?.[q.id];
+        if (q.type === 'single_choice' || q.type === 'true_false') {
+          const k = String(ans ?? '');
+          if (choiceCounts[k] !== undefined) choiceCounts[k]++;
+        } else if (q.type === 'multi_choice' && Array.isArray(ans)) {
+          ans.forEach(k => { if (choiceCounts[k] !== undefined) choiceCounts[k]++; });
+        } else if (q.type === 'short_text' && typeof ans === 'string' && ans.trim()) {
+          const norm = ans.trim().toLowerCase();
+          textAnswers[norm] = (textAnswers[norm] || 0) + 1;
+        }
+      });
+
+      const avgPts = totalSub ? (earnedSum / totalSub).toFixed(1) : 0;
+      const facilityIndex = totalSub ? Math.round((correctCount / totalSub) * 100) : 0;
+      const facilityTone = facilityIndex >= 70 ? 'bg-emerald-100 text-emerald-800 border-emerald-300' : facilityIndex >= 40 ? 'bg-blue-100 text-blue-800 border-blue-300' : 'bg-rose-100 text-rose-800 border-rose-300';
+      const facilityLabel = facilityIndex >= 70 ? 'High Mastery' : facilityIndex >= 40 ? 'Moderate' : 'Challenging / Low Mastery';
+
+      let distractorWarning = '';
+      if ((q.type === 'single_choice' || q.type === 'true_false') && q.options) {
+        for (const opt of q.options) {
+          if (!opt.correct && choiceCounts[opt.id] > 0) {
+            const optPct = Math.round((choiceCounts[opt.id] / totalSub) * 100);
+            if (optPct >= 30) {
+              distractorWarning += `<div class="mt-2 text-xs p-2 rounded bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1.5"><sl-icon name="exclamation-triangle" class="text-amber-600"></sl-icon> <strong>Distractor Alert:</strong> ${optPct}% of students picked incorrect option “${esc(opt.text)}”.</div>`;
+            }
+          }
+        }
+      }
+
+      let choiceBarsHtml = '';
+      if (Array.isArray(q.options) && q.options.length) {
+        choiceBarsHtml = `
+          <div class="space-y-2 mt-3 pt-3 border-t border-slate-100">
+            <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Option Distribution</div>
+            ${q.options.map(opt => {
+              const count = choiceCounts[opt.id] || 0;
+              const pct = totalSub ? Math.round((count / totalSub) * 100) : 0;
+              const isCorrect = Boolean(opt.correct);
+              return `
+                <div class="space-y-1">
+                  <div class="flex justify-between text-xs">
+                    <span class="flex items-center gap-1.5 ${isCorrect ? 'font-semibold text-emerald-800' : 'text-slate-700'}">
+                      ${isCorrect ? '<sl-icon name="check-circle-fill" class="text-emerald-600"></sl-icon>' : '<sl-icon name="circle" class="text-slate-300"></sl-icon>'}
+                      ${esc(opt.text)}
+                    </span>
+                    <span class="tabular-nums text-slate-500">${count} (${pct}%)</span>
+                  </div>
+                  <div class="h-2 w-full bg-slate-100 rounded-full overflow-hidden">
+                    <div class="h-full rounded-full transition-all ${isCorrect ? 'bg-emerald-500' : 'bg-slate-300'}" style="width: ${pct}%"></div>
+                  </div>
+                </div>`;
+            }).join('')}
+          </div>`;
+      }
+
+      let topShortHtml = '';
+      if (q.type === 'short_text' && Object.keys(textAnswers).length) {
+        const sorted = Object.entries(textAnswers).sort((a, b) => b[1] - a[1]).slice(0, 5);
+        topShortHtml = `
+          <div class="space-y-1.5 mt-3 pt-3 border-t border-slate-100">
+            <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider">Top Submitted Answers</div>
+            <div class="flex flex-wrap gap-2">
+              ${sorted.map(([txt, cnt]) => `
+                <span class="px-2 py-1 rounded bg-slate-100 text-xs text-slate-700 font-mono">
+                  "${esc(txt)}" <span class="text-slate-400 font-sans tabular-nums">(${cnt})</span>
+                </span>`).join('')}
+            </div>
+          </div>`;
+      }
+
+      return `
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 space-y-3 shadow-xs">
+          <div class="flex flex-wrap items-center justify-between gap-3">
+            <div class="flex items-center gap-2">
+              <span class="font-bold text-slate-900">Q${idx + 1}.</span>
+              <span class="text-xs px-2 py-0.5 rounded-full bg-slate-100 text-slate-700 font-medium flex items-center gap-1"><sl-icon name="${meta.icon || 'question'}"></sl-icon>${esc(meta.label || q.type)}</span>
+              <span class="text-xs text-slate-400 tabular-nums">${q.points || 1} pt${(q.points || 1) === 1 ? '' : 's'}</span>
+            </div>
+            <div class="flex items-center gap-2">
+              <span class="text-xs px-2 py-1 rounded-full border font-semibold ${facilityTone}">${facilityIndex}% · ${facilityLabel}</span>
+              <span class="text-xs text-slate-500">Avg: <strong class="text-slate-900">${avgPts}</strong> / ${q.points || 1}</span>
+            </div>
+          </div>
+          <div class="text-sm text-slate-800 kb-prose [&_p]:m-0">${Sanitizer.renderSTEMMarkdown(String(q.prompt || '').replace(BLANK_TOKEN, '____'))}</div>
+          ${distractorWarning}
+          ${choiceBarsHtml}
+          ${topShortHtml}
+        </div>`;
+    }).join('');
+
+    return `<div class="space-y-4">${items}</div>`;
+  };
 
   const render = () => {
     const latest = submissions.filter(s => s.is_latest !== false);
@@ -79,11 +316,21 @@ export async function renderSubmissions(assignment, router, container) {
     const warnings = latest.filter(s => s.identity !== 'verified').length;
     const unsynced = latest.filter(s => !s.synced_at || (s.updated_at && s.updated_at > s.synced_at)).length;
 
+    fingerprintCounts = new Map();
+    latest.forEach(s => {
+      if (s.answers_fingerprint) {
+        const set = fingerprintCounts.get(s.answers_fingerprint) || new Set();
+        set.add(String(s.student_id).toUpperCase());
+        fingerprintCounts.set(s.answers_fingerprint, set);
+      }
+    });
+
     const row = (student, sub) => {
       const score = sub ? finalScore(a, sub) : null;
+      const isDuplicate = sub?.answers_fingerprint && (fingerprintCounts.get(sub.answers_fingerprint)?.size > 1);
       const status = !sub
         ? '<span class="inline-flex items-center gap-1 text-xs text-slate-400"><sl-icon name="circle"></sl-icon>Not submitted</span>'
-        : `<span class="inline-flex items-center gap-1 text-xs text-slate-700"><sl-icon name="check-circle-fill" class="text-emerald-600"></sl-icon>Submitted</span>${sub.days_late ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700">${sub.days_late}d LATE</span>` : ''}`;
+        : `<span class="inline-flex items-center gap-1 text-xs text-slate-700"><sl-icon name="check-circle-fill" class="text-emerald-600"></sl-icon>Submitted</span>${sub.days_late ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700">${sub.days_late}d LATE</span>` : ''}${isDuplicate ? ` <span class="ml-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 inline-flex items-center gap-1" title="Identical answer set detected across multiple students"><sl-icon name="copy"></sl-icon>DUPLICATE</span>` : ''}`;
       return `
         <tr class="border-t border-slate-200 ${sub ? 'hover:bg-slate-50 cursor-pointer' : ''}" ${sub ? `data-open="${esc(sub.id)}" tabindex="0"` : ''}>
           <td class="px-4 py-3">
@@ -113,6 +360,61 @@ export async function renderSubmissions(assignment, router, container) {
         ...roster.map(s => row(s, latestFor(s.student_id))),
         ...strangers.map(sub => row(null, sub))
       ];
+    }
+
+    let mainContentHtml = '';
+    if (viewMode === 'speedgrader') {
+      mainContentHtml = renderSpeedgraderView(latest);
+    } else if (viewMode === 'item_analysis') {
+      mainContentHtml = renderItemAnalysisView(latest);
+    } else {
+      mainContentHtml = `
+        <div class="space-y-3">
+          <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
+            <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs">
+              <button type="button" class="px-3 py-1.5 rounded-lg font-medium ${filterMode === 'all' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}" id="btn-filter-all">
+                All (${roster.length || latest.length})
+              </button>
+              <button type="button" class="px-3 py-1.5 rounded-lg font-medium ${filterMode === 'submitted' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}" id="btn-filter-submitted">
+                Submitted (${latest.length})
+              </button>
+              <button type="button" class="px-3 py-1.5 rounded-lg font-medium ${filterMode === 'not_submitted' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}" id="btn-filter-not-submitted">
+                Not submitted (${notSubmitted.length})
+              </button>
+            </div>
+            ${filterMode === 'not_submitted' && notSubmitted.length > 0 ? `
+              <sl-button size="small" id="btn-export-not-submitted">
+                <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Export not-submitted list (CSV)
+              </sl-button>
+            ` : ''}
+          </div>
+
+          <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            ${displayRows.length ? `
+              <div class="overflow-x-auto">
+                <table class="w-full text-sm">
+                  <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500 text-left">
+                    <tr>
+                      <th class="px-4 py-3 font-semibold">Student</th>
+                      <th class="px-4 py-3 font-semibold">Status</th>
+                      <th class="px-4 py-3 font-semibold hidden md:table-cell">Identity</th>
+                      <th class="px-4 py-3 font-semibold text-right">Score</th>
+                      <th class="px-4 py-3 font-semibold hidden sm:table-cell">Submitted</th>
+                      <th class="px-4 py-3 font-semibold hidden lg:table-cell">Gradebook</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${displayRows.join('')}
+                  </tbody>
+                </table>
+              </div>` : `
+              <div class="p-10 text-center space-y-3">
+                <span class="w-12 h-12 mx-auto rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-2xl"><sl-icon name="inbox"></sl-icon></span>
+                <h3 class="font-semibold text-slate-900">${filterMode === 'not_submitted' ? 'Everyone has submitted!' : 'No submissions yet'}</h3>
+                <p class="text-sm text-slate-500 max-w-md mx-auto">${filterMode === 'not_submitted' ? 'All students on this roster have handed in their work.' : 'Students download a <code>.kbsub</code> file or copy a submission code when they finish. Import the files or paste the codes here.'}</p>
+              </div>`}
+          </div>
+        </div>`;
     }
 
     container.innerHTML = `
@@ -164,52 +466,19 @@ export async function renderSubmissions(assignment, router, container) {
           <sl-alert variant="warning" open><sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
             Link this assignment to a class in the editor to verify student identities and sync grades.</sl-alert>` : ''}
 
-        <div class="space-y-3">
-          <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
-            <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs">
-              <button type="button" class="px-3 py-1.5 rounded-lg font-medium ${filterMode === 'all' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}" id="btn-filter-all">
-                All (${roster.length || latest.length})
-              </button>
-              <button type="button" class="px-3 py-1.5 rounded-lg font-medium ${filterMode === 'submitted' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}" id="btn-filter-submitted">
-                Submitted (${latest.length})
-              </button>
-              <button type="button" class="px-3 py-1.5 rounded-lg font-medium ${filterMode === 'not_submitted' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}" id="btn-filter-not-submitted">
-                Not submitted (${notSubmitted.length})
-              </button>
-            </div>
-            ${filterMode === 'not_submitted' && notSubmitted.length > 0 ? `
-              <sl-button size="small" id="btn-export-not-submitted">
-                <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Export not-submitted list (CSV)
-              </sl-button>
-            ` : ''}
-          </div>
-
-          <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-            ${displayRows.length ? `
-              <div class="overflow-x-auto">
-                <table class="w-full text-sm">
-                  <thead class="bg-slate-50 text-xs uppercase tracking-wider text-slate-500 text-left">
-                    <tr>
-                      <th class="px-4 py-3 font-semibold">Student</th>
-                      <th class="px-4 py-3 font-semibold">Status</th>
-                      <th class="px-4 py-3 font-semibold hidden md:table-cell">Identity</th>
-                      <th class="px-4 py-3 font-semibold text-right">Score</th>
-                      <th class="px-4 py-3 font-semibold hidden sm:table-cell">Submitted</th>
-                      <th class="px-4 py-3 font-semibold hidden lg:table-cell">Gradebook</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    ${displayRows.join('')}
-                  </tbody>
-                </table>
-              </div>` : `
-              <div class="p-10 text-center space-y-3">
-                <span class="w-12 h-12 mx-auto rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-2xl"><sl-icon name="inbox"></sl-icon></span>
-                <h3 class="font-semibold text-slate-900">${filterMode === 'not_submitted' ? 'Everyone has submitted!' : 'No submissions yet'}</h3>
-                <p class="text-sm text-slate-500 max-w-md mx-auto">${filterMode === 'not_submitted' ? 'All students on this roster have handed in their work.' : 'Students download a <code>.kbsub</code> file or copy a submission code when they finish. Import the files or paste the codes here.'}</p>
-              </div>`}
-          </div>
+        <div class="flex items-center gap-2 border-b border-slate-200 pb-3">
+          <button type="button" class="px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${viewMode === 'students' ? 'bg-amber-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}" id="tab-mode-students">
+            <sl-icon name="people"></sl-icon> By Student (${latest.length})
+          </button>
+          <button type="button" class="px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${viewMode === 'speedgrader' ? 'bg-amber-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}" id="tab-mode-speedgrader">
+            <sl-icon name="lightning-charge"></sl-icon> SpeedGrader (By Question)
+          </button>
+          <button type="button" class="px-4 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition-all ${viewMode === 'item_analysis' ? 'bg-amber-500 text-white shadow-xs' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}" id="tab-mode-item-analysis">
+            <sl-icon name="bar-chart-line"></sl-icon> Item Analysis
+          </button>
         </div>
+
+        ${mainContentHtml}
       </div>`;
 
     bind(notSubmitted);
@@ -279,6 +548,11 @@ export async function renderSubmissions(assignment, router, container) {
     drawer.label = sub.student_name || sub.student_id;
     drawer.style.setProperty('--size', 'min(760px, 100vw)');
 
+    const isDuplicate = sub?.answers_fingerprint && (fingerprintCounts.get(sub.answers_fingerprint)?.size > 1);
+    const studentSubs = submissions
+      .filter(s => String(s.student_id).toUpperCase() === String(sub.student_id).toUpperCase())
+      .sort((x, y) => (x.submitted_at || '').localeCompare(y.submitted_at || ''));
+
     const scoreLine = () => {
       const s = finalScore(a, { ...sub, manual: draft.manual });
       return `<span class="text-2xl font-bold text-slate-900 tabular-nums">${s.earned}</span><span class="text-slate-400"> / ${s.possible} pts</span>${s.pending ? `<span class="ml-2 text-xs text-amber-700">${s.pending} still to grade</span>` : ''}`;
@@ -288,14 +562,27 @@ export async function renderSubmissions(assignment, router, container) {
       <div class="space-y-5">
         <div class="flex flex-wrap items-center justify-between gap-3 p-4 rounded-xl bg-slate-50 border border-slate-200">
           <div class="space-y-1">
-            <div class="flex items-center gap-2 flex-wrap">${identityChip(sub.identity)}
+            <div class="flex items-center gap-2 flex-wrap">
+              ${identityChip(sub.identity)}
               ${sub.days_late ? `<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-700">${sub.days_late}d LATE</span>` : ''}
               ${sub.stale_version ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-200 text-slate-700" title="Submitted against an earlier published version; re-graded with the current key.">OLDER VERSION</span>' : ''}
+              ${isDuplicate ? '<span class="px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-300 inline-flex items-center gap-1" title="Identical answer set detected across multiple students"><sl-icon name="copy"></sl-icon>DUPLICATE ANSWERS</span>' : ''}
             </div>
             <div class="text-xs text-slate-500">${esc(sub.student_id)} · submitted ${esc(new Date(sub.submitted_at).toLocaleString())}${sub.claimed_name && sub.claimed_name !== sub.student_name ? ` · typed name “${esc(sub.claimed_name)}”` : ''}</div>
             ${sub.identity !== 'verified' ? `<div class="text-xs text-rose-700">${esc(IDENTITY_LABELS[sub.identity]?.help || '')}</div>` : ''}
           </div>
-          <div id="review-score">${scoreLine()}</div>
+          <div class="flex flex-col items-end gap-2">
+            <div id="review-score">${scoreLine()}</div>
+            ${studentSubs.length > 1 ? `
+              <div class="flex items-center gap-1 text-xs bg-slate-200/70 p-1 rounded-lg">
+                <span class="text-slate-600 font-medium px-1">Attempts:</span>
+                ${studentSubs.map((s, idx) => `
+                  <button type="button" class="attempt-switch-btn px-2 py-0.5 rounded font-semibold text-xs transition-all ${s.id === sub.id ? 'bg-white shadow-xs text-amber-800' : 'text-slate-600 hover:text-slate-900'}" data-attempt-id="${esc(s.id)}">
+                    #${idx + 1}${s.is_latest !== false ? ' (Latest)' : ''}
+                  </button>
+                `).join('')}
+              </div>` : ''}
+          </div>
         </div>
 
         ${sub.identity === 'suggested_match' && sub.suggested_student ? `
@@ -361,6 +648,16 @@ export async function renderSubmissions(assignment, router, container) {
     drawer.addEventListener('sl-after-hide', (e) => { if (e.target === drawer) drawer.remove(); });
     drawer.show();
 
+    drawer.querySelectorAll('.attempt-switch-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = studentSubs.find(s => s.id === btn.dataset.attemptId);
+        if (target) {
+          drawer.hide();
+          setTimeout(() => openReview(target), 120);
+        }
+      });
+    });
+
     drawer.querySelector('#review-copy-feedback-link')?.addEventListener('click', async () => {
       try {
         const student = roster.find(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase());
@@ -382,7 +679,7 @@ export async function renderSubmissions(assignment, router, container) {
       sub.updated_at = new Date().toISOString();
       await storage.table('assignment_submissions').put(sub);
       if (courseId) {
-        await StudentMatcher.addStudentAlias(courseId, suggested.student_id, sub.claimed_name || sub.student_id);
+        await StudentMatcher.addStudentAlias(suggested.student_id, courseId, sub.claimed_name || sub.student_id);
       }
       drawer.hide();
       toast.success(`Linked submission to ${suggested.full_name || suggested.name}`);
@@ -682,6 +979,51 @@ export async function renderSubmissions(assignment, router, container) {
     container.querySelector('#btn-filter-all')?.addEventListener('click', () => { filterMode = 'all'; render(); });
     container.querySelector('#btn-filter-submitted')?.addEventListener('click', () => { filterMode = 'submitted'; render(); });
     container.querySelector('#btn-filter-not-submitted')?.addEventListener('click', () => { filterMode = 'not_submitted'; render(); });
+
+    container.querySelector('#tab-mode-students')?.addEventListener('click', () => { viewMode = 'students'; render(); });
+    container.querySelector('#tab-mode-speedgrader')?.addEventListener('click', () => { viewMode = 'speedgrader'; render(); });
+    container.querySelector('#tab-mode-item-analysis')?.addEventListener('click', () => { viewMode = 'item_analysis'; render(); });
+
+    if (viewMode === 'speedgrader') {
+      container.querySelectorAll('.speedgrader-q-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          speedgraderQIndex = Number(btn.dataset.qIndex);
+          render();
+        });
+      });
+      container.querySelector('#speedgrader-prev-q')?.addEventListener('click', () => {
+        if (speedgraderQIndex > 0) { speedgraderQIndex--; render(); }
+      });
+      container.querySelector('#speedgrader-next-q')?.addEventListener('click', () => {
+        const qCount = a.questions?.length || 0;
+        if (speedgraderQIndex < qCount - 1) { speedgraderQIndex++; render(); }
+      });
+      container.querySelector('#speedgrader-blind')?.addEventListener('sl-change', (e) => {
+        blindGrading = e.target.checked;
+        render();
+      });
+      container.querySelectorAll('[data-speedgrader-sub]').forEach(card => {
+        const subId = card.dataset.speedgraderSub;
+        const qid = card.dataset.speedgraderQid;
+        const sub = submissions.find(s => s.id === subId);
+        if (!sub) return;
+
+        const pointsInput = card.querySelector('[data-sg-points]');
+        const feedbackInput = card.querySelector('[data-sg-feedback]');
+
+        const saveSG = async () => {
+          if (!sub.manual) sub.manual = {};
+          const pts = pointsInput.value === '' ? null : Number(pointsInput.value);
+          const fb = feedbackInput.value || '';
+          sub.manual[qid] = { ...(sub.manual[qid] || {}), points: pts, feedback: fb };
+          sub.updated_at = new Date().toISOString();
+          await storage.table('assignment_submissions').put(sub);
+        };
+
+        pointsInput?.addEventListener('sl-change', saveSG);
+        feedbackInput?.addEventListener('sl-change', saveSG);
+      });
+    }
 
     container.querySelector('#btn-export-not-submitted')?.addEventListener('click', () => {
       const rows = (notSubmitted || []).map(s => {

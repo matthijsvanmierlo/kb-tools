@@ -18,6 +18,7 @@ import { RichTextEditor } from '../../components/rich-text-editor.js';
 import { replication } from '../../core/replication/manager.js';
 import { syncContentClassLink } from '../gradebook/bridge.js';
 import { StudentLedger } from '../student/ledger.js';
+import { StudentProfile } from '../../core/student-profile.js';
 
 /**
  * Format seconds into mm:ss or mm:ss.s
@@ -1188,6 +1189,29 @@ async function renderStudentKioskMode(assessment, container, router) {
     idInput.parentNode.insertBefore(changeLink, idInput.nextSibling);
   }
 
+  const rosterCards = assessment.roster_cards || assessment.secure?.roster_cards;
+  const tryUnlockWithCode = async (code) => {
+    if (!code || !rosterCards) return;
+    const unlocked = await SubmissionCrypto.unlockRosterCard(assessment.id, rosterCards, code);
+    if (unlocked) {
+      if (nameInput && (!nameInput.value || nameInput.value === initialSname)) nameInput.value = unlocked.name || '';
+      if (idInput && (!idInput.value || idInput.value === initialSid)) idInput.value = unlocked.sid || '';
+    }
+  };
+
+  const resolvedProfile = StudentProfile.resolveForPayload(assessment, shareParams);
+  if (nameInput && !nameInput.value && resolvedProfile.full_name) nameInput.value = resolvedProfile.full_name;
+  if (idInput && !idInput.value && resolvedProfile.student_id) idInput.value = resolvedProfile.student_id;
+  if (codeInput && !codeInput.value && resolvedProfile.access_code) {
+    codeInput.value = resolvedProfile.access_code;
+    tryUnlockWithCode(resolvedProfile.access_code);
+  }
+
+  codeInput?.addEventListener('sl-input', (e) => {
+    const val = (e.target.value || '').trim();
+    if (val.length >= 6) tryUnlockWithCode(val);
+  });
+
   exitBtn?.addEventListener('click', () => router.navigate('#/video'));
 
   let cleanup = null;
@@ -1388,14 +1412,27 @@ async function renderKioskCompletion(assessment, student, responseLogs, containe
   // Persist submission into student ledger
   StudentLedger.recordSubmission({
     assignmentId: assessment.id,
-    courseId: assessment.class_id || null,
-    courseName: isPractice ? 'Self-Study' : 'Class Assessment',
+    courseId: assessment.class_id || assessment.course_meta?.course_id || null,
+    courseName: isPractice ? 'Self-Study' : (assessment.course_meta?.course_name || className || 'Class Assessment'),
     title: assessment.title || 'Video Assessment',
     studentId: student.studentId || (isPractice ? 'self_study' : ''),
     studentName: student.studentName || 'Student',
     clientScore: { earned: earnedScore, possible: maxScore, pending: 0 },
-    receiptId: filename
+    receiptId: filename ? filename.replace('.kbr', '') : null,
+    submissionText: receiptText || null
   }).catch(() => {});
+
+  if (!isPractice && student.studentId) {
+    StudentProfile.saveIdentity({
+      studentId: student.studentId,
+      fullName: student.studentName,
+      accessCode: student.accessCode,
+      courseId: assessment.class_id || assessment.course_meta?.course_id || null,
+      courseName: assessment.course_meta?.course_name || className || '',
+      section: assessment.course_meta?.section || '',
+      teacherFingerprint: fingerprint
+    }).catch(() => {});
+  }
 
   const modal = document.createElement('div');
   modal.id = 'kiosk-completion-modal';

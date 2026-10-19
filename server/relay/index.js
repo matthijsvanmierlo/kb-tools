@@ -13,7 +13,7 @@ const RATE_LIMIT_MAX = 30; // 30 requests per window
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
 // A whole class behind one school IP autosaves drafts, so this limit is per IP but generous
 const DRAFT_RATE_LIMIT_MAX = 600;
-const MAX_DRAFT_SIZE = 256 * 1024; // 256 KB
+const MAX_DRAFT_SIZE = 64 * 1024; // 64 KB
 const MAX_SYNC_CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
 const MAX_SYNC_SNAPSHOT_SIZE = 32 * 1024 * 1024; // 32 MB
 const DEVICE_ID_RE = /^[0-9A-Za-z-]{8,64}$/;
@@ -382,9 +382,17 @@ export function createRelayServer(opts = {}) {
             sendError(400, 'Invalid draft format');
             return;
           }
-          const { updatedAt } = db.drafts.put({ dropId, draftId, ciphertext: text });
-          sendJson(200, { updated_at: updatedAt });
-          return;
+          try {
+            const { updatedAt } = db.drafts.put({ dropId, draftId, ciphertext: text });
+            sendJson(200, { updated_at: updatedAt });
+            return;
+          } catch (err) {
+            if (err.code === 'QUOTA_EXCEEDED') {
+              sendError(413, 'Draft quota exceeded for this drop box');
+              return;
+            }
+            throw err;
+          }
         }
         const row = db.drafts.get(dropId, draftId);
         if (!row) {
@@ -465,17 +473,25 @@ export function createRelayServer(opts = {}) {
 
         const receiptId = createHash('sha256').update(trimmed).digest('hex').slice(0, 8).toUpperCase();
         const submissionId = randomBytes(16).toString('hex');
-        const resEntry = db.submissions.create({
-          id: submissionId,
-          dropId,
-          text: trimmed
-        });
+        try {
+          const resEntry = db.submissions.create({
+            id: submissionId,
+            dropId,
+            text: trimmed
+          });
 
-        sendJson(201, {
-          receipt_id: receiptId,
-          received_at: resEntry.receivedAt
-        });
-        return;
+          sendJson(201, {
+            receipt_id: receiptId,
+            received_at: resEntry.receivedAt
+          });
+          return;
+        } catch (err) {
+          if (err.code === 'QUOTA_EXCEEDED') {
+            sendError(413, 'Submission quota exceeded for this drop box');
+            return;
+          }
+          throw err;
+        }
       }
 
       // 6. GET /drops/:dropId/submissions

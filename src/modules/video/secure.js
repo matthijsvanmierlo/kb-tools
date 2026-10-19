@@ -67,7 +67,7 @@ export function maxScoreOf(checkpoints) {
  * @param {Record<string,string>|null} [opts.rosterChecks] - STUDENT_ID_UPPER → access-code check value
  * @param {boolean} [opts.instantFeedback=true]
  */
-export async function buildStudentVideoPayload(assessment, { teacherKeys, rosterChecks = null, instantFeedback = true }) {
+export async function buildStudentVideoPayload(assessment, { teacherKeys, rosterChecks = null, rosterCards = null, courseMeta = null, instantFeedback = true }) {
   const salt = Array.from(crypto.getRandomValues(new Uint8Array(12))).map(b => b.toString(16).padStart(2, '0')).join('');
   const checkpoints = [];
 
@@ -114,6 +114,8 @@ export async function buildStudentVideoPayload(assessment, { teacherKeys, roster
     provider: assessment.provider,
     video_source: assessment.video_source,
     checkpoints,
+    roster_cards: rosterCards || null,
+    course_meta: courseMeta || null,
     secure: {
       v: 1,
       salt,
@@ -121,6 +123,7 @@ export async function buildStudentVideoPayload(assessment, { teacherKeys, roster
       teacher_public_key: teacherKeys?.publicJwk || null,
       key_fingerprint: teacherKeys?.fingerprint || null,
       roster_checks: rosterChecks && Object.keys(rosterChecks).length ? rosterChecks : null,
+      roster_cards: rosterCards || null,
       published_at: new Date().toISOString()
     }
   };

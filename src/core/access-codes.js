@@ -68,8 +68,14 @@ export class AccessCodes {
   }
 
   static async regenerate(student) {
+    const now = new Date().toISOString();
+    if (student.access_code) {
+      student.previous_access_codes = Array.isArray(student.previous_access_codes) ? [...student.previous_access_codes] : [];
+      student.previous_access_codes.unshift({ code: student.access_code, retired_at: now });
+      if (student.previous_access_codes.length > 5) student.previous_access_codes.length = 5;
+    }
     student.access_code = generateAccessCode();
-    student.access_code_updated_at = new Date().toISOString();
+    student.access_code_updated_at = now;
     await storage.table('gradebook_students').put(student);
     return student;
   }
@@ -79,8 +85,14 @@ export class AccessCodes {
     if (normalized.length < MIN_ACCESS_CODE_LENGTH) {
       throw new Error(`Access codes need at least ${MIN_ACCESS_CODE_LENGTH} letters or digits.`);
     }
+    const now = new Date().toISOString();
+    if (student.access_code && normalizeAccessCode(student.access_code) !== normalized) {
+      student.previous_access_codes = Array.isArray(student.previous_access_codes) ? [...student.previous_access_codes] : [];
+      student.previous_access_codes.unshift({ code: student.access_code, retired_at: now });
+      if (student.previous_access_codes.length > 5) student.previous_access_codes.length = 5;
+    }
     student.access_code = formatAccessCode(normalized);
-    student.access_code_updated_at = new Date().toISOString();
+    student.access_code_updated_at = now;
     await storage.table('gradebook_students').put(student);
     return student;
   }

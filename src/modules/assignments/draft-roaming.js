@@ -31,7 +31,12 @@ export async function deriveDraftSecrets({ assignmentId, publishVersion, student
   ));
   const key = await crypto.subtle.importKey('raw', bits.slice(0, 32), 'AES-GCM', false, ['encrypt', 'decrypt']);
   const id = Array.from(bits.slice(32), b => b.toString(16).padStart(2, '0')).join('');
-  return { id, key, aad: enc.encode(`kb-draft-v1|${assignmentId}|${publishVersion}|${sid}`) };
+  return {
+    id,
+    key,
+    aad: enc.encode(`kb-draft-v1|${assignmentId}|${sid}`),
+    legacyAad: publishVersion != null ? enc.encode(`kb-draft-v1|${assignmentId}|${publishVersion}|${sid}`) : null
+  };
 }
 
 export async function sealDraft(secrets, draft) {
@@ -44,7 +49,18 @@ export async function openDraft(secrets, text) {
   if (!String(text || '').startsWith(DRAFT_PREFIX)) return null;
   try {
     const box = b64ToBytes(text.slice(DRAFT_PREFIX.length));
-    const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: box.slice(0, 12), additionalData: secrets.aad }, secrets.key, box.slice(12));
+    const iv = box.slice(0, 12);
+    const data = box.slice(12);
+    let pt;
+    try {
+      pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: secrets.aad }, secrets.key, data);
+    } catch (err) {
+      if (secrets.legacyAad) {
+        pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, additionalData: secrets.legacyAad }, secrets.key, data);
+      } else {
+        throw err;
+      }
+    }
     return JSON.parse(dec.decode(pt));
   } catch (_) {
     return null;

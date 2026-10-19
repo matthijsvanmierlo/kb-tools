@@ -190,8 +190,17 @@ export function createDatabase(filePath = ':memory:') {
     },
 
     drafts: {
-      put({ dropId, draftId, ciphertext }) {
+      put({ dropId, draftId, ciphertext, maxDrafts = 250 }) {
         const now = new Date().toISOString();
+        const existing = db.prepare('SELECT draft_id FROM drafts WHERE drop_id = ? AND draft_id = ?').get(dropId, draftId);
+        if (!existing) {
+          const count = db.prepare('SELECT count(*) as count FROM drafts WHERE drop_id = ?').get(dropId)?.count || 0;
+          if (count >= maxDrafts) {
+            const err = new Error('DROP_DRAFT_QUOTA_EXCEEDED');
+            err.code = 'QUOTA_EXCEEDED';
+            throw err;
+          }
+        }
         db.prepare(`INSERT INTO drafts (drop_id, draft_id, ciphertext, updated_at) VALUES (?, ?, ?, ?)
           ON CONFLICT (drop_id, draft_id) DO UPDATE SET ciphertext = excluded.ciphertext, updated_at = excluded.updated_at`)
           .run(dropId, draftId, ciphertext, now);
@@ -242,7 +251,13 @@ export function createDatabase(filePath = ':memory:') {
     },
 
     submissions: {
-      create({ id, dropId, text, receivedAt = new Date().toISOString() }) {
+      create({ id, dropId, text, receivedAt = new Date().toISOString(), maxSubmissions = 500 }) {
+        const count = db.prepare('SELECT count(*) as count FROM submissions WHERE drop_id = ?').get(dropId)?.count || 0;
+        if (count >= maxSubmissions) {
+          const err = new Error('DROP_SUBMISSION_QUOTA_EXCEEDED');
+          err.code = 'QUOTA_EXCEEDED';
+          throw err;
+        }
         const stmt = db.prepare('INSERT INTO submissions (id, drop_id, received_at, text) VALUES (?, ?, ?, ?)');
         stmt.run(id, dropId, receivedAt, text);
         return { id, receivedAt };

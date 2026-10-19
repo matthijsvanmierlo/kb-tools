@@ -50,6 +50,122 @@ async function resolvePayload(params) {
   return null;
 }
 
+export function reconcileDraftAnswers(payload, priorAnswers = {}) {
+  const newAnswers = {};
+  let migratedCount = 0;
+  for (const q of payload?.questions || []) {
+    if (!q || !q.id || !(q.id in priorAnswers)) continue;
+    const val = priorAnswers[q.id];
+    if (val === undefined || val === null || val === '') continue;
+
+    if (q.type === 'single_choice') {
+      const validOpt = (q.options || []).some(o => o.id === val);
+      if (validOpt) {
+        newAnswers[q.id] = val;
+        migratedCount++;
+      }
+    } else if (q.type === 'multi_choice') {
+      if (Array.isArray(val)) {
+        const validOpts = val.filter(oid => (q.options || []).some(o => o.id === oid));
+        if (validOpts.length) {
+          newAnswers[q.id] = validOpts;
+          migratedCount++;
+        }
+      }
+    } else if (q.type === 'ordering') {
+      if (Array.isArray(val)) {
+        const validIds = new Set((q.items || []).map(i => i.id));
+        const preserved = val.filter(id => validIds.has(id));
+        const preservedSet = new Set(preserved);
+        const newlyAdded = (q.items || []).filter(i => !preservedSet.has(i.id)).map(i => i.id);
+        const merged = [...preserved, ...newlyAdded];
+        if (merged.length) {
+          newAnswers[q.id] = merged;
+          migratedCount++;
+        }
+      }
+    } else if (q.type === 'matching') {
+      if (typeof val === 'object' && val !== null) {
+        const merged = {};
+        const validLefts = new Set((q.pairs || []).map(p => p.left?.id || p.left_id || p.id || p.left));
+        const validRights = new Set((q.rights || (q.pairs || []).map(p => p.right?.text || p.right)).filter(Boolean));
+        for (const [k, v] of Object.entries(val)) {
+          if (validLefts.has(k) && (validRights.size === 0 || validRights.has(v))) {
+            merged[k] = v;
+          }
+        }
+        if (Object.keys(merged).length) {
+          newAnswers[q.id] = merged;
+          migratedCount++;
+        }
+      }
+    } else if (q.type === 'fill_blank') {
+      if (Array.isArray(val)) {
+        const count = q.blank_count || q.blanks?.length || 1;
+        newAnswers[q.id] = val.slice(0, count);
+        migratedCount++;
+      } else {
+        newAnswers[q.id] = [String(val)];
+        migratedCount++;
+      }
+    } else {
+      // short_text, numeric, long_text, true_false
+      newAnswers[q.id] = val;
+      migratedCount++;
+    }
+  }
+  return { newAnswers, migratedCount };
+}
+
+export function findAndReconcilePriorDraft(payload, studentId) {
+  if (typeof localStorage === 'undefined' || !payload?.assignment_id) return null;
+  const sid = String(studentId || '').trim().toUpperCase();
+  const currentVersion = Number(payload.publish_version) || 1;
+  const prefix = `kb_asg_draft_${payload.assignment_id}_`;
+
+  let bestVersion = -1;
+  let bestKey = null;
+
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith(prefix)) continue;
+      const rest = k.slice(prefix.length);
+      const lastUnderscore = rest.lastIndexOf('_');
+      if (lastUnderscore === -1) continue;
+      const verStr = rest.slice(0, lastUnderscore);
+      const keySid = rest.slice(lastUnderscore + 1).toUpperCase();
+      if (keySid !== sid) continue;
+      const v = Number(verStr);
+      if (!Number.isNaN(v) && v < currentVersion && v > bestVersion) {
+        bestVersion = v;
+        bestKey = k;
+      }
+    }
+  } catch (_) {
+    return null;
+  }
+
+  if (!bestKey) return null;
+  const prior = safeStorage.get(bestKey);
+  if (!prior || !prior.answers) return null;
+
+  const { newAnswers, migratedCount } = reconcileDraftAnswers(payload, prior.answers);
+  if (!migratedCount) return null;
+
+  const migratedDraft = {
+    answers: newAnswers,
+    checked: {},
+    startedAt: prior.startedAt || new Date().toISOString(),
+    index: Math.min(prior.index || 0, (payload.questions || []).length - 1),
+    name: prior.name || '',
+    saved_at: new Date().toISOString(),
+    migrated_from_version: bestVersion
+  };
+
+  return { migratedDraft, migratedCount, priorVersion: bestVersion };
+}
+
 export async function renderTakeView(params, router, container) {
   const resolved = await resolvePayload(params);
   if (!resolved) {
@@ -234,12 +350,22 @@ export async function renderTakeView(params, router, container) {
           // Offline or no server: the local draft is enough
         }
       }
+      if (!draft && !preview) {
+        const prior = findAndReconcilePriorDraft(payload, state.student.id);
+        if (prior?.migratedDraft) {
+          draft = prior.migratedDraft;
+          safeStorage.set(draftKey(), draft);
+          toast.info('Updated assignment loaded — your previous answers were preserved.');
+        }
+      }
       if (draft) {
         state.answers = draft.answers || {};
         state.checked = draft.checked || {};
         state.startedAt = draft.startedAt || new Date().toISOString();
         state.index = Math.min(draft.index || 0, questions.length - 1);
-        toast.info(fromElsewhere ? 'Restored the answers you saved on another device.' : 'Restored your saved answers.');
+        if (!draft.migrated_from_version) {
+          toast.info(fromElsewhere ? 'Restored the answers you saved on another device.' : 'Restored your saved answers.');
+        }
       } else {
         state.startedAt = new Date().toISOString();
       }
@@ -637,6 +763,20 @@ export async function renderTakeView(params, router, container) {
         section: payload.course_meta?.section || '',
         teacherFingerprint: payload.teacher_key?.fingerprint || ''
       }).catch(() => {});
+
+      StudentLedger.recordSubmission({
+        assignmentId: payload.assignment_id,
+        courseId: payload.course_id || payload.course_meta?.course_id || null,
+        courseName: payload.course_meta?.course_name || '',
+        title: payload.title,
+        studentId: state.student.id,
+        studentName: state.student.name,
+        clientScore,
+        submittedAt: state.result.submittedAt,
+        receiptId: state.result.receiptId,
+        answers: state.answers,
+        submissionText: submission?.text || null
+      }).catch(err => console.warn('Could not record to student ledger:', err));
     }
     state.screen = 'results';
     render();

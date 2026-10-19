@@ -112,6 +112,22 @@ export class StudentMatcher {
     const normBodyId = normalizeId(rawId);
     const normBodyName = normalizeString(rawName);
 
+    // Helper to check current and historical access codes
+    const verifyCodes = async (student) => {
+      if (!student) return { ok: false };
+      if (student.access_code && await SubmissionCrypto.verifyAccessCodeSignature(body, signature, student.access_code)) {
+        return { ok: true, matchedBy: 'current_code' };
+      }
+      if (Array.isArray(student.previous_access_codes)) {
+        for (const prev of student.previous_access_codes) {
+          if (prev?.code && await SubmissionCrypto.verifyAccessCodeSignature(body, signature, prev.code)) {
+            return { ok: true, matchedBy: 'previous_code', retired_at: prev.retired_at };
+          }
+        }
+      }
+      return { ok: false };
+    };
+
     // -------------------------------------------------------------------------
     // Stage 1: Cryptographic Access-Code Scan
     // If a signature is present and exact ID check fails or mismatches, test
@@ -120,32 +136,34 @@ export class StudentMatcher {
     if (signature) {
       // First check if the claimed ID directly matches and verifies
       const directMatch = roster.find(s => String(s.student_id).trim().toUpperCase() === rawId.toUpperCase());
-      if (directMatch?.access_code) {
-        const ok = await SubmissionCrypto.verifyAccessCodeSignature(body, signature, directMatch.access_code);
-        if (ok) {
+      if (directMatch) {
+        const check = await verifyCodes(directMatch);
+        if (check.ok) {
           return {
             matchedStudent: directMatch,
             identity: 'verified',
-            matchedBy: 'exact_id',
+            matchedBy: check.matchedBy === 'previous_code' ? 'previous_access_code' : 'exact_id',
             suggestedStudent: null,
-            matchConfidence: 1.0
+            matchConfidence: 1.0,
+            note: check.matchedBy === 'previous_code' ? 'Signed with previous access code' : null
           };
         }
       }
 
       // If direct match failed or didn't verify, scan other roster students with access codes
       for (const student of roster) {
-        if (!student.access_code) continue;
+        if (!student.access_code && (!student.previous_access_codes || !student.previous_access_codes.length)) continue;
         if (directMatch && student.id === directMatch.id) continue;
 
-        const isVerified = await SubmissionCrypto.verifyAccessCodeSignature(body, signature, student.access_code);
-        if (isVerified) {
+        const check = await verifyCodes(student);
+        if (check.ok) {
           return {
             matchedStudent: student,
             identity: 'verified',
-            matchedBy: 'access_code',
+            matchedBy: check.matchedBy === 'previous_code' ? 'previous_access_code' : 'access_code',
             suggestedStudent: null,
-            matchConfidence: 1.0
+            matchConfidence: 1.0,
+            note: check.matchedBy === 'previous_code' ? 'Signed with previous access code' : null
           };
         }
       }
@@ -156,17 +174,35 @@ export class StudentMatcher {
     // -------------------------------------------------------------------------
     const exactIdMatch = roster.find(s => String(s.student_id || '').trim().toUpperCase() === rawId.toUpperCase());
     if (exactIdMatch) {
-      const identity = !exactIdMatch.access_code
-        ? 'no_code_on_file'
-        : signature && (await SubmissionCrypto.verifyAccessCodeSignature(body, signature, exactIdMatch.access_code))
-          ? 'verified'
-          : (signature ? 'code_mismatch' : 'no_code_on_file');
+      const hasAnyCode = exactIdMatch.access_code || (exactIdMatch.previous_access_codes && exactIdMatch.previous_access_codes.length > 0);
+      let identity = 'no_code_on_file';
+      let note = null;
+      let matchedBy = 'exact_id';
+
+      if (signature) {
+        if (!hasAnyCode) {
+          identity = 'no_code_on_file';
+        } else {
+          const check = await verifyCodes(exactIdMatch);
+          if (check.ok) {
+            identity = 'verified';
+            if (check.matchedBy === 'previous_code') {
+              matchedBy = 'previous_access_code';
+              note = 'Signed with previous access code';
+            }
+          } else {
+            identity = 'code_mismatch';
+          }
+        }
+      }
+
       return {
         matchedStudent: exactIdMatch,
         identity,
-        matchedBy: 'exact_id',
+        matchedBy,
         suggestedStudent: null,
-        matchConfidence: 1.0
+        matchConfidence: 1.0,
+        note
       };
     }
 
@@ -366,8 +402,17 @@ export class StudentMatcher {
     if (!studentId || !alias) return;
     try {
       const table = storage.table('gradebook_students');
-      const student = await table.where('[course_id+student_id]').equals([courseId, studentId]).first()
-        || (await table.where('student_id').equals(studentId).first());
+      let student = null;
+      if (courseId) {
+        student = await table.where('[course_id+student_id]').equals([courseId, studentId]).first();
+        if (!student) {
+          student = await table.where('[course_id+student_id]').equals([studentId, courseId]).first();
+        }
+      }
+      if (!student) {
+        student = await table.where('student_id').equals(studentId).first()
+          || (courseId ? await table.where('student_id').equals(courseId).first() : null);
+      }
       if (student) {
         const aliases = new Set(Array.isArray(student.aliases) ? student.aliases : []);
         aliases.add(String(alias).trim());

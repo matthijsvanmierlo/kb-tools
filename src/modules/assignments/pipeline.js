@@ -1,8 +1,95 @@
-import { SubmissionCrypto } from '../../core/submission-crypto.js';
+import { SubmissionCrypto, sha256Hex } from '../../core/submission-crypto.js';
 import { normalizeAccessCode } from '../../core/access-codes.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { gradeSubmission } from './grading.js';
 import { StudentMatcher } from '../../core/student-matcher.js';
+
+export async function computeAnswersFingerprint(answers) {
+  if (!answers || typeof answers !== 'object') return null;
+  const entries = Object.entries(answers)
+    .filter(([_, v]) => v !== undefined && v !== null && v !== '' && (!Array.isArray(v) || v.length > 0))
+    .sort(([a], [b]) => a.localeCompare(b));
+  if (!entries.length) return null;
+  const normalized = entries.map(([k, v]) => {
+    let str = '';
+    if (typeof v === 'string') str = v.trim().toLowerCase().replace(/\s+/g, ' ');
+    else if (Array.isArray(v)) str = v.map(x => String(x || '').trim().toLowerCase()).sort().join(',');
+    else if (typeof v === 'object' && v !== null) str = JSON.stringify(v);
+    else str = String(v);
+    return `${k}=${str}`;
+  }).join(';');
+  return await sha256Hex(normalized);
+}
+
+export async function reconcileSubmissionWithAssignment(sub, assignment, roster = null) {
+  if (!sub || !assignment) return sub;
+
+  const prevAuto = sub.auto || { earned: 0, possible: 0, per_question: {} };
+  const newAuto = gradeSubmission(assignment, sub.answers || {});
+
+  const currentQIds = new Set((assignment.questions || []).map(q => q.id));
+  const archived = { ...(sub.archived_answers || {}) };
+  for (const [qid, ans] of Object.entries(sub.answers || {})) {
+    if (!currentQIds.has(qid)) {
+      archived[qid] = ans;
+    }
+  }
+
+  const manual = { ...(sub.manual || {}) };
+  const feedback = sub.feedback || '';
+
+  let identity = sub.identity;
+  let student_id = sub.student_id;
+  let student_name = sub.student_name;
+  let match_type = sub.match_type;
+  let match_confidence = sub.match_confidence;
+  let suggested_student = sub.suggested_student;
+
+  if (Array.isArray(roster) && roster.length > 0) {
+    try {
+      const matchResult = await StudentMatcher.resolveStudentForSubmission({
+        body: {
+          assignment_id: assignment.id,
+          student_id: sub.student_id,
+          student_name: sub.claimed_name || sub.student_name,
+          answers: sub.answers,
+          submitted_at: sub.submitted_at
+        },
+        signature: sub.signature || null,
+        roster
+      });
+      if (matchResult.matchedStudent) {
+        student_id = matchResult.matchedStudent.student_id;
+        student_name = matchResult.matchedStudent.full_name || matchResult.matchedStudent.name;
+      }
+      identity = matchResult.identity;
+      match_type = matchResult.matchedBy || null;
+      match_confidence = matchResult.matchConfidence || 0;
+      suggested_student = matchResult.suggestedStudent || null;
+    } catch (_) {}
+  }
+
+  const scoreChanged = (prevAuto.earned !== newAuto.earned) || (prevAuto.possible !== newAuto.possible);
+
+  return {
+    ...sub,
+    student_id,
+    student_name,
+    identity,
+    match_type,
+    match_confidence,
+    suggested_student,
+    auto: newAuto,
+    manual,
+    feedback,
+    archived_answers: archived,
+    stale_version: (assignment.publish?.version || 1) !== sub.publish_version,
+    days_late: daysLate(assignment.settings?.due_date, sub.submitted_at),
+    score_reconciled: scoreChanged ? true : (sub.score_reconciled || false),
+    synced_at: scoreChanged ? null : sub.synced_at,
+    updated_at: scoreChanged ? new Date().toISOString() : (sub.updated_at || sub.received_at)
+  };
+}
 
 /**
  * Assignment Submission Pipeline (KB-ASSIGN-002)
@@ -110,6 +197,7 @@ export async function evaluateSubmission({ text, teacherPrivateKey, assignment, 
 
   // Never trust client_score: grade again from the key that only the teacher holds
   const auto = gradeSubmission(assignment, body.answers || {});
+  const answers_fingerprint = await computeAnswersFingerprint(body.answers || {});
 
   return {
     id: generateUUID(),
@@ -126,6 +214,8 @@ export async function evaluateSubmission({ text, teacherPrivateKey, assignment, 
     publish_version: body.publish_version,
     stale_version: (assignment.publish?.version || 1) !== body.publish_version,
     answers: body.answers || {},
+    signature: signature || null,
+    answers_fingerprint,
     client_score: body.client_score ?? null,
     auto,
     manual: {},

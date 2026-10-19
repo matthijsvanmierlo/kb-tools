@@ -56,15 +56,20 @@ export function buildFeedbackPayload({ assignment, submission, student, course }
       full_name: student?.full_name || submission.student_name || ''
     },
     course: {
-      name: course?.name || '',
-      section: course?.section || ''
+      id: course?.id || course?.course_id || assignment?.gradebook?.course_id || assignment?.class_id || '',
+      name: course?.name || course?.course_name || '',
+      section: course?.section || '',
+      teacher_fingerprint: course?.teacher_fingerprint || ''
     },
     assignment: {
+      id: assignment?.id || '',
       title: assignment?.title || '',
       due_date: assignment?.settings?.due_date || null,
-      total_points: totalPoints(assignment)
+      total_points: totalPoints(assignment),
+      publish_version: assignment?.publish?.version ?? submission.publish_version ?? 1
     },
     submission: {
+      id: submission?.id || '',
       submitted_at: submission.submitted_at || null,
       days_late: submission.days_late ?? 0,
       identity: submission.identity || 'unsigned',

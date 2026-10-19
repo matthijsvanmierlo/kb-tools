@@ -57,11 +57,20 @@ export async function importSubmissionTexts({ assignment, texts, roster = [], ke
         continue;
       }
 
-      // Mark older submissions from the same student as not latest
+      // Mark older submissions from the same student as not latest and carry forward manual grading
       for (const prev of existingSubmissions.filter(s => String(s.student_id).toUpperCase() === String(sub.student_id).toUpperCase() && s.is_latest !== false)) {
         if ((prev.submitted_at || '') < (sub.submitted_at || '')) {
           prev.is_latest = false;
           await storage.table('assignment_submissions').put(prev);
+          // Preserve manual overrides and feedback from previous attempt if sub has none
+          if (!sub.feedback && prev.feedback) {
+            sub.feedback = prev.feedback;
+          }
+          if (prev.manual && Object.keys(prev.manual).length > 0) {
+            sub.manual = { ...prev.manual, ...(sub.manual || {}) };
+          }
+          sub.previous_submission_id = prev.id;
+          sub.prior_attempt_graded = !!(prev.feedback || Object.keys(prev.manual || {}).length > 0);
         } else {
           sub.is_latest = false;
         }
