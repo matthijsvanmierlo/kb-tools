@@ -1,5 +1,6 @@
 import { storage } from '../../core/storage.js';
-import { sync, SyncManager } from '../../core/sync.js';
+import { sync } from '../../core/sync.js';
+import { cloudConfig, supportsFolderAccess } from '../../core/storage-adapters/index.js';
 import { KeyVault } from '../../core/keyvault.js';
 import { Sanitizer } from '../../core/sanitizer.js';
 import { router } from '../../router.js';
@@ -32,8 +33,8 @@ export async function renderHomeView(params, r, container) {
   const metadata = {
     last_manual_export_timestamp: await storage.getMetadata('last_manual_export_timestamp'),
     setup_checklist_dismissed_at: await storage.getMetadata('setup_checklist_dismissed_at'),
-    autosync_configured: SyncManager.isUsableHandle(await storage.getMetadata('autosync_file_handle')),
-    autosync_supported: typeof window !== 'undefined' && 'showSaveFilePicker' in window,
+    autosync_configured: sync.hasAutomaticBackup(),
+    autosync_supported: supportsFolderAccess() || Boolean(cloudConfig().google || cloudConfig().microsoft),
     recovery_kit_saved: (await KeyVault.status(storage)).recoveryKitSaved
   };
 
@@ -107,8 +108,8 @@ export async function renderHomeView(params, r, container) {
       checklistItems: stats.checklistItems,
       onAction: (id, route) => {
         if (route === '#backup') {
-          if ('showSaveFilePicker' in window) sync.configureAutoSyncFile();
-          else sync.exportManualBackup();
+          if (metadata.autosync_supported === false) sync.exportManualBackup();
+          else window.dispatchEvent(new CustomEvent('kb-open-backup-location'));
         } else if (route === '#recovery-kit') {
           import('../../components/recovery-kit.js').then(({ RecoveryKit }) => RecoveryKit.open());
         } else if (route) {

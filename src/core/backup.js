@@ -28,7 +28,9 @@ export const DEVICE_BOUND_METADATA = new Set([
   'snooze_backup_until', 'sync_config', 'storage_warning_dismissed',
   // KeyVault: CryptoKeys (serialize to `{}`) and the recovery code, which must never sit next to
   // the backup it unlocks
-  'teacher_key_local', 'vault_backup_key', 'vault_previous_backup_keys', 'vault_pending_recovery_code'
+  'teacher_key_local', 'vault_backup_key', 'vault_previous_backup_keys', 'vault_pending_recovery_code',
+  // Backup location (may hold a folder handle) and cloud sign-in tokens
+  'backup_target', 'cloud_auth_gdrive', 'cloud_auth_onedrive'
 ]);
 
 const MAX_RECORDS_PER_TABLE = 200000;

@@ -5,6 +5,7 @@
  *   node scripts/csp.mjs        → rewrites the CSP <meta> in index.html and the static-host _headers
  *                                 file (run after editing the import map)
  *   KB_RELAY_ORIGIN=https://relay.myschool.edu npm run csp   → same, allowing a cross-origin relay
+ *   KB_CLOUD_PROVIDERS=google,microsoft npm run csp            → same, allowing cloud backup APIs
  *
  * Used by server.js (HTTP header, which can also carry frame-ancestors) and the security tests.
  *
@@ -31,6 +32,30 @@ export function relayOriginsFromEnv(env = process.env) {
   return String(env.KB_RELAY_ORIGIN || '')
     .split(',').map(s => s.trim()).filter(Boolean)
     .map(s => new URL(s).origin);
+}
+
+/**
+ * Cloud backup providers (storage-adapters/), comma-separated: KB_CLOUD_PROVIDERS=google,microsoft
+ * OneDrive file downloads redirect to the tenant's SharePoint host, which can't be listed ahead
+ * of time, hence the wildcard.
+ */
+export const CLOUD_ORIGINS = {
+  google: ['https://www.googleapis.com'],
+  microsoft: ['https://login.microsoftonline.com', 'https://graph.microsoft.com', 'https://*.sharepoint.com']
+};
+
+export function cloudOriginsFromEnv(env = process.env) {
+  return String(env.KB_CLOUD_PROVIDERS || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
+    .flatMap(p => {
+      if (!CLOUD_ORIGINS[p]) throw new Error(`Unknown KB_CLOUD_PROVIDERS entry "${p}" (use google, microsoft)`);
+      return CLOUD_ORIGINS[p];
+    });
+}
+
+/** Everything connect-src needs beyond 'self': relay plus enabled cloud providers */
+export function extraConnectOrigins(env = process.env) {
+  return [...new Set([...relayOriginsFromEnv(env), ...cloudOriginsFromEnv(env)])];
 }
 
 /** Hash of the inline import map exactly as the browser sees it (text between the tags). */
@@ -96,10 +121,10 @@ export function applyCspMeta(html, relayOrigins = []) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const relayOrigins = relayOriginsFromEnv();
+  const relayOrigins = extraConnectOrigins();
   const html = fs.readFileSync(INDEX_HTML, 'utf8');
   const next = applyCspMeta(html, relayOrigins);
   if (next !== html) fs.writeFileSync(INDEX_HTML, next);
   fs.writeFileSync(HEADERS_FILE, staticHeadersFile(next, relayOrigins));
-  console.log(`CSP written to index.html and _headers${relayOrigins.length ? ` (relay: ${relayOrigins.join(', ')})` : ''}`);
+  console.log(`CSP written to index.html and _headers${relayOrigins.length ? ` (connect-src: ${relayOrigins.join(', ')})` : ''}`);
 }

@@ -2,16 +2,21 @@ import { storage } from './storage.js';
 import { toast } from '../utils/toast.js';
 import { DEVICE_BOUND_METADATA, parseBackup } from './backup.js';
 import { KeyVault } from './keyvault.js';
+import {
+  BACKUP_TARGET_METADATA, createAdapter, writeRotatedBackup, listBackups, FsaFileAdapter
+} from './storage-adapters/index.js';
 
 /**
  * SyncManager - KB-CORE-002
- * File System Access API 5-second debounced auto-sync, fallback download,
- * and 72-hour stale backup modal alert.
+ * Debounced automatic backup to the teacher's chosen location (a synced folder, Google Drive,
+ * OneDrive, or the original single auto-sync file; see storage-adapters/), fallback download,
+ * and 72-hour stale backup modal alert. Every backup is encrypted first (keyvault.js).
  */
 export class SyncManager {
   constructor(storageManager = storage) {
     this.storage = storageManager;
     this.fileHandle = null;
+    this.adapter = null;
     this.debounceTimer = null;
     this.debounceDelayMs = 5000;
     this.isSyncing = false;
@@ -56,6 +61,15 @@ export class SyncManager {
       console.warn('Could not restore FileSystemFileHandle:', e);
     }
 
+    try {
+      this.adapter = createAdapter(await this.storage.getMetadata(BACKUP_TARGET_METADATA), this.storage);
+      if (this.adapter && await this.adapter.access({ interactive: false }) === 'prompt') {
+        this._renderReauthorizeBanner();
+      }
+    } catch (e) {
+      console.warn('Could not restore backup location:', e);
+    }
+
     // Subscribe to storage mutations for debounced auto-sync
     this.storage.onMutation((change) => {
       if (SyncManager.isBookkeepingChange(change)) return;
@@ -79,38 +93,44 @@ export class SyncManager {
     return this;
   }
 
+  /** The configured backup location, if any */
+  activeAdapter() {
+    if (this.adapter) return this.adapter;
+    return this.fileHandle ? new FsaFileAdapter(this.fileHandle) : null;
+  }
+
+  hasAutomaticBackup() {
+    return Boolean(this.activeAdapter());
+  }
+
   /**
-   * Configure File System Access API auto-sync file
+   * Make `adapter` the backup location (it must already have access) and write a first backup.
+   * Replaces the legacy single auto-sync file.
    */
-  async configureAutoSyncFile() {
-    if (typeof window === 'undefined' || !('showSaveFilePicker' in window)) {
-      toast.warning('Auto-sync via File System API is not supported in this browser. Please use manual export.');
-      return false;
-    }
+  async setBackupTarget(adapter) {
+    this.adapter = adapter;
+    this.fileHandle = null;
+    await this.storage.setMetadata(BACKUP_TARGET_METADATA, adapter.toConfig());
+    await this.storage.setMetadata('autosync_file_handle', null);
+    if (typeof document !== 'undefined') document.getElementById('kb-reauthorize-banner')?.remove();
+    const ok = await this.executeSync();
+    if (ok) toast.success(`Automatic encrypted backups now go to ${adapter.label}.`);
+    else toast.warning(`Could not write to ${adapter.label} yet. Check the backup status in the header.`);
+    await this.promptRecoveryKitIfNeeded();
+    return ok;
+  }
 
-    try {
-      this.fileHandle = await window.showSaveFilePicker({
-        suggestedName: 'kennisboost_backup.json',
-        types: [{
-          description: 'KennisBoost JSON Archive',
-          accept: { 'application/json': ['.json'] }
-        }]
-      });
+  async clearBackupTarget() {
+    this.adapter = null;
+    this.fileHandle = null;
+    await this.storage.setMetadata(BACKUP_TARGET_METADATA, null);
+    await this.storage.setMetadata('autosync_file_handle', null);
+  }
 
-      await this.storage.setMetadata('autosync_file_handle', this.fileHandle);
-      toast.success('Auto-sync configured! Changes will save automatically after 5 seconds of inactivity.');
-      
-      // Perform immediate sync to initialize file
-      await this.executeSync();
-      await this.promptRecoveryKitIfNeeded();
-      return true;
-    } catch (err) {
-      if (err.name !== 'AbortError') {
-        console.error('File Picker error:', err);
-        toast.danger('Failed to select auto-sync destination.');
-      }
-      return false;
-    }
+  /** Backups available in the configured location, newest first */
+  async listLocationBackups(adapter = this.activeAdapter()) {
+    if (!adapter) return [];
+    return listBackups(adapter);
   }
 
   /** Every backup that leaves IndexedDB is encrypted under the teacher's recovery code */
@@ -155,24 +175,27 @@ export class SyncManager {
    * Trigger a 5,000ms debounced sync
    */
   triggerDebouncedSync() {
-    if (!this.fileHandle) return;
+    const adapter = this.activeAdapter();
+    if (!adapter) return;
 
     if (this.debounceTimer) {
       clearTimeout(this.debounceTimer);
     }
 
     this._updateSyncIndicator('pending');
+    // Cloud APIs get fewer, larger writes than a local file
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
       this.executeSync();
-    }, this.debounceDelayMs);
+    }, Math.max(this.debounceDelayMs, adapter.minDebounceMs || 0));
   }
 
   /**
    * Execute immediate write to the configured file handle
    */
   async executeSync() {
-    if (!this.fileHandle) return false;
+    const adapter = this.activeAdapter();
+    if (!adapter) return false;
     if (this.isSyncing) {
       // A change landed mid-write: write again once the current write finishes
       this.pendingSync = true;
@@ -183,32 +206,20 @@ export class SyncManager {
       this.isSyncing = true;
       this.pendingSync = false;
 
-      // Verify permission
-      if (this.fileHandle.queryPermission) {
-        const permission = await this.fileHandle.queryPermission({ mode: 'readwrite' });
-        if (permission === 'prompt') {
-          this._renderReauthorizeBanner();
-          return false;
-        }
-        if (permission !== 'granted') {
-          this._updateSyncIndicator('error');
-          return false;
-        }
+      // Browsers forget folder grants between sessions and cloud tokens expire; re-granting needs a click
+      const permission = await adapter.access({ interactive: false });
+      if (permission === 'prompt') {
+        this._renderReauthorizeBanner();
+        return false;
+      }
+      if (permission !== 'granted') {
+        this._updateSyncIndicator('error');
+        return false;
       }
 
       this._updateSyncIndicator('saving');
       const jsonStr = await this.buildBackupText();
-
-      // createWritable writes to a temporary file that replaces the target only on close(),
-      // so an interrupted write never leaves a half-written backup
-      const writable = await this.fileHandle.createWritable();
-      try {
-        await writable.write(jsonStr);
-        await writable.close();
-      } catch (err) {
-        await writable.abort?.().catch(() => {});
-        throw err;
-      }
+      await writeRotatedBackup(adapter, jsonStr, new Date());
 
       const now = Date.now();
       this.lastSyncTimestamp = now;
@@ -218,6 +229,7 @@ export class SyncManager {
       return true;
     } catch (err) {
       console.error('Auto-sync write failed:', err);
+      if (err?.name === 'CloudAuthError') this._renderReauthorizeBanner();
       this._updateSyncIndicator('error');
       return false;
     } finally {
@@ -332,25 +344,29 @@ export class SyncManager {
     if (typeof document === 'undefined') return;
     const existing = document.getElementById('kb-reauthorize-banner');
     if (existing) return;
+    const adapter = this.activeAdapter();
+    if (!adapter) return;
 
     const banner = document.createElement('div');
     banner.id = 'kb-reauthorize-banner';
     banner.className = 'bg-amber-100 border-b border-amber-300 px-4 py-2 flex items-center justify-between text-xs text-amber-900';
     banner.innerHTML = `
-      <span>Auto-sync file requires re-authorization to continue saving.</span>
+      <span></span>
       <button class="bg-amber-600 text-white font-medium px-3 py-1 rounded hover:bg-amber-700 focus:outline-none">
-        Re-authorize Auto-Sync
+        Reconnect
       </button>
     `;
+    banner.querySelector('span').textContent = `Automatic backups to ${adapter.label} are paused until you reconnect. Your data is still safe in this browser.`;
 
     banner.querySelector('button')?.addEventListener('click', async () => {
-      if (this.fileHandle && this.fileHandle.requestPermission) {
-        const res = await this.fileHandle.requestPermission({ mode: 'readwrite' });
-        if (res === 'granted') {
+      try {
+        if (await adapter.access({ interactive: true }) === 'granted') {
           banner.remove();
-          toast.success('Auto-sync re-authorized!');
+          toast.success('Automatic backups resumed.');
           await this.executeSync();
         }
+      } catch (err) {
+        toast.danger(err?.message || 'Could not reconnect.');
       }
     });
 
@@ -364,9 +380,9 @@ export class SyncManager {
 
     if (status === 'synced') {
       const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      indicator.innerHTML = `<span class="text-xs text-emerald-600 font-medium" title="Saved to your auto-sync file at ${time}">● Synced</span>`;
+      indicator.innerHTML = `<span class="text-xs text-emerald-600 font-medium" title="Encrypted backup saved at ${time}">● Synced</span>`;
     } else if (status === 'pending') {
-      indicator.innerHTML = '<span class="text-xs text-slate-500 font-medium" title="Unsaved changes will be written to your auto-sync file in a few seconds">● Changes pending</span>';
+      indicator.innerHTML = '<span class="text-xs text-slate-500 font-medium" title="Changes will be backed up in a few seconds">● Changes pending</span>';
     } else if (status === 'saving') {
       indicator.innerHTML = '<span class="text-xs text-amber-600 font-medium">● Saving...</span>';
     } else if (status === 'error') {

@@ -64,7 +64,7 @@ export function computeHomeStats({
       label: metadata?.autosync_supported === false ? 'Make an encrypted backup' : 'Turn on automatic encrypted backup',
       completed: hasAutomaticBackup,
       actionRoute: '#backup',
-      actionLabel: metadata?.autosync_supported === false ? 'Backup now' : 'Choose backup file'
+      actionLabel: metadata?.autosync_supported === false ? 'Backup now' : 'Choose location'
     },
     {
       id: 'recovery_kit',

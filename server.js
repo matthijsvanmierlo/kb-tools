@@ -2,14 +2,15 @@ import http from 'http';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { buildCsp, importMapHash, relayOriginsFromEnv, INDEX_HTML } from './scripts/csp.mjs';
+import { buildCsp, importMapHash, extraConnectOrigins, INDEX_HTML } from './scripts/csp.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const PORT = process.env.PORT || 8000;
 
-// Optional cross-origin school relay(s), comma-separated, e.g. KB_RELAY_ORIGIN=https://relay.myschool.edu
-const RELAY_ORIGINS = relayOriginsFromEnv();
+// Optional cross-origin school relay(s) and cloud backup providers, e.g.
+// KB_RELAY_ORIGIN=https://relay.myschool.edu KB_CLOUD_PROVIDERS=google,microsoft
+const RELAY_ORIGINS = extraConnectOrigins();
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',

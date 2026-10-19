@@ -123,6 +123,7 @@ async function bootstrapApp() {
     // 4. Bind Storage / Backup Toolbar Actions & Global Customizations
     bindStorageControls();
     window.addEventListener('kb-request-backup', () => sync.exportManualBackup());
+    window.addEventListener('kb-open-backup-location', () => openBackupLocation('setup'));
     bindHelpControls();
     initThemeSwitcher();
     updateRelayStatusIndicator();
@@ -176,9 +177,8 @@ function bindStorageControls() {
   const btnStorageInfo = document.getElementById('menu-btn-storage-info');
   const fileInput = document.getElementById('input-backup-file');
 
-  btnConfigureSync?.addEventListener('click', async () => {
-    await sync.configureAutoSyncFile();
-  });
+  btnConfigureSync?.addEventListener('click', () => openBackupLocation('setup'));
+  document.getElementById('menu-btn-restore-location')?.addEventListener('click', () => openBackupLocation('restore'));
 
   btnExportBackup?.addEventListener('click', async () => {
     await sync.exportManualBackup();
@@ -193,23 +193,10 @@ function bindStorageControls() {
     if (!file) return;
 
     try {
-      const text = await file.text();
-      const opened = await openBackupWithRecoveryCode(text);
-      if (!opened) return;
-      const confirmed = await confirmRestore(file.name, opened.counts, opened.exportedAt, { plaintext: !opened.encrypted && opened.hasPlaintextSecrets });
-      if (!confirmed) return;
-      if (confirmed.safetyCopy) await sync.exportManualBackup();
-      await sync.restoreOpenedBackup(opened);
-      toast.success('Backup restored successfully! Refreshing view...');
-      if (!opened.encrypted && opened.hasPlaintextSecrets) {
-        toast.warning('That backup file was not encrypted. Delete it once you have made a new, encrypted backup.', 12000);
-      }
-      await router.handleRoute();
+      await restoreBackupText(await file.text(), file.name);
     } catch (err) {
-      console.error('Failed to restore backup:', err);
-      toast.danger(err?.name === 'BackupError' || err?.name === 'VaultError'
-        ? `Restore aborted: ${err.message}`
-        : 'Invalid backup file. Restore aborted.');
+      console.error('Failed to read backup file:', err);
+      toast.danger('Could not read that file.');
     } finally {
       fileInput.value = '';
     }
@@ -303,6 +290,39 @@ const RESTORE_LABELS = {
  * Restoring replaces everything on this device, so show what the file contains first.
  * @returns {Promise<false | { safetyCopy: boolean }>}
  */
+async function openBackupLocation(mode) {
+  const { openBackupLocationDialog } = await import('./components/backup-location-dialog.js');
+  await openBackupLocationDialog({ mode, restoreFromText: restoreBackupText });
+}
+
+/**
+ * Decrypt (asking for the recovery code if needed), confirm and restore a backup.
+ * Resolves true when this browser's data was replaced.
+ */
+async function restoreBackupText(text, sourceName) {
+  try {
+    const opened = await openBackupWithRecoveryCode(text);
+    if (!opened) return false;
+    const plaintext = !opened.encrypted && opened.hasPlaintextSecrets;
+    const confirmed = await confirmRestore(sourceName, opened.counts, opened.exportedAt, { plaintext });
+    if (!confirmed) return false;
+    if (confirmed.safetyCopy) await sync.exportManualBackup();
+    await sync.restoreOpenedBackup(opened);
+    toast.success('Backup restored successfully! Refreshing view...');
+    if (plaintext) {
+      toast.warning('That backup file was not encrypted. Delete it once you have made a new, encrypted backup.', 12000);
+    }
+    await router.handleRoute();
+    return true;
+  } catch (err) {
+    console.error('Failed to restore backup:', err);
+    toast.danger(err?.name === 'BackupError' || err?.name === 'VaultError'
+      ? `Restore aborted: ${err.message}`
+      : 'Invalid backup file. Restore aborted.');
+    return false;
+  }
+}
+
 /**
  * Decrypt/validate a backup, asking for the recovery code when this device can't open it.
  * Resolves null if the teacher cancels.
