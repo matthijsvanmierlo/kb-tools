@@ -105,6 +105,12 @@ export async function buildStudentVideoPayload(assessment, { teacherKeys, roster
     title: assessment.title,
     description: assessment.description || '',
     class_id: assessment.class_id || null,
+    mode: assessment.class_id ? 'graded' : 'practice',
+    settings: {
+      release_grade_immediately: assessment.settings?.release_grade_immediately !== false,
+      feedback_mode: assessment.settings?.feedback_mode || (instantFeedback ? 'instant' : 'summary'),
+      show_correct_answers: assessment.settings?.show_correct_answers !== false
+    },
     provider: assessment.provider,
     video_source: assessment.video_source,
     checkpoints,
@@ -112,8 +118,8 @@ export async function buildStudentVideoPayload(assessment, { teacherKeys, roster
       v: 1,
       salt,
       instant_feedback: !!instantFeedback,
-      teacher_public_key: teacherKeys.publicJwk,
-      key_fingerprint: teacherKeys.fingerprint,
+      teacher_public_key: teacherKeys?.publicJwk || null,
+      key_fingerprint: teacherKeys?.fingerprint || null,
       roster_checks: rosterChecks && Object.keys(rosterChecks).length ? rosterChecks : null,
       published_at: new Date().toISOString()
     }

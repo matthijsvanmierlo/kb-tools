@@ -16,6 +16,8 @@ import { ClassManager } from '../../components/class-manager.js';
 import { ConfirmDialog } from '../../utils/dialogs.js';
 import { RichTextEditor } from '../../components/rich-text-editor.js';
 import { replication } from '../../core/replication/manager.js';
+import { syncContentClassLink } from '../gradebook/bridge.js';
+import { StudentLedger } from '../student/ledger.js';
 
 /**
  * Format seconds into mm:ss or mm:ss.s
@@ -183,13 +185,18 @@ export async function renderVideoView(params, router, container) {
         router.navigate('#/video');
         return;
       }
-      // Create new blank assessment
+      // Create new blank assessment (default to Formative Practice)
       activeVideo = {
         version: 1,
         id: generateUUID(),
         title: 'New Video Assessment',
         description: '',
-        class_id: ClassManager.getActiveFilter() || null,
+        class_id: null,
+        settings: {
+          release_grade_immediately: true,
+          feedback_mode: 'instant',
+          show_correct_answers: true
+        },
         provider: DEFAULT_SAMPLE_VIDEO.provider,
         video_source: DEFAULT_SAMPLE_VIDEO.source,
         created_at: new Date().toISOString(),
@@ -335,9 +342,9 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
             <sl-input id="input-video-title" label="Assessment title" value="${safeTitle}"></sl-input>
           </div>
           <div class="md:col-span-4">
-            <sl-select id="select-video-class" label="Class" value="${Sanitizer.escapeHTML(activeVideo.class_id || '')}">
-              <sl-option value="">No class (general)</sl-option>
-              ${classes.map(c => `<sl-option value="${c.id}">${Sanitizer.escapeHTML(c.name)}</sl-option>`).join('')}
+            <sl-select id="select-video-class" label="Class (Graded vs Formative)" value="${Sanitizer.escapeHTML(activeVideo.class_id || '')}">
+              <sl-option value="">Formative Practice (Ungraded)</sl-option>
+              ${classes.map(c => `<sl-option value="${c.id}">Graded · ${Sanitizer.escapeHTML(c.name)}</sl-option>`).join('')}
             </sl-select>
           </div>
           <div class="md:col-span-3">
@@ -347,10 +354,15 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
               <sl-option value="vimeo"><sl-icon slot="prefix" name="vimeo"></sl-icon> Vimeo</sl-option>
             </sl-select>
           </div>
-          <div class="md:col-span-6">
+          <div class="md:col-span-5">
             <sl-input id="input-video-source" label="Video URL or ID" placeholder="Paste a YouTube, Vimeo, or .mp4 link (provider auto-detected)" value="${Sanitizer.escapeHTML(activeVideo.video_source || '')}">
               <sl-icon slot="prefix" name="link-45deg"></sl-icon>
             </sl-input>
+          </div>
+          <div class="md:col-span-4 flex items-center justify-between pb-1 gap-2">
+            <sl-switch id="switch-video-release-grade" ${activeVideo.settings?.release_grade_immediately !== false ? 'checked' : ''} class="text-xs">
+              <span class="text-xs font-medium text-slate-700">Release score immediately</span>
+            </sl-switch>
           </div>
           <div class="md:col-span-3 flex items-end gap-2">
             <sl-dropdown id="dropdown-sample-videos" placement="bottom-end" class="flex-1" hoist>
@@ -661,8 +673,16 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
     saveAssessment();
   });
 
-  classSelect?.addEventListener('sl-change', () => {
-    activeVideo.class_id = classSelect.value || null;
+  classSelect?.addEventListener('sl-change', async () => {
+    const classId = classSelect.value || null;
+    await syncContentClassLink(activeVideo, 'video', classId);
+    toast.info(classId ? 'Linked to class Gradebook column.' : 'Set to Formative Practice (ungraded).');
+  });
+
+  const releaseGradeSwitch = container.querySelector('#switch-video-release-grade');
+  releaseGradeSwitch?.addEventListener('sl-change', () => {
+    if (!activeVideo.settings) activeVideo.settings = {};
+    activeVideo.settings.release_grade_immediately = releaseGradeSwitch.checked;
     saveAssessment();
   });
 
@@ -1054,35 +1074,44 @@ async function renderStudentKioskMode(assessment, container, router) {
     if (cls) className = cls.name;
   }
 
+  const isPractice = !assessment.class_id && assessment.mode !== 'graded';
+
   // Initial State: Show Student Start Card
   container.innerHTML = `
     <div class="max-w-xl mx-auto py-8 px-4" id="kiosk-start-view">
       <div class="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-xl space-y-6 text-center">
-        <div class="w-16 h-16 rounded-2xl bg-blue-100 text-blue-600 flex items-center justify-center mx-auto text-3xl shadow-sm">
-          <sl-icon name="mortarboard"></sl-icon>
+        <div class="w-16 h-16 rounded-2xl ${isPractice ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'} flex items-center justify-center mx-auto text-3xl shadow-sm">
+          <sl-icon name="${isPractice ? 'lightbulb' : 'mortarboard'}"></sl-icon>
         </div>
 
         <div>
           <h1 class="text-2xl font-bold text-slate-900">${safeTitle}</h1>
-          ${className ? `<p class="text-xs font-semibold text-blue-600 uppercase tracking-wider mt-1">${Sanitizer.escapeHTML(className)}</p>` : ''}
+          ${isPractice
+            ? '<p class="text-xs font-semibold text-emerald-600 uppercase tracking-wider mt-1">Formative Practice · Ungraded</p>'
+            : (className ? `<p class="text-xs font-semibold text-blue-600 uppercase tracking-wider mt-1">${Sanitizer.escapeHTML(className)}</p>` : '')}
           <p class="text-sm text-slate-500 mt-2">
             This interactive video lesson has <strong>${questionCount} question${questionCount === 1 ? '' : 's'}</strong> worth <strong>${maxScore} point${maxScore === 1 ? '' : 's'}</strong>.
           </p>
         </div>
 
         <div class="bg-slate-50 p-4 rounded-xl border border-slate-200 text-left space-y-3">
-          <sl-input id="input-student-name" label="Full name" placeholder="e.g. Jane Doe" required></sl-input>
-          <sl-input id="input-student-id" label="${rosterChecks ? 'Student ID' : 'Student ID (optional)'}" placeholder="e.g. S104" ${rosterChecks ? 'required' : ''}></sl-input>
-          <sl-input id="input-student-code" type="password" password-toggle label="${rosterChecks ? 'Access code' : 'Access code (if your teacher gave you one)'}" placeholder="e.g. K7M2-QX9P" ${rosterChecks ? 'required' : ''}></sl-input>
+          ${isPractice ? `
+            <sl-input id="input-student-name" label="Your name (optional for practice)" placeholder="e.g. Jane Doe"></sl-input>
+            <p class="text-xs text-slate-500">Practice at your own pace. Checkpoints give instant feedback with unlimited attempts.</p>
+          ` : `
+            <sl-input id="input-student-name" label="Full name" placeholder="e.g. Jane Doe" required></sl-input>
+            <sl-input id="input-student-id" label="${rosterChecks ? 'Student ID' : 'Student ID (optional)'}" placeholder="e.g. S104" ${rosterChecks ? 'required' : ''}></sl-input>
+            <sl-input id="input-student-code" type="password" password-toggle label="${rosterChecks ? 'Access code' : 'Access code (if your teacher gave you one)'}" placeholder="e.g. K7M2-QX9P" ${rosterChecks ? 'required' : ''}></sl-input>
+          `}
           <p id="kiosk-start-error" class="hidden text-xs font-medium text-red-600" role="alert"></p>
         </div>
 
         <div class="space-y-2">
           <sl-button variant="primary" size="large" class="w-full" id="btn-begin-assessment">
-            <sl-icon slot="prefix" name="play-fill"></sl-icon> Begin Assessment
+            <sl-icon slot="prefix" name="play-fill"></sl-icon> ${isPractice ? 'Start Video Lesson' : 'Begin Assessment'}
           </sl-button>
           <sl-button variant="text" size="small" id="btn-kiosk-exit" class="w-full text-slate-500">
-            Exit to Library
+            Exit
           </sl-button>
         </div>
       </div>
@@ -1164,10 +1193,23 @@ async function renderStudentKioskMode(assessment, container, router) {
   let cleanup = null;
 
   beginBtn?.addEventListener('click', async () => {
-    const studentName = nameInput.value.trim();
-    const studentId = idInput.value.trim();
-    const accessCode = normalizeAccessCode(codeInput.value);
+    const studentName = nameInput ? nameInput.value.trim() : '';
+    const studentId = idInput ? idInput.value.trim() : '';
+    const accessCode = codeInput ? normalizeAccessCode(codeInput.value) : '';
     startError.classList.add('hidden');
+
+    if (isPractice) {
+      const finalName = studentName || 'Student';
+      startView.classList.add('hidden');
+      activeView.classList.remove('hidden');
+
+      const headerName = container.querySelector('#kiosk-header-student-name');
+      if (headerName) headerName.textContent = finalName;
+
+      cleanup = await startKioskSession(assessment, { studentName: finalName, studentId: 'self_study', accessCode: '' }, container, router);
+      return;
+    }
+
     if (!studentName) {
       showStartError('Please enter your name to begin.');
       return;
@@ -1311,6 +1353,9 @@ async function startKioskSession(assessment, student, container, router) {
  * Render Kiosk Completion & Cryptographic Receipt Screen
  */
 async function renderKioskCompletion(assessment, student, responseLogs, container, router) {
+  const isPractice = !assessment.class_id && assessment.mode !== 'graded';
+  const releaseImmediately = assessment.settings?.release_grade_immediately !== false;
+
   const checkpoints = assessment.checkpoints || [];
   const maxScore = maxScoreOf(checkpoints);
   const earnedScore = responseLogs.reduce((sum, r) => sum + (Number(r.earnedPoints) || 0), 0);
@@ -1320,23 +1365,37 @@ async function renderKioskCompletion(assessment, student, responseLogs, containe
 
   let receiptText = '';
   let filename = 'receipt.kbr';
-  try {
-    const receipt = await createSecureReceipt({
-      payload: assessment,
-      studentName: student.studentName,
-      studentId: student.studentId,
-      accessCode: student.accessCode,
-      responseLogs
-    });
-    receiptText = receipt.text;
-    filename = receipt.filename;
-  } catch (err) {
-    console.error('Receipt creation failed:', err);
-    toast.danger('Could not create your receipt. Ask your teacher for help.');
+  if (!isPractice) {
+    try {
+      const receipt = await createSecureReceipt({
+        payload: assessment,
+        studentName: student.studentName,
+        studentId: student.studentId,
+        accessCode: student.accessCode,
+        responseLogs
+      });
+      receiptText = receipt.text;
+      filename = receipt.filename;
+    } catch (err) {
+      console.error('Receipt creation failed:', err);
+      toast.danger('Could not create your receipt. Ask your teacher for help.');
+    }
   }
 
   const fingerprint = assessment.secure?.key_fingerprint || '';
   const pct = maxScore > 0 ? Math.round((earnedScore / maxScore) * 100) : 0;
+
+  // Persist submission into student ledger
+  StudentLedger.recordSubmission({
+    assignmentId: assessment.id,
+    courseId: assessment.class_id || null,
+    courseName: isPractice ? 'Self-Study' : 'Class Assessment',
+    title: assessment.title || 'Video Assessment',
+    studentId: student.studentId || (isPractice ? 'self_study' : ''),
+    studentName: student.studentName || 'Student',
+    clientScore: { earned: earnedScore, possible: maxScore, pending: 0 },
+    receiptId: filename
+  }).catch(() => {});
 
   const modal = document.createElement('div');
   modal.id = 'kiosk-completion-modal';
@@ -1347,32 +1406,45 @@ async function renderKioskCompletion(assessment, student, responseLogs, containe
         <div class="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto text-2xl">
           <sl-icon name="check2-circle"></sl-icon>
         </div>
-        <h2 id="kiosk-done-title" class="text-2xl font-bold text-slate-900">Video complete</h2>
+        <h2 id="kiosk-done-title" class="text-2xl font-bold text-slate-900">${isPractice ? 'Practice complete' : 'Video complete'}</h2>
         <p class="text-sm text-slate-500">Well done, <strong>${Sanitizer.escapeHTML(student.studentName)}</strong>. You answered ${answered} of ${questionCount} question${questionCount === 1 ? '' : 's'}.</p>
       </div>
 
-      <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-center">
-        ${instant ? `
-          <div class="text-xs font-semibold uppercase tracking-wider text-slate-500">Checked score</div>
+      ${isPractice ? `
+        <div class="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-center">
+          <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Formative Practice Score</div>
+          <div class="text-3xl font-bold text-slate-900 tabular-nums mt-1">${earnedScore} / ${maxScore} <span class="text-base font-medium text-slate-500">(${pct}%)</span></div>
+          <p class="text-xs text-slate-500 mt-1">Practice complete! Unlimited attempts with zero hand-in needed.</p>
+        </div>
+      ` : (releaseImmediately ? `
+        <div class="rounded-xl border border-emerald-200 bg-emerald-50/60 p-4 text-center">
+          <div class="text-xs font-semibold uppercase tracking-wider text-emerald-700">Graded Assessment · Score Released</div>
           <div class="text-3xl font-bold text-slate-900 tabular-nums mt-1">${earnedScore} / ${maxScore} <span class="text-base font-medium text-slate-500">(${pct}%)</span></div>
           <p class="text-xs text-slate-500 mt-1">Your teacher re-checks every answer, so the final grade may differ.</p>
-        ` : `
-          <div class="text-sm font-medium text-slate-700">Your answers are recorded.</div>
-          <p class="text-xs text-slate-500 mt-1">Your teacher will grade them and share your score.</p>
-        `}
-      </div>
-
-      <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
-        <p class="text-sm font-semibold text-slate-900 flex items-center gap-2"><sl-icon name="box-arrow-up" class="text-amber-600"></sl-icon> Last step: hand in your receipt</p>
-        <p class="text-xs text-slate-700 leading-relaxed">Nothing is sent automatically. Upload the receipt file where your teacher asked, or paste the receipt code.</p>
-        <div class="flex flex-col sm:flex-row gap-2">
-          <sl-button variant="primary" id="btn-download-kbr" class="flex-1" ${receiptText ? '' : 'disabled'}><sl-icon slot="prefix" name="download"></sl-icon> Download receipt</sl-button>
-          <sl-button id="btn-copy-kbr" class="flex-1" ${receiptText ? '' : 'disabled'}><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy receipt code</sl-button>
         </div>
-        ${fingerprint ? `<p class="text-[11px] text-slate-500">Encrypted for your teacher's key <strong class="font-mono">${Sanitizer.escapeHTML(fingerprint)}</strong>. Classmates can't read or change it.</p>` : ''}
-      </div>
+      ` : `
+        <div class="rounded-xl border border-slate-200 bg-slate-50 p-4 text-center">
+          <div class="text-sm font-medium text-slate-700">Your answers are recorded.</div>
+          <p class="text-xs text-slate-500 mt-1">Your teacher will review submissions and release your score.</p>
+        </div>
+      `)}
 
-      <div class="flex justify-center gap-2">
+      ${!isPractice ? `
+        <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+          <p class="text-sm font-semibold text-slate-900 flex items-center gap-2"><sl-icon name="box-arrow-up" class="text-amber-600"></sl-icon> Last step: hand in your receipt</p>
+          <p class="text-xs text-slate-700 leading-relaxed">Nothing is sent automatically. Upload the receipt file where your teacher asked, or paste the receipt code.</p>
+          <div class="flex flex-col sm:flex-row gap-2">
+            <sl-button variant="primary" id="btn-download-kbr" class="flex-1" ${receiptText ? '' : 'disabled'}><sl-icon slot="prefix" name="download"></sl-icon> Download receipt</sl-button>
+            <sl-button id="btn-copy-kbr" class="flex-1" ${receiptText ? '' : 'disabled'}><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy receipt code</sl-button>
+          </div>
+          ${fingerprint ? `<p class="text-[11px] text-slate-500">Encrypted for your teacher's key <strong class="font-mono">${Sanitizer.escapeHTML(fingerprint)}</strong>. Classmates can't read or change it.</p>` : ''}
+        </div>
+      ` : ''}
+
+      <div class="flex justify-center gap-2 flex-wrap">
+        ${isPractice ? `
+          <sl-button variant="primary" id="btn-practice-again"><sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Watch &amp; Practice Again</sl-button>
+        ` : ''}
         <sl-button variant="text" id="btn-print-pdf"><sl-icon slot="prefix" name="printer"></sl-icon> Print summary</sl-button>
         <sl-button variant="text" id="btn-finish-exit">Done</sl-button>
       </div>
@@ -1381,6 +1453,10 @@ async function renderKioskCompletion(assessment, student, responseLogs, containe
 
   document.body.appendChild(modal);
 
+  modal.querySelector('#btn-practice-again')?.addEventListener('click', async () => {
+    modal.remove();
+    await startKioskSession(assessment, student, container, router);
+  });
   modal.querySelector('#btn-download-kbr')?.addEventListener('click', () => {
     KioskReportEngine.downloadKBRFile(receiptText, filename);
     toast.success('Receipt downloaded. Hand this file in to your teacher.');

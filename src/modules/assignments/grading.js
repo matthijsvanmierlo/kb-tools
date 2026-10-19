@@ -466,13 +466,15 @@ export async function buildStudentPayload(assignment, { teacherKeys, rosterCheck
     assignment_id: assignment.id,
     publish_version: assignment.publish?.version || 1,
     course_id: assignment.gradebook?.course_id || assignment.class_id || null,
+    mode: (assignment.gradebook?.course_id || assignment.class_id) ? 'graded' : 'practice',
     title: assignment.title || 'Assignment',
     instructions: assignment.instructions || '',
     due_date: settings.due_date || null,
     settings: {
       feedback_mode: settings.feedback_mode || 'after_submit',
       show_correct_answers: !!settings.show_correct_answers,
-      require_access_code: !!settings.require_access_code
+      require_access_code: !!settings.require_access_code,
+      release_grade_immediately: settings.release_grade_immediately !== false
     },
     teacher_key: { publicJwk: teacherKeys.publicJwk, fingerprint: teacherKeys.fingerprint },
     roster_checks: rosterChecks && Object.keys(rosterChecks).length ? rosterChecks : null,

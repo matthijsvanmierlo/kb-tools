@@ -29,6 +29,7 @@ export async function renderTimelineView(params, router, container) {
   if (!isViewRoute) {
     const library = new ProjectLibraryView({
       moduleType: 'timeline',
+      supportsClassGrading: false,
       title: 'Interactive Timelines',
       itemTypeName: 'Timeline',
       tableName: 'timelines',
@@ -47,14 +48,13 @@ export async function renderTimelineView(params, router, container) {
           schema: TimelineEventSchema,
           acceptJson: true,
           onImport: async (resultData, rawText, { filename, isJson }) => {
-            const activeClass = ClassManager.getActiveFilter() || null;
             if (isJson) {
               const parsed = resultData;
               const newTimeline = {
                 version: 1,
                 id: generateUUID(),
                 title: parsed.title || (filename || 'Imported Timeline').replace(/\.[^/.]+$/, ''),
-                class_id: activeClass,
+                class_id: null,
                 events: Array.isArray(parsed.events) ? parsed.events : [],
                 updated_at: new Date().toISOString()
               };
@@ -106,7 +106,7 @@ export async function renderTimelineView(params, router, container) {
       id: generateUUID(),
       title: 'New Historical Timeline',
       description: '',
-      class_id: ClassManager.getActiveFilter(),
+      class_id: null,
       updated_at: new Date().toISOString(),
       events: []
     };

@@ -6,6 +6,7 @@ import { generateUUID } from '../../utils/uuid.js';
 import { QUESTION_TYPE_META, QUESTION_TYPE_ORDER, createQuestion, cloneQuestion, validateQuestion } from './question-types.js';
 import { countBlanks, totalPoints } from './grading.js';
 import { openPublishDialog } from './publish.js';
+import { syncContentClassLink } from '../gradebook/bridge.js';
 
 /**
  * Assignment Editor (KB-ASSIGN-004)
@@ -17,7 +18,7 @@ const shortId = () => generateUUID().slice(0, 8);
 
 export async function renderEditor(assignment, router, container) {
   const a = assignment;
-  a.settings = { feedback_mode: 'after_submit', shuffle_options: true, require_access_code: true, ...(a.settings || {}) };
+  a.settings = { feedback_mode: 'after_submit', shuffle_options: true, require_access_code: true, release_grade_immediately: true, ...(a.settings || {}) };
   a.gradebook = { course_id: a.class_id || null, category_id: null, column_id: null, ...(a.gradebook || {}) };
   a.questions = a.questions || [];
 
@@ -88,6 +89,7 @@ export async function renderEditor(assignment, router, container) {
             <sl-option value="none">None until you return grades</sl-option>
           </sl-select>
           <div class="space-y-3 pt-1">
+            <sl-switch id="asg-release-grade" ${a.settings.release_grade_immediately !== false ? 'checked' : ''}>Release grade immediately on submit (autograded)</sl-switch>
             <sl-switch id="asg-show-answers" ${a.settings.show_correct_answers ? 'checked' : ''}>Show correct answers after submitting</sl-switch>
             <sl-switch id="asg-shuffle-q" ${a.settings.shuffle_questions ? 'checked' : ''}>Shuffle question order</sl-switch>
             <sl-switch id="asg-shuffle-o" ${a.settings.shuffle_options ? 'checked' : ''}>Shuffle answer options</sl-switch>
@@ -543,16 +545,15 @@ export async function renderEditor(assignment, router, container) {
   const on = (sel, evt, fn) => container.querySelector(sel)?.addEventListener(evt, fn);
   on('#asg-title', 'sl-input', (e) => { a.title = e.target.value.trim() || 'Untitled assignment'; save(); });
   on('#asg-instructions', 'sl-input', (e) => { a.instructions = e.target.value; save(); });
-  on('#asg-course', 'sl-change', (e) => {
-    a.gradebook.course_id = e.target.value || null;
-    a.class_id = a.gradebook.course_id;
-    a.gradebook.column_id = null;
+  on('#asg-course', 'sl-change', async (e) => {
+    await syncContentClassLink(a, 'assignments', e.target.value || null);
     renderCategory();
     save();
   });
   on('#asg-due', 'sl-change', (e) => { a.settings.due_date = e.target.value || ''; save(); });
   on('#asg-feedback', 'sl-change', (e) => { a.settings.feedback_mode = e.target.value; save(); });
   const sw = (sel, key) => on(sel, 'sl-change', (e) => { a.settings[key] = e.target.checked; save(); });
+  sw('#asg-release-grade', 'release_grade_immediately');
   sw('#asg-show-answers', 'show_correct_answers');
   sw('#asg-shuffle-q', 'shuffle_questions');
   sw('#asg-shuffle-o', 'shuffle_options');

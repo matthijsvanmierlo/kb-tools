@@ -5,6 +5,7 @@ import { toast } from '../utils/toast.js';
 import { ConfirmDialog, PromptDialog } from '../utils/dialogs.js';
 import { ClassManager } from './class-manager.js';
 import { ShareModal } from './share-dialog.js';
+import { syncContentClassLink } from '../modules/gradebook/bridge.js';
 
 /**
  * Standardized Project Library View Component
@@ -29,8 +30,11 @@ export class ProjectLibraryView {
    */
   constructor(options) {
     this.options = options;
+    this.supportsClassGrading = options.supportsClassGrading !== undefined
+      ? Boolean(options.supportsClassGrading)
+      : (options.moduleType === 'assignments' || options.moduleType === 'video');
     this.searchQuery = '';
-    this.selectedClassId = ClassManager.getActiveFilter();
+    this.selectedClassId = this.supportsClassGrading ? ClassManager.getActiveFilter() : null;
     this.sortBy = 'updated'; // 'updated' | 'alpha' | 'class'
   }
 
@@ -40,10 +44,10 @@ export class ProjectLibraryView {
 
     const [items, classes] = await Promise.all([
       storage.table(this.options.tableName).toArray().catch(() => []),
-      ClassManager.getClasses()
+      this.supportsClassGrading ? ClassManager.getClasses() : Promise.resolve([])
     ]);
 
-    this.classes = classes;
+    this.classes = classes || [];
     this.items = items;
 
     this._renderUI();
@@ -60,7 +64,7 @@ export class ProjectLibraryView {
         (item.name && item.name.toLowerCase().includes(q)) ||
         (item.description && item.description.toLowerCase().includes(q));
 
-      const matchClass = !this.selectedClassId ||
+      const matchClass = !this.supportsClassGrading || !this.selectedClassId ||
         (this.selectedClassId === 'unassigned' ? !item.class_id : item.class_id === this.selectedClassId);
 
       return matchSearch && matchClass;
@@ -69,7 +73,7 @@ export class ProjectLibraryView {
     // Sort items
     if (this.sortBy === 'alpha') {
       filtered.sort((a, b) => (a.title || a.name || '').localeCompare(b.title || b.name || ''));
-    } else if (this.sortBy === 'class') {
+    } else if (this.sortBy === 'class' && this.supportsClassGrading) {
       filtered.sort((a, b) => {
         const cA = this.classes.find(c => c.id === a.class_id)?.name || 'zzz';
         const cB = this.classes.find(c => c.id === b.class_id)?.name || 'zzz';
@@ -126,14 +130,16 @@ export class ProjectLibraryView {
             </sl-input>
 
             <!-- Class Filter -->
-            <sl-select id="select-class-filter" size="small" placeholder="All Classes" class="sm:w-48" aria-label="Filter by class" value="${Sanitizer.escapeHTML(this.selectedClassId || 'all')}">
-              <sl-option value="all">All Classes</sl-option>
-              <sl-option value="unassigned">Unassigned</sl-option>
-              <sl-divider></sl-divider>
-              ${this.classes.map(c => `
-                <sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)}</sl-option>
-              `).join('')}
-            </sl-select>
+            ${this.supportsClassGrading ? `
+              <sl-select id="select-class-filter" size="small" placeholder="All Classes" class="sm:w-48" aria-label="Filter by class" value="${Sanitizer.escapeHTML(this.selectedClassId || 'all')}">
+                <sl-option value="all">All Classes</sl-option>
+                <sl-option value="unassigned">Formative Practice (Unassigned)</sl-option>
+                <sl-divider></sl-divider>
+                ${this.classes.map(c => `
+                  <sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)}</sl-option>
+                `).join('')}
+              </sl-select>
+            ` : ''}
           </div>
 
           <!-- Sort Select -->
@@ -142,7 +148,7 @@ export class ProjectLibraryView {
             <sl-select id="select-sort-by" size="small" class="flex-1 sm:flex-none sm:w-40" value="${this.sortBy}" aria-label="Sort order">
               <sl-option value="updated">Last Updated</sl-option>
               <sl-option value="alpha">Alphabetical</sl-option>
-              <sl-option value="class">By Class</sl-option>
+              ${this.supportsClassGrading ? '<sl-option value="class">By Class</sl-option>' : ''}
             </sl-select>
           </div>
         </div>
@@ -182,9 +188,13 @@ export class ProjectLibraryView {
                             ${safeDisplayTitle}
                           </h3>
                           <div class="mt-1 flex items-center gap-1.5 flex-wrap">
-                            ${assignedClass ? ClassManager.renderClassBadge(assignedClass) : `
-                              <span class="text-[10px] text-slate-400">Unassigned</span>
-                            `}
+                            ${!this.supportsClassGrading ? `
+                              <span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-slate-100 text-slate-600 border border-slate-200">Formative Study</span>
+                            ` : (assignedClass ? `
+                              <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">Graded · ${Sanitizer.escapeHTML(assignedClass.name)}</span>
+                            ` : `
+                              <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">Formative Practice (Ungraded)</span>
+                            `)}
                           </div>
                         </div>
 
@@ -203,9 +213,11 @@ export class ProjectLibraryView {
                             <sl-menu-item data-action="rename" data-id="${Sanitizer.escapeHTML(item.id)}">
                               <sl-icon slot="prefix" name="cursor-text"></sl-icon> Rename...
                             </sl-menu-item>
-                            <sl-menu-item data-action="assign-class" data-id="${Sanitizer.escapeHTML(item.id)}">
-                              <sl-icon slot="prefix" name="mortarboard"></sl-icon> Assign Class...
-                            </sl-menu-item>
+                            ${this.supportsClassGrading ? `
+                              <sl-menu-item data-action="assign-class" data-id="${Sanitizer.escapeHTML(item.id)}">
+                                <sl-icon slot="prefix" name="mortarboard"></sl-icon> Grading &amp; Class Assignment...
+                              </sl-menu-item>
+                            ` : ''}
                             <sl-menu-item data-action="duplicate" data-id="${Sanitizer.escapeHTML(item.id)}">
                               <sl-icon slot="prefix" name="copy"></sl-icon> Duplicate
                             </sl-menu-item>
@@ -357,17 +369,40 @@ export class ProjectLibraryView {
 
   _openAssignClassDialog(item) {
     const dialog = document.createElement('sl-dialog');
-    dialog.label = `Assign to Class: ${item.title || item.name}`;
+    dialog.label = `Grading & Class Assignment: ${item.title || item.name || 'Untitled'}`;
+    const isGraded = Boolean(item.class_id);
+    const currentClassId = item.class_id || (this.classes[0]?.id || '');
 
     dialog.innerHTML = `
       <div class="space-y-4 py-2 text-sm">
-        <p class="text-xs text-slate-500">Select which course section this ${this.options.itemTypeName.toLowerCase()} belongs to:</p>
-        <sl-select id="input-assign-class" value="${Sanitizer.escapeHTML(item.class_id || '')}">
-          <sl-option value="">None (Unassigned)</sl-option>
-          ${this.classes.map(c => `
-            <sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)} (${Sanitizer.escapeHTML(c.section || 'General')})</sl-option>
-          `).join('')}
-        </sl-select>
+        <p class="text-xs text-slate-500">Choose how this ${this.options.itemTypeName.toLowerCase()} is delivered to students:</p>
+        
+        <sl-radio-group id="radio-grading-mode" value="${isGraded ? 'graded' : 'practice'}" class="space-y-3">
+          <div class="p-3 rounded-xl border border-slate-200 bg-slate-50/50 space-y-1">
+            <sl-radio value="practice" class="font-medium text-slate-900">
+              Formative Practice (Ungraded)
+            </sl-radio>
+            <p class="text-xs text-slate-500 pl-6">
+              Instant 1-click share link, zero student sign-in or Student ID gate, instant feedback, and unlimited retries. No Gradebook column or hand-in file needed.
+            </p>
+          </div>
+
+          <div class="p-3 rounded-xl border border-slate-200 bg-slate-50/50 space-y-2">
+            <sl-radio value="graded" class="font-medium text-slate-900">
+              Graded in Class (Links to Gradebook &amp; collects student submissions)
+            </sl-radio>
+            <p class="text-xs text-slate-500 pl-6">
+              Requires student sign-in, automatically creates a Gradebook column, and collects student submissions.
+            </p>
+            <div id="class-select-container" class="pl-6 pt-1 ${isGraded ? '' : 'opacity-50 pointer-events-none'}">
+              <sl-select id="input-assign-class" value="${Sanitizer.escapeHTML(currentClassId)}" label="Class Section">
+                ${this.classes.map(c => `
+                  <sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)} (${Sanitizer.escapeHTML(c.section || 'General')})</sl-option>
+                `).join('')}
+              </sl-select>
+            </div>
+          </div>
+        </sl-radio-group>
       </div>
       <div slot="footer" class="flex justify-end gap-2">
         <sl-button variant="default" id="btn-cancel-assign">Cancel</sl-button>
@@ -378,13 +413,24 @@ export class ProjectLibraryView {
     document.body.appendChild(dialog);
     dialog.show();
 
+    const radioGroup = dialog.querySelector('#radio-grading-mode');
+    const classContainer = dialog.querySelector('#class-select-container');
+    radioGroup?.addEventListener('sl-change', () => {
+      const mode = radioGroup.value;
+      if (mode === 'graded') {
+        classContainer?.classList.remove('opacity-50', 'pointer-events-none');
+      } else {
+        classContainer?.classList.add('opacity-50', 'pointer-events-none');
+      }
+    });
+
     dialog.querySelector('#btn-cancel-assign')?.addEventListener('click', () => dialog.hide());
     dialog.querySelector('#btn-save-assign')?.addEventListener('click', async () => {
-      const select = dialog.querySelector('#input-assign-class');
-      item.class_id = select?.value || null;
-      item.updated_at = new Date().toISOString();
-      await storage.table(this.options.tableName).put(item);
-      toast.success('Class assignment updated!');
+      const mode = radioGroup?.value || 'practice';
+      const classSelect = dialog.querySelector('#input-assign-class');
+      const targetClassId = mode === 'graded' ? (classSelect?.value || null) : null;
+      await syncContentClassLink(item, this.options.moduleType, targetClassId);
+      toast.success(targetClassId ? 'Assigned to class and linked to Gradebook!' : 'Set to Formative Practice!');
       dialog.hide();
       this.render(this.container);
     });

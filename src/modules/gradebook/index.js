@@ -18,6 +18,8 @@ import { computeCourseAggregates } from './aggregates.js';
 import { GradeDetailsDrawer } from './grade-drawer.js';
 import { openCourseSettingsDialog } from './course-settings.js';
 import { openAssignmentDialog } from './assignment-dialog.js';
+import { openPublishDialog } from '../assignments/publish.js';
+import { openVideoShareDialog } from '../video/share-video.js';
 import { renderStandardsView } from './standards-view.js';
 import { renderRosterView } from './roster-view.js';
 import { RosterImportDialog } from '../../components/roster-import-dialog.js';
@@ -454,6 +456,23 @@ export async function renderGradebookView(params, router, container) {
           renderGradebookView(params, router, container);
         }
       });
+    },
+    onShareColumn: async (assignment) => {
+      if (assignment.source?.type === 'assignment') {
+        const item = await storage.table('assignments').get(assignment.source.id);
+        if (item) {
+          openPublishDialog(item);
+        } else {
+          toast.warning('Linked assignment not found.');
+        }
+      } else if (assignment.source?.type === 'video') {
+        const item = await storage.table('video_assessments').get(assignment.source.id);
+        if (item) {
+          openVideoShareDialog(item);
+        } else {
+          toast.warning('Linked video assessment not found.');
+        }
+      }
     },
     onOpenDetails: (student, assignment, gradeRecord, pos) => openGradeDrawer(pos.row, pos.col)
   });

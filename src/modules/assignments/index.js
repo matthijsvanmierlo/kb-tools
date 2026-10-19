@@ -12,6 +12,7 @@ import { totalPoints } from './grading.js';
  * Routes: #/assignments (library), #/assignments/edit, #/assignments/take, #/assignments/submissions
  */
 export async function renderAssignmentsView(params, router, container) {
+  await ensureSampleAssignment();
   const hash = window.location.hash || '#/assignments';
 
   if (hash.startsWith('#/assignments/take')) {
@@ -51,7 +52,6 @@ export async function renderAssignmentsView(params, router, container) {
 }
 
 export function createBlankAssignment() {
-  const classId = ClassManager.getActiveFilter();
   const now = new Date().toISOString();
   return {
     id: generateUUID(),
@@ -59,15 +59,16 @@ export function createBlankAssignment() {
     title: 'Untitled assignment',
     description: '',
     instructions: '',
-    class_id: classId && classId !== 'unassigned' ? classId : null,
-    gradebook: { course_id: classId && classId !== 'unassigned' ? classId : null, category_id: null, column_id: null },
+    class_id: null,
+    gradebook: { course_id: null, category_id: null, column_id: null, gradebook_assignment_id: null },
     settings: {
       feedback_mode: 'after_submit',
       show_correct_answers: false,
       shuffle_questions: false,
       shuffle_options: true,
       require_access_code: true,
-      due_date: ''
+      due_date: '',
+      release_grade_immediately: true
     },
     questions: [],
     publish: null,

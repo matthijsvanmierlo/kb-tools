@@ -159,10 +159,7 @@ export class FlashcardEditor {
     if (descInput) {
       this.deck.description = descInput.value.trim();
     }
-    const classSelect = this.container?.querySelector('#select-deck-class');
-    if (classSelect) {
-      this.deck.class_id = classSelect.value || null;
-    }
+    this.deck.class_id = null;
 
     this.deck.updated_at = new Date().toISOString();
 
@@ -204,12 +201,7 @@ export class FlashcardEditor {
                 <sl-icon name="arrow-left" class="text-lg"></sl-icon>
               </button>
               <sl-input id="input-deck-title" value="${safeTitle}" placeholder="Deck Title (e.g. AP Chemistry Unit 1)" size="medium" class="font-bold flex-1 max-w-md"></sl-input>
-              <sl-select id="select-deck-class" size="small" placeholder="Assign Class..." class="w-48" value="${Sanitizer.escapeHTML(this.deck.class_id || '')}">
-                <sl-option value="">No Class (General)</sl-option>
-                ${this.classes.map(c => `
-                  <sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)}</sl-option>
-                `).join('')}
-              </sl-select>
+              <span class="px-2 py-1 rounded-md text-xs font-medium bg-slate-100 text-slate-600 border border-slate-200">Formative Study</span>
             </div>
 
             <div class="flex items-center gap-2 self-end sm:self-auto">

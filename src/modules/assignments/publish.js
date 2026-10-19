@@ -5,6 +5,8 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { toast } from '../../utils/toast.js';
 import { buildStudentPayload, totalPoints } from './grading.js';
 import { validateQuestion } from './question-types.js';
+import { generateUUID } from '../../utils/uuid.js';
+import { syncContentClassLink } from '../gradebook/bridge.js';
 
 /**
  * Publish & Share (KB-ASSIGN-003)
@@ -117,107 +119,135 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
   const existing = document.getElementById('kb-assignment-publish-dialog');
   if (existing) existing.remove();
 
-  const transport = await getTransport();
+  const [transport, allCourses] = await Promise.all([
+    getTransport(),
+    storage.table('gradebook_courses').toArray().catch(() => [])
+  ]);
   const hasShortLinks = Boolean(transport?.capabilities?.hostPayload);
-  const roster = await getRosterStatus(assignment);
+  let roster = await getRosterStatus(assignment);
   const teacherProfile = (await storage.getMetadata('teacher_profile')) || {};
   const issues = (assignment.questions || []).map((q, i) => ({ i, issues: validateQuestion(q) })).filter(x => x.issues.length);
-  const settings = assignment.settings || {};
-  const feedbackText = { immediate: 'Instant feedback per question', after_submit: 'Score shown after submitting', none: 'No feedback until you return grades' }[settings.feedback_mode || 'after_submit'];
-  const qCount = assignment.questions?.length || 0;
+  let qCount = assignment.questions?.length || 0;
+
+  const currentClassId = assignment.gradebook?.course_id || assignment.class_id || '';
 
   const dialog = document.createElement('sl-dialog');
   dialog.id = 'kb-assignment-publish-dialog';
-  dialog.label = 'Publish & share';
-  dialog.style.setProperty('--width', '640px');
+  dialog.label = 'Share & Deliver Assignment';
+  dialog.style.setProperty('--width', '680px');
   dialog.innerHTML = `
-    <div class="space-y-5">
-      <div class="flex items-start gap-3">
-        <span class="w-10 h-10 flex-shrink-0 rounded-xl bg-amber-50 text-amber-600 flex items-center justify-center text-xl"><sl-icon name="send"></sl-icon></span>
-        <div class="min-w-0">
-          <h3 class="font-semibold text-slate-900 truncate">${Sanitizer.escapeHTML(assignment.title || 'Assignment')}</h3>
-          <p class="text-sm text-slate-500">${qCount} question${qCount === 1 ? '' : 's'} · ${totalPoints(assignment)} pts · ${feedbackText}</p>
+    <div class="space-y-4">
+      <!-- Assignment Summary Header -->
+      <div class="flex items-start gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200">
+        <span class="w-10 h-10 flex-shrink-0 rounded-xl bg-amber-500 text-white flex items-center justify-center text-xl shadow-xs"><sl-icon name="send"></sl-icon></span>
+        <div class="min-w-0 flex-1">
+          <h3 class="font-bold text-slate-900 truncate">${Sanitizer.escapeHTML(assignment.title || 'Assignment')}</h3>
+          <p class="text-xs text-slate-500 mt-0.5" id="publish-header-stats">${qCount} question${qCount === 1 ? '' : 's'} · ${totalPoints(assignment)} pts</p>
         </div>
       </div>
 
       ${qCount === 0 ? `
-        <sl-alert variant="danger" open><sl-icon slot="icon" name="exclamation-octagon"></sl-icon>Add at least one question before publishing.</sl-alert>
+        <sl-alert variant="warning" open id="alert-no-questions">
+          <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
+          <div>
+            <strong class="text-sm">This assignment has no questions yet.</strong>
+            <p class="text-xs text-slate-600 mt-0.5">Add a starter question to generate a shareable student link immediately.</p>
+            <sl-button size="small" variant="primary" id="btn-add-starter-q" class="mt-2">
+              <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add a starter question to generate link
+            </sl-button>
+          </div>
+        </sl-alert>
       ` : ''}
 
       ${issues.length ? `
         <sl-alert variant="warning" open>
           <sl-icon slot="icon" name="exclamation-triangle"></sl-icon>
           <strong>${issues.length} question${issues.length === 1 ? ' needs' : 's need'} attention.</strong>
-          <ul class="mt-1 text-sm list-disc pl-5">
+          <ul class="mt-1 text-xs list-disc pl-5">
             ${issues.slice(0, 5).map(x => `<li>Question ${x.i + 1}: ${Sanitizer.escapeHTML(x.issues.join(' '))}</li>`).join('')}
           </ul>
         </sl-alert>
       ` : ''}
 
-      <div class="rounded-xl border border-slate-200 divide-y divide-slate-200 text-sm">
-        <div class="flex items-start gap-3 p-3">
-          <sl-icon name="shield-lock" class="text-emerald-600 text-lg mt-0.5 flex-shrink-0"></sl-icon>
-          <div>
-            <div class="font-medium text-slate-800">Answer key stays on this device</div>
-            <div class="text-slate-500">${settings.feedback_mode === 'none'
-              ? 'The link contains questions only.'
-              : 'The link contains questions plus one-way hashes used for instant feedback. Every submission is re-graded here from the real key.'}
-              ${settings.show_correct_answers ? ' <strong class="text-amber-700">Correct answers are included so students can review them after submitting</strong> — turn this off for high-stakes tests.' : ''}</div>
+      <!-- Instant Student Share Link Box -->
+      <div id="publish-result" class="${qCount === 0 ? 'hidden' : ''} p-4 rounded-xl border-2 border-emerald-300 bg-emerald-50/50 space-y-3">
+        <div class="flex items-center justify-between gap-2">
+          <div class="flex items-center gap-1.5 font-bold text-slate-900 text-sm">
+            <sl-icon name="link-45deg" class="text-emerald-600 text-lg"></sl-icon> Student Share Link
+          </div>
+          <span id="publish-meter" class="text-[11px] px-2 py-0.5 rounded-full font-medium"></span>
+        </div>
+        
+        <div class="flex gap-2">
+          <sl-input id="input-publish-url" readonly class="flex-1 font-mono text-xs" aria-label="Student share link"></sl-input>
+          <sl-button variant="primary" id="btn-publish-copy" class="flex-shrink-0">
+            <sl-icon slot="prefix" name="clipboard"></sl-icon> Copy link
+          </sl-button>
+        </div>
+
+        <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-emerald-200/60">
+          <div class="flex gap-2 flex-wrap">
+            <sl-button size="small" id="btn-publish-download" variant="default">
+              <sl-icon slot="prefix" name="file-earmark-arrow-down"></sl-icon> Download .kbshare
+            </sl-button>
+            <sl-button size="small" id="btn-publish-per-student-csv" variant="default" ${!roster.students.length ? 'disabled' : ''}>
+              <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Per-student links (CSV)
+            </sl-button>
+          </div>
+          <span class="text-[11px] text-slate-500 font-mono" id="publish-fingerprint"></span>
+        </div>
+      </div>
+
+      <!-- Mode & Class Delivery Settings -->
+      <div class="rounded-xl border border-slate-200 p-4 space-y-3 bg-white">
+        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500">Delivery &amp; Grading Settings</h4>
+        
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-center">
+          <sl-select id="select-publish-class" label="Delivery Mode / Class" size="small" value="${Sanitizer.escapeHTML(currentClassId)}">
+            <sl-option value="">Formative Practice (Ungraded — No sign-in)</sl-option>
+            <sl-divider></sl-divider>
+            ${allCourses.map(c => `
+              <sl-option value="${Sanitizer.escapeHTML(c.id)}">Graded in Class: ${Sanitizer.escapeHTML(c.name)}</sl-option>
+            `).join('')}
+          </sl-select>
+
+          <div class="pt-4 sm:pt-6">
+            <sl-checkbox id="chk-release-grade" ${assignment.settings?.release_grade_immediately !== false ? 'checked' : ''}>
+              Release grade immediately on submit
+            </sl-checkbox>
           </div>
         </div>
-        <div class="flex items-start gap-3 p-3">
-          <sl-icon name="people" class="text-blue-600 text-lg mt-0.5 flex-shrink-0"></sl-icon>
-          <div>
-            ${roster.course ? `
-              <div class="font-medium text-slate-800">Linked to ${Sanitizer.escapeHTML(roster.course.name)}</div>
-              <div class="text-slate-500">${roster.withCode.length} of ${roster.students.length} students have an access code${settings.require_access_code ? ' (checked when they start)' : ''}.</div>
-              ${roster.withoutCode.length && settings.require_access_code ? `
-                <div class="mt-1 text-amber-700">Missing codes: ${roster.withoutCode.slice(0, 6).map(s => Sanitizer.escapeHTML(s.full_name)).join(', ')}${roster.withoutCode.length > 6 ? '…' : ''}. Generate them in <strong>Gradebook → class settings → Student access</strong>, then publish again. Their submissions will show as “Unverified”.</div>
-              ` : ''}
-            ` : `
-              <div class="font-medium text-slate-800">No class linked</div>
-              <div class="text-slate-500">Students can still submit, but identities can't be verified and grades can't sync. Link a class in the assignment settings.</div>
-            `}
-          </div>
+
+        <div class="text-xs text-slate-500 pt-1" id="publish-mode-hint">
+          ${currentClassId ? `
+            <span class="text-indigo-700 font-medium">Graded Mode:</span> Students sign in with ID and receive an official Gradebook submission.
+          ` : `
+            <span class="text-emerald-700 font-medium">Formative Practice:</span> Instant zero-friction practice with no ID required and unlimited retries.
+          `}
         </div>
       </div>
 
-      ${hasShortLinks ? `
-        <div class="rounded-xl border border-blue-200 p-3 space-y-1 bg-blue-50/60 text-sm">
-          <sl-checkbox id="chk-publish-short-link" checked>Short link (hosted on school server)</sl-checkbox>
-          <p class="text-[11px] text-slate-500">Creates a compact link (~60 chars). Payload is encrypted client-side; server cannot read it.</p>
+      <!-- Security & Link Options -->
+      <div class="rounded-xl border border-slate-200 p-3.5 space-y-3 bg-slate-50 text-xs">
+        <h4 class="font-bold uppercase tracking-wider text-slate-500 text-[10px]">Options</h4>
+        
+        <div class="space-y-2">
+          ${hasShortLinks ? `
+            <sl-checkbox id="chk-publish-short-link" checked>Short link (hosted on school server)</sl-checkbox>
+          ` : ''}
+          <sl-checkbox id="chk-include-email" ${teacherProfile.email ? 'checked' : ''}>Include my email for submission backup</sl-checkbox>
+          <sl-input id="input-teacher-email" type="email" placeholder="teacher@school.edu" size="small" value="${Sanitizer.escapeHTML(teacherProfile.email || '')}" ${teacherProfile.email ? '' : 'disabled'}></sl-input>
+          <sl-input id="input-publish-passphrase" type="password" password-toggle label="Optional link password" placeholder="Leave empty for public link" size="small"></sl-input>
         </div>
-      ` : ''}
-
-      <div class="rounded-xl border border-slate-200 p-3 space-y-2 text-sm bg-slate-50">
-        <sl-checkbox id="chk-include-email" ${teacherProfile.email ? 'checked' : ''}>Include my email as a hand-in method</sl-checkbox>
-        <sl-input id="input-teacher-email" type="email" placeholder="teacher@school.edu" size="small" value="${Sanitizer.escapeHTML(teacherProfile.email || '')}" ${teacherProfile.email ? '' : 'disabled'}></sl-input>
-        <p class="text-[11px] text-slate-500">Students get an "Email to teacher" button on the submission screen with instructions to attach their file.</p>
       </div>
 
-      <sl-input id="input-publish-passphrase" type="password" password-toggle label="Optional link password" help-text="Leave empty for a link anyone in your class can open." size="medium">
-        <sl-icon slot="prefix" name="key"></sl-icon>
-      </sl-input>
-
-      <div id="publish-result" class="hidden space-y-4 pt-4 border-t border-slate-200">
-        <div class="flex items-center justify-between gap-2 text-sm">
-          <span class="font-semibold text-slate-800">Student link</span>
-          <span id="publish-meter" class="text-[11px] px-2 py-0.5 rounded-full"></span>
-        </div>
-        <sl-input id="input-publish-url" readonly></sl-input>
-        <div class="flex flex-wrap gap-2 justify-end">
-          <sl-button size="small" id="btn-publish-download"><sl-icon slot="prefix" name="file-earmark-arrow-down"></sl-icon> Download .kbshare</sl-button>
-          <sl-button size="small" id="btn-publish-per-student-csv" ${!roster.students.length ? 'disabled' : ''}><sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Per-student links (CSV)</sl-button>
-          <sl-button size="small" variant="primary" id="btn-publish-copy"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy link</sl-button>
-        </div>
-        <p class="text-xs text-slate-500" id="publish-fingerprint"></p>
-        <div id="publish-instructions-mount" class="pt-2"></div>
-      </div>
+      <div id="publish-instructions-mount"></div>
     </div>
+
     <div slot="footer" class="flex justify-end gap-2">
       <sl-button id="btn-publish-close">Close</sl-button>
-      <sl-button variant="primary" id="btn-publish-go" ${qCount === 0 ? 'disabled' : ''}>
-        <sl-icon slot="prefix" name="send"></sl-icon> ${assignment.publish ? 'Publish new version' : 'Publish'}
+      <sl-button variant="default" id="btn-publish-go" ${qCount === 0 ? 'disabled' : ''}>
+        <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Regenerate link
       </sl-button>
     </div>
   `;
@@ -234,11 +264,64 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
   const emailInput = dialog.querySelector('#input-teacher-email');
   emailChk?.addEventListener('sl-change', () => {
     if (emailInput) emailInput.disabled = !emailChk.checked;
+    generateLink(true);
+  });
+  emailInput?.addEventListener('sl-change', () => generateLink(true));
+
+  const classSelect = dialog.querySelector('#select-publish-class');
+  classSelect?.addEventListener('sl-change', async (e) => {
+    const targetClassId = e.target.value || null;
+    await syncContentClassLink(assignment, 'assignments', targetClassId);
+    roster = await getRosterStatus(assignment);
+    const hint = dialog.querySelector('#publish-mode-hint');
+    if (hint) {
+      hint.innerHTML = targetClassId
+        ? '<span class="text-indigo-700 font-medium">Graded Mode:</span> Students sign in with ID and receive an official Gradebook submission.'
+        : '<span class="text-emerald-700 font-medium">Formative Practice:</span> Instant zero-friction practice with no ID required and unlimited retries.';
+    }
+    const btnCsv = dialog.querySelector('#btn-publish-per-student-csv');
+    if (btnCsv) btnCsv.disabled = !roster.students.length;
+    await generateLink(true);
   });
 
-  dialog.querySelector('#btn-publish-go').addEventListener('click', async () => {
-    const btn = dialog.querySelector('#btn-publish-go');
-    btn.setAttribute('loading', '');
+  const releaseChk = dialog.querySelector('#chk-release-grade');
+  releaseChk?.addEventListener('sl-change', async () => {
+    if (!assignment.settings) assignment.settings = {};
+    assignment.settings.release_grade_immediately = releaseChk.checked;
+    await storage.table('assignments').put(assignment);
+    await generateLink(true);
+  });
+
+  const shortLinkChk = dialog.querySelector('#chk-publish-short-link');
+  shortLinkChk?.addEventListener('sl-change', () => generateLink(true));
+
+  const passInput = dialog.querySelector('#input-publish-passphrase');
+  passInput?.addEventListener('sl-change', () => generateLink(true));
+
+  dialog.querySelector('#btn-add-starter-q')?.addEventListener('click', async () => {
+    assignment.questions = [{
+      id: generateUUID(),
+      type: 'single_choice',
+      points: 1,
+      prompt: 'Sample Question: What is 2 + 2?',
+      options: [
+        { id: generateUUID().slice(0, 8), text: '4', is_correct: true },
+        { id: generateUUID().slice(0, 8), text: '5', is_correct: false }
+      ],
+      explanation: 'Basic arithmetic: 2 + 2 = 4.'
+    }];
+    assignment.updated_at = new Date().toISOString();
+    await storage.table('assignments').put(assignment);
+    toast.success('Starter question added!');
+    dialog.hide();
+    openPublishDialog(assignment, { onPublished });
+  });
+
+  async function generateLink(silent = false) {
+    if (!assignment.questions || assignment.questions.length === 0) return;
+    const btnGo = dialog.querySelector('#btn-publish-go');
+    if (btnGo) btnGo.loading = true;
+
     try {
       const includeEmail = emailChk?.checked;
       const teacherEmail = emailInput?.value.trim() || '';
@@ -251,11 +334,12 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
         transport
       });
       Object.assign(assignment, updated);
-      share = await CryptoShareEngine.createSharePayload('assignment', payload, dialog.querySelector('#input-publish-passphrase').value || '');
 
+      const passphrase = passInput?.value || '';
+      share = await CryptoShareEngine.createSharePayload('assignment', payload, passphrase);
       activeUrl = share.url;
-      const chkShortLink = dialog.querySelector('#chk-publish-short-link');
-      if (chkShortLink?.checked && transport?.capabilities?.hostPayload) {
+
+      if (shortLinkChk?.checked && transport?.capabilities?.hostPayload) {
         try {
           const wrapped = await CryptoShareEngine.wrapForHosting(share.rawFileContent);
           const pub = await transport.publishPayload({
@@ -270,19 +354,27 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
         }
       }
 
-      dialog.querySelector('#input-publish-url').value = activeUrl;
+      const urlInput = dialog.querySelector('#input-publish-url');
+      if (urlInput) urlInput.value = activeUrl;
+
       const meter = dialog.querySelector('#publish-meter');
-      if (activeUrl !== share.url) {
-        meter.className = 'text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200';
-        meter.textContent = `${activeUrl.length} chars · short link via school server`;
-      } else if (share.length <= 2048) {
-        meter.className = 'text-[11px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200';
-        meter.textContent = `${share.length.toLocaleString()} chars · fits in any LMS`;
-      } else {
-        meter.className = 'text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200';
-        meter.textContent = `${share.length.toLocaleString()} chars · share the .kbshare file if the link gets cut off`;
+      if (meter) {
+        if (activeUrl !== share.url) {
+          meter.className = 'text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200';
+          meter.textContent = `${activeUrl.length} chars · short link via server`;
+        } else if (share.length <= 2048) {
+          meter.className = 'text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200';
+          meter.textContent = `${share.length.toLocaleString()} chars · fits LMS`;
+        } else {
+          meter.className = 'text-[11px] px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200';
+          meter.textContent = `${share.length.toLocaleString()} chars · .kbshare file recommended`;
+        }
       }
-      dialog.querySelector('#publish-fingerprint').innerHTML = `Version ${Sanitizer.escapeHTML(updated.publish.version)}. Submissions are encrypted to your key <strong class="font-mono">${Sanitizer.escapeHTML(keys.fingerprint)}</strong> — students see the same code on their receipt.`;
+
+      const fp = dialog.querySelector('#publish-fingerprint');
+      if (fp) {
+        fp.innerHTML = `Encrypted for key <strong class="font-mono text-slate-700">${Sanitizer.escapeHTML(keys.fingerprint)}</strong>`;
+      }
 
       const mount = dialog.querySelector('#publish-instructions-mount');
       if (mount) {
@@ -295,28 +387,29 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
         }));
       }
 
-      dialog.querySelector('#publish-result').classList.remove('hidden');
-      btn.innerHTML = '<sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Publish again';
-      toast.success(`Published version ${updated.publish.version}.`);
+      dialog.querySelector('#publish-result')?.classList.remove('hidden');
+      if (!silent) toast.success(`Share link ready!`);
       if (typeof onPublished === 'function') onPublished(updated);
     } catch (err) {
       console.error('Publish failed:', err);
-      toast.danger(`Could not publish: ${err.message}`);
+      if (!silent) toast.danger(`Could not publish: ${err.message}`);
     } finally {
-      btn.removeAttribute('loading');
+      if (btnGo) btnGo.loading = false;
     }
-  });
+  }
 
-  dialog.querySelector('#btn-publish-copy').addEventListener('click', async () => {
+  dialog.querySelector('#btn-publish-go')?.addEventListener('click', () => generateLink(false));
+
+  dialog.querySelector('#btn-publish-copy')?.addEventListener('click', async () => {
     try {
       await navigator.clipboard.writeText(activeUrl || share?.url || '');
-      toast.success('Link copied.');
+      toast.success('Link copied to clipboard!');
     } catch (_) {
       toast.warning('Copy failed — select the link and copy it manually.');
     }
   });
 
-  dialog.querySelector('#btn-publish-download').addEventListener('click', () => {
+  dialog.querySelector('#btn-publish-download')?.addEventListener('click', () => {
     if (!share) return;
     const name = (assignment.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_').toLowerCase();
     CryptoShareEngine.downloadKbShareFile(share.rawFileContent, `${name}.kbshare`);
@@ -345,4 +438,9 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
     downloadCSV(`${(assignment.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_')}_student_links.csv`, text);
     toast.success(`Exported ${rows.length} per-student links.`);
   });
+
+  // Automatically generate link immediately if questions exist!
+  if (qCount > 0) {
+    generateLink(true);
+  }
 }

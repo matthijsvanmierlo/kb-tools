@@ -148,7 +148,7 @@ export async function loadDemoWorkspace() {
   const chemDeck = {
     version: 1,
     id: generateUUID(),
-    class_id: apChem.id,
+    class_id: null,
     title: 'AP Chemistry • Chemical Foundations & Bonding',
     description: 'Master key equations, thermodynamic laws, and reaction kinetics with spaced repetition.',
     tags: ['Chemistry', 'AP Exam', 'Formulas'],
@@ -177,7 +177,7 @@ export async function loadDemoWorkspace() {
   const histTimeline = {
     version: 1,
     id: generateUUID(),
-    class_id: worldHistory.id,
+    class_id: null,
     title: 'Ancient & Classical Revolutions',
     description: 'From the Bronze Age collapse to the Roman Empire and Renaissance.',
     updated_at: now,

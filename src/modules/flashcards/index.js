@@ -120,7 +120,7 @@ export async function renderFlashcardsView(params, router, container) {
         version: 1,
         id: generateUUID(),
         title: 'Untitled Flashcard Deck',
-        class_id: ClassManager.getActiveFilter(),
+        class_id: null,
         cards: []
       };
     }
@@ -148,6 +148,7 @@ async function renderLibrary(container, router) {
 
   const library = new ProjectLibraryView({
     moduleType: 'flashcards',
+    supportsClassGrading: false,
     title: 'Flashcard Decks',
     itemTypeName: 'Deck',
     tableName: 'flashcards',

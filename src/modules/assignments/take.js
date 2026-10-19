@@ -10,6 +10,7 @@ import { QUESTION_TYPE_META } from './question-types.js';
 import { RelayTransport } from '../../core/transport.js';
 import { DraftRoamer } from './draft-roaming.js';
 import { StudentProfile } from '../../core/student-profile.js';
+import { StudentLedger } from '../student/ledger.js';
 
 /**
  * Student Take Mode (KB-ASSIGN-005)
@@ -117,6 +118,7 @@ export async function renderTakeView(params, router, container) {
   // Start screen
   // ---------------------------------------------------------------------------
   function renderStart() {
+    const isPractice = !payload.course_id && payload.mode !== 'graded';
     const totalPts = questions.reduce((s, q) => s + (q.points || 0), 0);
     const needsCode = !!payload.settings?.require_access_code && !!payload.roster_checks;
     container.innerHTML = `
@@ -124,9 +126,10 @@ export async function renderTakeView(params, router, container) {
         ${preview ? previewBanner() : ''}
         <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-6">
           <div class="space-y-3 text-center">
-            <span class="w-14 h-14 mx-auto rounded-2xl bg-amber-50 text-amber-600 flex items-center justify-center text-2xl"><sl-icon name="ui-checks"></sl-icon></span>
+            <span class="w-14 h-14 mx-auto rounded-2xl ${isPractice ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'} flex items-center justify-center text-2xl"><sl-icon name="${isPractice ? 'lightbulb' : 'ui-checks'}"></sl-icon></span>
             <h1 class="text-2xl font-bold text-slate-900">${esc(payload.title)}</h1>
             <div class="flex flex-wrap justify-center gap-2 text-xs">
+              ${isPractice ? '<span class="px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 font-medium">Formative Practice · Ungraded</span>' : ''}
               <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">${questions.length} questions</span>
               <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">${totalPts} points</span>
               ${payload.due_date ? `<span class="px-2.5 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">Due ${esc(new Date(`${payload.due_date}T12:00:00`).toLocaleDateString())}</span>` : ''}
@@ -135,21 +138,26 @@ export async function renderTakeView(params, router, container) {
           </div>
           ${payload.instructions ? `<div class="kb-prose text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-xl p-4">${Sanitizer.renderSTEMMarkdown(payload.instructions)}</div>` : ''}
           <form id="take-start-form" class="space-y-4" novalidate>
-            <sl-input id="take-name" label="Your full name" required autocomplete="name" value="${esc(state.student.name)}"></sl-input>
-            <div>
-              <sl-input id="take-id" label="Student ID" required autocomplete="off" value="${esc(state.student.id)}" ${initialSid ? 'readonly' : ''}></sl-input>
-              ${initialSid ? `
-                <div class="mt-1 flex justify-end">
-                  <button type="button" id="take-change-id" class="text-xs text-blue-600 hover:text-blue-800 underline">Not you? Change</button>
-                </div>
-              ` : ''}
-            </div>
-            <sl-input id="take-code" label="Access code${needsCode ? '' : ' (if your teacher gave you one)'}" ${needsCode ? 'required' : ''} autocomplete="off" placeholder="e.g. K7M2-QX9P" value="${esc(state.student.code)}">
-              <sl-icon slot="prefix" name="key"></sl-icon>
-            </sl-input>
+            ${isPractice ? `
+              <sl-input id="take-name" label="Your name (optional for practice)" autocomplete="name" placeholder="e.g. Jane Doe" value="${esc(state.student.name || '')}"></sl-input>
+              <p class="text-xs text-slate-500">Practice freely. Answers are auto-checked with unlimited attempts and no hand-in required.</p>
+            ` : `
+              <sl-input id="take-name" label="Your full name" required autocomplete="name" value="${esc(state.student.name)}"></sl-input>
+              <div>
+                <sl-input id="take-id" label="Student ID" required autocomplete="off" value="${esc(state.student.id)}" ${initialSid ? 'readonly' : ''}></sl-input>
+                ${initialSid ? `
+                  <div class="mt-1 flex justify-end">
+                    <button type="button" id="take-change-id" class="text-xs text-blue-600 hover:text-blue-800 underline">Not you? Change</button>
+                  </div>
+                ` : ''}
+              </div>
+              <sl-input id="take-code" label="Access code${needsCode ? '' : ' (if your teacher gave you one)'}" ${needsCode ? 'required' : ''} autocomplete="off" placeholder="e.g. K7M2-QX9P" value="${esc(state.student.code)}">
+                <sl-icon slot="prefix" name="key"></sl-icon>
+              </sl-input>
+            `}
             <div id="take-start-error" class="hidden text-sm text-red-600 flex items-start gap-2" role="alert"></div>
             <sl-button type="submit" variant="primary" size="large" class="w-full" id="take-begin">
-              <sl-icon slot="prefix" name="play-fill"></sl-icon> Start
+              <sl-icon slot="prefix" name="play-fill"></sl-icon> ${isPractice ? 'Start Practice' : 'Start'}
             </sl-button>
           </form>
           <p class="text-xs text-slate-400 text-center">${payload.relay?.drop_id
@@ -247,6 +255,14 @@ export async function renderTakeView(params, router, container) {
 
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
+      if (isPractice) {
+        const nameVal = container.querySelector('#take-name')?.value?.trim();
+        state.student.name = nameVal || 'Student';
+        state.student.id = 'self_study';
+        state.student.code = '';
+        begin();
+        return;
+      }
       state.student.name = container.querySelector('#take-name').value.trim();
       state.student.id = container.querySelector('#take-id').value.trim();
       state.student.code = container.querySelector('#take-code').value.trim();
@@ -640,23 +656,44 @@ export async function renderTakeView(params, router, container) {
   }
 
   function renderResults() {
+    const isPractice = !payload.course_id && payload.mode !== 'graded';
+    const releaseImmediately = payload.settings?.release_grade_immediately !== false;
     const r = state.result;
-    const showScore = feedback !== 'none';
+    const showScore = feedback !== 'none' && (isPractice || releaseImmediately);
     const pct = r.clientScore.checkable ? Math.round((r.clientScore.earned / r.clientScore.checkable) * 100) : null;
+
+    // Persist submission into student ledger
+    StudentLedger.recordSubmission({
+      assignmentId: payload.assignment_id,
+      courseId: payload.course_id || null,
+      courseName: isPractice ? 'Self-Study' : 'Class Assignment',
+      title: payload.title || 'Assignment',
+      studentId: state.student.id || (isPractice ? 'self_study' : ''),
+      studentName: state.student.name || 'Student',
+      clientScore: r.clientScore,
+      receiptId: r.receiptId
+    }).catch(() => {});
+
     container.innerHTML = `
       <div class="max-w-3xl mx-auto space-y-6">
         ${preview ? previewBanner() : ''}
         <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 text-center space-y-3">
           <span class="w-14 h-14 mx-auto rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-3xl"><sl-icon name="check2-circle"></sl-icon></span>
-          <h1 class="text-2xl font-bold text-slate-900">${preview ? 'Preview finished' : 'Answers locked in'}</h1>
-          ${showScore ? `
+          <h1 class="text-2xl font-bold text-slate-900">${preview ? 'Preview finished' : (isPractice ? 'Practice complete' : 'Answers locked in')}</h1>
+          ${isPractice ? `
+            <p class="text-slate-600">Auto-checked score: <strong class="text-slate-900 text-lg tabular-nums">${r.clientScore.earned} / ${r.clientScore.checkable}</strong>${pct !== null ? ` <span class="text-slate-400">(${pct}%)</span>` : ''}</p>
+            <p class="text-sm text-slate-500 max-w-md mx-auto">Great job completing this practice set! Unlimited attempts with zero hand-in needed.</p>
+          ` : (releaseImmediately ? `
+            <div class="inline-block px-3 py-1 rounded-full bg-emerald-100 text-emerald-800 text-xs font-semibold mb-1">Graded Assessment · Score Released</div>
             <p class="text-slate-600">Auto-checked score: <strong class="text-slate-900 text-lg tabular-nums">${r.clientScore.earned} / ${r.clientScore.checkable}</strong>${pct !== null ? ` <span class="text-slate-400">(${pct}%)</span>` : ''}</p>
             <p class="text-sm text-slate-500 max-w-md mx-auto">Your teacher's grade is final and may add partial credit${r.clientScore.checkable < r.clientScore.possible ? ` and points for answers they review (${r.clientScore.possible - r.clientScore.checkable} pts)` : ''}.</p>
-          ` : '<p class="text-slate-600">Your teacher will share your grade after reviewing your work.</p>'}
+          ` : `
+            <p class="text-slate-600">Your answers are submitted. Your teacher will release your score after grading.</p>
+          `)}
           ${r.teacherGrade ? `<p class="text-sm text-amber-700">Teacher re-grade from the answer key: <strong>${esc(r.teacherGrade.earned)} / ${esc(r.teacherGrade.possible)}</strong>${r.teacherGrade.needs_manual ? ` (+ ${esc(r.teacherGrade.needs_manual)} for manual review)` : ''}</p>` : ''}
         </div>
 
-        ${!preview ? `
+        ${(!preview && !isPractice) ? `
           <section class="bg-amber-50 border-2 border-amber-300 rounded-2xl p-5 sm:p-6 space-y-4" aria-labelledby="handin-title">
             <div class="flex items-start gap-3">
               <span class="w-10 h-10 flex-shrink-0 rounded-xl bg-amber-500 text-white flex items-center justify-center text-xl"><sl-icon name="box-arrow-up"></sl-icon></span>
@@ -722,7 +759,7 @@ export async function renderTakeView(params, router, container) {
             </ol>
           </section>` : ''}
 
-        ${preview ? '<div class="flex justify-center"><sl-button id="res-restart"><sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Try again</sl-button></div>' : ''}
+        ${(preview || isPractice) ? '<div class="flex justify-center"><sl-button id="res-restart" variant="primary"><sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Try again</sl-button></div>' : ''}
       </div>`;
 
     container.querySelector('#take-exit-preview')?.addEventListener('click', () => router.navigate(`#/assignments/edit?id=${payload.assignment_id}`));

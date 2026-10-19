@@ -117,8 +117,33 @@ export const VideoAssessmentSchema = z.object({
   updated_at: z.string().optional(),
   provider: z.enum(['html5', 'youtube', 'vimeo']),
   video_source: z.string().min(1),
-  checkpoints: z.array(VideoCheckpointSchema).default([])
+  checkpoints: z.array(VideoCheckpointSchema).default([]),
+  settings: z.object({
+    release_grade_immediately: z.boolean().optional().default(true),
+    feedback_mode: z.enum(['immediate', 'after_submit', 'none']).optional().default('immediate'),
+    show_correct_answers: z.boolean().optional().default(true)
+  }).optional()
 });
+
+export const AssignmentSettingsSchema = z.object({
+  feedback_mode: z.enum(['immediate', 'after_submit', 'none']).optional().default('after_submit'),
+  show_correct_answers: z.boolean().optional().default(false),
+  shuffle_questions: z.boolean().optional().default(false),
+  shuffle_options: z.boolean().optional().default(true),
+  require_access_code: z.boolean().optional().default(true),
+  due_date: z.string().optional().default(''),
+  release_grade_immediately: z.boolean().optional().default(true)
+});
+
+export const AssignmentPayloadSchema = z.object({
+  kind: z.literal('kb-assignment').optional(),
+  v: z.number().optional(),
+  assignment_id: z.string().uuid().optional(),
+  course_id: z.string().uuid().nullable().optional(),
+  mode: z.enum(['practice', 'graded']).optional(),
+  title: z.string().optional(),
+  settings: AssignmentSettingsSchema.optional()
+}).passthrough();
 
 export const GradebookCourseSchema = z.object({
   id: z.string().uuid(),

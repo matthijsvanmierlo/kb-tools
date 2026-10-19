@@ -50,6 +50,7 @@ export class VirtualGradebookGrid {
     this.course = config.course || null;
     this.onStudentClick = config.onStudentClick || null;
     this.onAssignmentClick = config.onAssignmentClick || null;
+    this.onShareColumn = config.onShareColumn || null;
 
     // Fixed Geometry Constants
     this.ROW_HEIGHT = 40;
@@ -183,6 +184,7 @@ export class VirtualGradebookGrid {
     let headerHtml = '';
     this.assignments.forEach((a, colIdx) => {
       const hasRubric = !!a.rubric_id;
+      const isLinked = a.source?.type === 'assignment' || a.source?.type === 'video';
       headerHtml += `
         <div class="header-col-cell absolute top-0 flex flex-col justify-center gap-0.5 px-3 border-r border-slate-200 overflow-hidden cursor-pointer hover:bg-slate-200 transition-colors"
              data-col-idx="${colIdx}"
@@ -190,7 +192,14 @@ export class VirtualGradebookGrid {
              style="left: ${colIdx * this.CELL_WIDTH}px; width: ${this.CELL_WIDTH}px; height: ${this.HEADER_HEIGHT}px;">
           <div class="flex items-center justify-between gap-1">
             <span class="truncate font-semibold text-slate-800">${Sanitizer.escapeHTML(a.title)}</span>
-            ${hasRubric ? '<sl-icon name="grid-3x3" class="text-violet-600 text-[10px] flex-shrink-0" title="Graded with a rubric"></sl-icon>' : ''}
+            <div class="flex items-center gap-1 flex-shrink-0">
+              ${hasRubric ? '<sl-icon name="grid-3x3" class="text-violet-600 text-[10px]" title="Graded with a rubric"></sl-icon>' : ''}
+              ${isLinked ? `
+                <button type="button" class="btn-share-col text-slate-400 hover:text-blue-600 transition-colors p-0.5 rounded cursor-pointer" title="Get student share link" data-col-idx="${colIdx}">
+                  <sl-icon name="share" class="text-xs"></sl-icon>
+                </button>
+              ` : ''}
+            </div>
           </div>
           <span class="text-[10px] font-medium text-slate-400 tabular-nums truncate">${a.scoring === 'proficiency'
             ? `Proficiency${this._standardCodes(a) ? ` · ${this._standardCodes(a)}` : ''}`
@@ -207,6 +216,17 @@ export class VirtualGradebookGrid {
         const as = this.assignments[idx];
         if (as && typeof this.onAssignmentClick === 'function') {
           this.onAssignmentClick(as);
+        }
+      });
+    });
+
+    this.headerCellsContainer.querySelectorAll('.btn-share-col').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const idx = Number(btn.getAttribute('data-col-idx'));
+        const as = this.assignments[idx];
+        if (as && typeof this.onShareColumn === 'function') {
+          this.onShareColumn(as);
         }
       });
     });
