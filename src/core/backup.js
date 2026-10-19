@@ -30,8 +30,17 @@ export const DEVICE_BOUND_METADATA = new Set([
   // the backup it unlocks
   'teacher_key_local', 'vault_backup_key', 'vault_previous_backup_keys', 'vault_pending_recovery_code',
   // Backup location (may hold a folder handle) and cloud sign-in tokens
-  'backup_target', 'cloud_auth_gdrive', 'cloud_auth_onedrive'
+  'backup_target', 'cloud_auth_gdrive', 'cloud_auth_onedrive',
+  // Replication: conflicts this device detected (cursors use the repl_ prefix below)
+  'sync_conflicts'
 ]);
+
+/** Prefixes of device-bound keys that exist per sync channel (repl_cursor:<id>, …) */
+export const DEVICE_BOUND_PREFIXES = ['repl_'];
+
+export function isDeviceBoundKey(key) {
+  return DEVICE_BOUND_METADATA.has(key) || DEVICE_BOUND_PREFIXES.some(p => String(key).startsWith(p));
+}
 
 const MAX_RECORDS_PER_TABLE = 200000;
 const MAX_BLOB_BYTES = 5 * 1024 * 1024;
@@ -108,7 +117,7 @@ export function parseBackup(text) {
 }
 
 export function stripDeviceMetadata(rows = []) {
-  return rows.filter(r => r && !DEVICE_BOUND_METADATA.has(r.key));
+  return rows.filter(r => r && !isDeviceBoundKey(r.key));
 }
 
 export async function blobToBase64(blob) {

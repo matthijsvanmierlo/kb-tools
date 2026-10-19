@@ -27,31 +27,47 @@ export function renderQrSvg(text) {
  * @param {{ title?: string, studentName?: string }} [info]
  */
 export async function showSubmissionQr(submissionText, info = {}) {
+  return showQrSequence(submissionText, {
+    label: 'Show this to your teacher',
+    intro: `${info.studentName || ''}${info.title ? ` · ${info.title}` : ''}`,
+    ariaLabel: 'QR code for your encrypted submission',
+    hint: 'Hold your screen steady in front of your teacher\'s camera{multi}. Turn your screen brightness up. Your answers are encrypted; only your teacher can read them.',
+    tooLarge: 'This submission is too large for QR codes. Please download the file instead.'
+  });
+}
+
+/**
+ * Show any text as a looping sequence of QR codes (KBQ1 frames) in a dialog.
+ * @param {string} text
+ * @param {{ label: string, intro?: string, ariaLabel?: string, hint?: string, tooLarge?: string,
+ *           footerHtml?: string, onReady?: (dialog: HTMLElement) => void }} opts
+ *   hint may contain "{multi}", replaced when there is more than one frame
+ */
+export async function showQrSequence(text, { label, intro = '', ariaLabel = 'QR code', hint = '', tooLarge = 'This is too large for QR codes.', footerHtml = '', onReady = null }) {
   let frames;
   try {
-    frames = await encodeQrFrames(submissionText);
+    frames = await encodeQrFrames(text);
   } catch (err) {
-    toast.warning(err.message === 'PAYLOAD_TOO_LARGE_FOR_QR'
-      ? 'This submission is too large for QR codes. Please download the file instead.'
-      : 'Could not create QR codes. Please download the file instead.');
-    return;
+    toast.warning(err.message === 'PAYLOAD_TOO_LARGE_FOR_QR' ? tooLarge : 'Could not create QR codes.');
+    return null;
   }
   const svgs = frames.map(renderQrSvg);
 
   const dialog = document.createElement('sl-dialog');
-  dialog.label = 'Show this to your teacher';
+  dialog.label = label;
   dialog.style.setProperty('--width', 'min(560px, 96vw)');
   dialog.innerHTML = `
     <div class="space-y-3 text-center">
-      <p class="text-sm text-slate-600">${esc(info.studentName || '')}${info.title ? ` · ${esc(info.title)}` : ''}</p>
-      <div class="kb-qr-frame" role="img" aria-label="QR code for your encrypted submission"></div>
+      ${intro ? `<p class="text-sm text-slate-600">${esc(intro)}</p>` : ''}
+      <div class="kb-qr-frame" role="img" aria-label="${esc(ariaLabel)}"></div>
       <p class="text-sm font-medium text-slate-700" aria-live="polite"><span data-part></span></p>
       <div class="flex justify-center gap-2 ${frames.length > 1 ? '' : 'hidden'}">
         <sl-button size="small" data-step="-1" aria-label="Previous code"><sl-icon name="chevron-left"></sl-icon></sl-button>
         <sl-button size="small" data-toggle>Pause</sl-button>
         <sl-button size="small" data-step="1" aria-label="Next code"><sl-icon name="chevron-right"></sl-icon></sl-button>
       </div>
-      <p class="text-xs text-slate-500">Hold your screen steady in front of your teacher's camera${frames.length > 1 ? ' until every part is captured' : ''}. Turn your screen brightness up. Your answers are encrypted; only your teacher can read them.</p>
+      ${hint ? `<p class="text-xs text-slate-500">${esc(hint.replace('{multi}', frames.length > 1 ? ' until every part is captured' : ''))}</p>` : ''}
+      ${footerHtml}
     </div>
     <sl-button slot="footer" variant="primary" data-close>Done</sl-button>`;
 
@@ -86,7 +102,9 @@ export async function showSubmissionQr(submissionText, info = {}) {
   show();
   if (svgs.length > 1) play();
   document.body.appendChild(dialog);
+  onReady?.(dialog);
   dialog.show();
+  return dialog;
 }
 
 let jsQrPromise = null;
@@ -132,16 +150,26 @@ async function createDetector() {
 
 /**
  * Open the camera scanner. Every completed submission is passed to onSubmission(text).
- * @param {{ onSubmission: (text: string) => Promise<void>|void }} opts
+ * @param {{ onSubmission: (text: string) => Promise<void>|void, label?: string, once?: boolean,
+ *           readyText?: string, noCamera?: string, onClose?: () => void }} opts
+ *   once: close after the first complete code (device linking) instead of scanning a class
  */
-export async function openQrScanner({ onSubmission }) {
+export async function openQrScanner({
+  onSubmission,
+  label = 'Scan student QR codes',
+  once = false,
+  readyText = 'Point the camera at a student\'s QR code.',
+  noCamera = 'This browser cannot use the camera. Ask students to download their .kbsub file instead.',
+  onClose = null
+}) {
   if (!navigator.mediaDevices?.getUserMedia) {
-    toast.warning('This browser cannot use the camera. Ask students to download their .kbsub file instead.');
+    toast.warning(noCamera);
+    onClose?.();
     return;
   }
 
   const dialog = document.createElement('sl-dialog');
-  dialog.label = 'Scan student QR codes';
+  dialog.label = label;
   dialog.style.setProperty('--width', 'min(640px, 96vw)');
   dialog.innerHTML = `
     <div class="space-y-3">
@@ -177,6 +205,7 @@ export async function openQrScanner({ onSubmission }) {
     if (e.target !== dialog) return;
     stop();
     dialog.remove();
+    onClose?.();
   });
   dialog.show();
 
@@ -199,7 +228,11 @@ export async function openQrScanner({ onSubmission }) {
     stop();
     return;
   }
-  statusEl.textContent = 'Point the camera at a student\'s QR code.';
+  statusEl.textContent = readyText;
+  if (once) {
+    dialog.querySelector('[data-count]')?.classList.add('invisible');
+    dialog.querySelector('.text-xs.text-slate-500')?.classList.add('hidden');
+  }
 
   const renderPending = () => {
     pendingEl.innerHTML = assembler.pending()
@@ -216,6 +249,11 @@ export async function openQrScanner({ onSubmission }) {
           countEl.textContent = `${collected} submission${collected === 1 ? '' : 's'} collected`;
           statusEl.textContent = 'Got it! Scan the next student.';
           navigator.vibrate?.(80);
+          if (once) {
+            dialog.hide();
+            await onSubmission(r.text);
+            return;
+          }
           await onSubmission(r.text);
         } else if (r.status === 'progress') {
           statusEl.textContent = `Captured code ${r.received} of ${r.total} — keep holding steady.`;

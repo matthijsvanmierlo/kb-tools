@@ -79,3 +79,19 @@ The "Connect to a school server" dialog tells teachers when a relay is blocked b
 | POST | `/drops/:dropId/submissions` | None | Raw `KBSUB1.` envelope (text/plain) | Submit student work (rate-limited, max 256KB) |
 | GET | `/drops/:dropId/submissions?since=<iso>` | Teacher | — | List submissions for a drop box |
 | DELETE | `/drops/:dropId` | Teacher | — | Delete drop box and submissions |
+| PUT | `/drops/:dropId/drafts/:draftId` | None | Raw `KBDRAFT1.` ciphertext (text/plain) | Save a student's encrypted draft (64-hex id derived from their access code; max 256KB) |
+| GET | `/drops/:dropId/drafts/:draftId` | None | — | Load that draft |
+| POST | `/sync` | Teacher | — | Create a sync workspace; returns `{ workspace_id, workspace_key }` |
+| POST | `/sync/:ws/chunks` | Teacher + workspace key | `{ device_id, start, end, body }` | Store an encrypted change chunk (idempotent, max 4MB) |
+| GET | `/sync/:ws/chunks?after=<seq>` | Teacher + workspace key | — | List chunks after a server sequence (`{ items, more }`) |
+| DELETE | `/sync/:ws/chunks?device_id=&through=` | Teacher + workspace key | — | Prune a device's chunks covered by its snapshot |
+| PUT | `/sync/:ws/snapshots/:deviceId` | Teacher + workspace key | `{ created_at, body }` | Replace a device's encrypted snapshot (max 32MB) |
+| GET | `/sync/:ws/snapshots[/:deviceId]` | Teacher + workspace key | — | List snapshots / fetch one |
+
+### Sync workspaces
+
+Multi-device sync and co-teaching (`src/core/replication/`) use workspaces. The workspace key is
+sent as the `X-KB-Workspace-Key` header and stored only as a SHA-256 hash. Any teacher with a token
+on this relay **and** the workspace key can read and write it: that is how a co-teacher joins a
+shared class. Chunk and snapshot bodies are AES-256-GCM ciphertext under a key the relay never
+sees; the relay learns only sizes, timestamps and opaque device ids.

@@ -1,6 +1,6 @@
 import { storage } from './storage.js';
 import { toast } from '../utils/toast.js';
-import { DEVICE_BOUND_METADATA, parseBackup } from './backup.js';
+import { isDeviceBoundKey, parseBackup } from './backup.js';
 import { KeyVault } from './keyvault.js';
 import {
   BACKUP_TARGET_METADATA, createAdapter, writeRotatedBackup, listBackups, FsaFileAdapter
@@ -33,7 +33,7 @@ export class SyncManager {
     if (change.tableName === 'outbox') return true;
     if (change.tableName !== 'app_metadata') return false;
     const key = change.key ?? change.obj?.key;
-    return key === 'last_manual_export_timestamp' || DEVICE_BOUND_METADATA.has(key);
+    return key === 'last_manual_export_timestamp' || isDeviceBoundKey(key);
   }
 
   /** A real FileSystemFileHandle (a handle restored from an old JSON backup is a plain `{}`) */

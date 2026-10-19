@@ -446,7 +446,9 @@ export async function renderGradebookView(params, router, container) {
         },
         onDelete: async (deletedId) => {
           await storage.table('gradebook_assignments').delete(deletedId);
-          await storage.table('gradebook_grades').where('assignment_id').equals(deletedId).delete();
+          // bulkDelete (not Collection.delete) so the deletions reach the sync outbox
+          const gradeKeys = await storage.table('gradebook_grades').where('assignment_id').equals(deletedId).primaryKeys();
+          await storage.table('gradebook_grades').bulkDelete(gradeKeys);
           toast.info('Assignment deleted.');
           renderGradebookView(params, router, container);
         }

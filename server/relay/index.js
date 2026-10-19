@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { randomBytes, createHash } from 'node:crypto';
+import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { createDatabase } from './db.js';
 import { extractBearerToken, hashToken } from './auth.js';
 
@@ -9,6 +9,21 @@ const MAX_PAYLOAD_SIZE = 512 * 1024; // 512 KB
 const MAX_SUBMISSION_SIZE = 256 * 1024; // 256 KB
 const RATE_LIMIT_MAX = 30; // 30 requests per window
 const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
+// A whole class behind one school IP autosaves drafts, so this limit is per IP but generous
+const DRAFT_RATE_LIMIT_MAX = 600;
+const MAX_DRAFT_SIZE = 256 * 1024; // 256 KB
+const MAX_SYNC_CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
+const MAX_SYNC_SNAPSHOT_SIZE = 32 * 1024 * 1024; // 32 MB
+const DEVICE_ID_RE = /^[0-9A-Za-z-]{8,64}$/;
+const DRAFT_ID_RE = /^[0-9a-f]{64}$/;
+
+const sha256 = (text) => createHash('sha256').update(String(text)).digest('hex');
+
+function sameHash(a, b) {
+  const x = Buffer.from(String(a), 'hex');
+  const y = Buffer.from(String(b), 'hex');
+  return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
+}
 
 /**
  * In-memory IP rate limiter for public submission endpoints.
@@ -78,6 +93,7 @@ export function createRelayServer(opts = {}) {
 
   const db = createDatabase(dbPath);
   const limiter = new RateLimiter();
+  const draftLimiter = new RateLimiter(DRAFT_RATE_LIMIT_MAX);
 
   // Hourly pruning
   const pruneInterval = setInterval(() => {
@@ -95,8 +111,8 @@ export function createRelayServer(opts = {}) {
 
     if (isOriginAllowed) {
       res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-KB-Workspace-Key');
     }
 
     if (req.method === 'OPTIONS') {
@@ -126,7 +142,7 @@ export function createRelayServer(opts = {}) {
 
       // 1. GET /health
       if (req.method === 'GET' && (pathname === '/health' || pathname === '/')) {
-        sendJson(200, { ok: true, version: VERSION, features: ['payloads', 'drops'] });
+        sendJson(200, { ok: true, version: VERSION, features: ['payloads', 'drops', 'drafts', 'sync'] });
         return;
       }
 
@@ -192,6 +208,147 @@ export function createRelayServer(opts = {}) {
           kind: row.kind,
           ciphertext: row.ciphertext
         });
+        return;
+      }
+
+      const readJson = async (max) => {
+        try {
+          return JSON.parse(await readBody(req, max));
+        } catch (err) {
+          if (err.code === 413) throw err;
+          return null;
+        }
+      };
+
+      // Sync workspaces (multi-device / co-teacher replication). Bodies are ciphertext.
+      if (req.method === 'POST' && pathname === '/sync') {
+        const teacher = authenticateTeacher();
+        if (!teacher) {
+          sendError(401, 'Unauthorized: valid teacher token required');
+          return;
+        }
+        const workspaceId = randomBytes(12).toString('hex');
+        const workspaceKey = randomBytes(32).toString('hex');
+        db.workspaces.create({ id: workspaceId, keyHash: sha256(workspaceKey), createdBy: teacher.id });
+        sendJson(201, { workspace_id: workspaceId, workspace_key: workspaceKey });
+        return;
+      }
+
+      const syncMatch = pathname.match(/^\/sync\/([0-9a-f]{24})\/(chunks|snapshots)(?:\/([0-9A-Za-z-]{8,64}))?$/);
+      if (syncMatch) {
+        // Any teacher on this relay who also holds the workspace key (own devices, co-teachers)
+        const teacher = authenticateTeacher();
+        if (!teacher) {
+          sendError(401, 'Unauthorized: valid teacher token required');
+          return;
+        }
+        const [, workspaceId, resource, deviceParam] = syncMatch;
+        const ws = db.workspaces.get(workspaceId);
+        if (!ws || !sameHash(ws.key_hash, sha256(req.headers['x-kb-workspace-key'] || ''))) {
+          sendError(403, 'Forbidden: unknown workspace or wrong workspace key');
+          return;
+        }
+
+        if (resource === 'chunks' && !deviceParam) {
+          if (req.method === 'POST') {
+            const body = await readJson(MAX_SYNC_CHUNK_SIZE);
+            const start = Number(body?.start);
+            const end = Number(body?.end);
+            if (!body || !DEVICE_ID_RE.test(body.device_id || '') || !Number.isInteger(start) || !Number.isInteger(end)
+              || start < 1 || end < start || typeof body.body !== 'string') {
+              sendError(400, 'Invalid sync chunk');
+              return;
+            }
+            const { created } = db.sync.putChunk({ workspaceId, deviceId: body.device_id, start, end, body: body.body });
+            sendJson(created ? 201 : 200, { ok: true });
+            return;
+          }
+          if (req.method === 'GET') {
+            const after = Math.max(0, parseInt(parsedUrl.searchParams.get('after') || '0', 10) || 0);
+            sendJson(200, db.sync.listChunks(workspaceId, { after }));
+            return;
+          }
+          if (req.method === 'DELETE') {
+            const deviceId = parsedUrl.searchParams.get('device_id') || '';
+            const through = parseInt(parsedUrl.searchParams.get('through') || '', 10);
+            if (!DEVICE_ID_RE.test(deviceId) || !Number.isInteger(through)) {
+              sendError(400, 'device_id and through are required');
+              return;
+            }
+            sendJson(200, { deleted: db.sync.deleteChunks(workspaceId, deviceId, through) });
+            return;
+          }
+        }
+
+        if (resource === 'snapshots') {
+          if (!deviceParam && req.method === 'GET') {
+            sendJson(200, { items: db.sync.listSnapshots(workspaceId) });
+            return;
+          }
+          if (deviceParam && req.method === 'PUT') {
+            const body = await readJson(MAX_SYNC_SNAPSHOT_SIZE);
+            if (!body || typeof body.body !== 'string' || typeof body.created_at !== 'string') {
+              sendError(400, 'Invalid snapshot');
+              return;
+            }
+            db.sync.putSnapshot({ workspaceId, deviceId: deviceParam, createdAt: body.created_at, body: body.body });
+            sendJson(200, { ok: true });
+            return;
+          }
+          if (deviceParam && req.method === 'GET') {
+            const row = db.sync.getSnapshot(workspaceId, deviceParam);
+            if (!row) {
+              sendError(404, 'Snapshot not found');
+              return;
+            }
+            sendJson(200, row);
+            return;
+          }
+        }
+
+        sendError(405, 'Method not allowed');
+        return;
+      }
+
+      // Student draft roaming: an access-code-encrypted draft, addressed by a hash of the
+      // student's identity and code, so the relay can neither read nor link it to a student
+      const draftMatch = pathname.match(/^\/drops\/([A-Za-z0-9_\-]+)\/drafts\/([^/]+)$/);
+      if (draftMatch && (req.method === 'PUT' || req.method === 'GET')) {
+        const [, dropId, draftId] = draftMatch;
+        if (!DRAFT_ID_RE.test(draftId)) {
+          sendError(400, 'Invalid draft id');
+          return;
+        }
+        const clientIp = req.socket.remoteAddress || '127.0.0.1';
+        if (!draftLimiter.isAllowed(clientIp)) {
+          sendError(429, 'Rate limit exceeded. Please wait a minute.');
+          return;
+        }
+        const drop = db.drops.get(dropId);
+        if (!drop) {
+          sendError(404, 'Drop box not found');
+          return;
+        }
+        if (drop.expired) {
+          sendError(410, 'Drop box expired');
+          return;
+        }
+        if (req.method === 'PUT') {
+          const text = (await readBody(req, MAX_DRAFT_SIZE)).trim();
+          if (!text.startsWith('KBDRAFT1.')) {
+            sendError(400, 'Invalid draft format');
+            return;
+          }
+          const { updatedAt } = db.drafts.put({ dropId, draftId, ciphertext: text });
+          sendJson(200, { updated_at: updatedAt });
+          return;
+        }
+        const row = db.drafts.get(dropId, draftId);
+        if (!row) {
+          sendError(404, 'No saved draft');
+          return;
+        }
+        sendJson(200, { ciphertext: row.ciphertext, updated_at: row.updated_at });
         return;
       }
 

@@ -5,13 +5,17 @@
  * teacher's recovery code:
  *
  *  1. Recovery code — 128 random bits shown to the teacher once as a printable "recovery kit"
- *     (e.g. "7K3M-…"). HKDF turns it into the backup key. The code itself is only kept on this
- *     device until the teacher confirms they saved the kit.
+ *     (e.g. "7K3M-…"). HKDF turns it into the backup key. The UI stops showing the code once the
+ *     teacher confirms they saved the kit; the raw secret stays in this device's backup-key entry
+ *     (device-bound) so it can be handed to a linked device, which then shares the same code.
  *  2. Backup key — a non-extractable AES-256-GCM CryptoKey stored on this device (device-bound),
  *     so background auto-sync can encrypt without asking for anything.
  *  3. Teacher key — the ECDH private key used to open student submissions. Locally it is a
  *     non-extractable CryptoKey; the only exported form is encrypted under the backup key
  *     (`teacher_key_wrapped`), so a backup or a copied sync file never contains it in the clear.
+ *
+ *  4. Vault secrets — small values (class keys, sync workspace credentials) stored encrypted
+ *     under the backup key in `vault_secrets`, so they travel inside backups but never in the clear.
  *
  * Backups (format v3) are deflate-raw → AES-256-GCM under the backup key. Restoring on a new
  * device needs the recovery code; restoring on the device that wrote the file needs nothing.
@@ -26,6 +30,8 @@ const dec = new TextDecoder();
 export const LEGACY_TEACHER_KEY = 'teacher_submission_keypair';
 export const TEACHER_KEY_WRAPPED = 'teacher_key_wrapped';
 export const RECOVERY_KIT_SAVED_AT = 'recovery_kit_saved_at';
+export const VAULT_SECRETS = 'vault_secrets';
+export const LINK_BUNDLE_VERSION = 1;
 
 /** Device-bound vault entries: never exported, kept as-is on restore (see backup.js) */
 export const VAULT_DEVICE_METADATA = Object.freeze({
@@ -119,9 +125,13 @@ async function aesDecrypt(key, { iv, ct }, aad) {
 const importPrivate = (jwk) => subtle().importKey('jwk', jwk, { name: 'ECDH', namedCurve: 'P-256' }, false, ['deriveBits']);
 
 const wrapAad = (keyId, fingerprint) => `kb-teacher-key|${keyId}|${fingerprint}`;
+const secretAad = (keyId, name) => `kb-secret|${keyId}|${name}`;
 const backupAad = (keyId, compression) => `kb-backup-v3|${keyId}|${compression}`;
 
 export class KeyVault {
+  /** Imported private keys by public point, so decryptionKeys() doesn't re-import every time */
+  static _cache = new Map();
+
   // ---------------------------------------------------------------------------
   // Backup key & recovery code
   // ---------------------------------------------------------------------------
@@ -135,11 +145,15 @@ export class KeyVault {
 
   static async _installNewRecoveryCode(store) {
     const raw = crypto.getRandomValues(new Uint8Array(16));
-    const entry = { id: await keyIdFor(raw), key: await deriveBackupKey(raw), created_at: new Date().toISOString() };
+    const entry = await this._entryFor(raw);
     await store.setMetadata(M.backupKey, entry);
     await store.setMetadata(M.pendingRecoveryCode, encodeRecoveryCode(raw));
     await store.setMetadata(RECOVERY_KIT_SAVED_AT, null);
     return entry;
+  }
+
+  static async _entryFor(raw) {
+    return { id: await keyIdFor(raw), key: await deriveBackupKey(raw), secret: raw, created_at: new Date().toISOString() };
   }
 
   /** The recovery code, while the teacher has not yet confirmed saving their kit */
@@ -161,10 +175,12 @@ export class KeyVault {
   static async rotateRecoveryCode(store) {
     const old = await this.ensure(store);
     const teacher = await this._readWrappedJwk(store);
+    const secrets = await this._readAllSecrets(store);
     const previous = (await store.getMetadata(M.previousBackupKeys)) || [];
     await store.setMetadata(M.previousBackupKeys, [old, ...previous.filter(p => p.id !== old.id)].slice(0, 10));
     const fresh = await this._installNewRecoveryCode(store);
     if (teacher) await this._storeWrapped(store, fresh, teacher.jwk, teacher.meta);
+    await this._writeAllSecrets(store, fresh, secrets);
     return store.getMetadata(M.pendingRecoveryCode);
   }
 
@@ -300,7 +316,7 @@ export class KeyVault {
       if (await keyIdFor(raw) !== outer.key_id) {
         throw new VaultError('WRONG_CODE', 'That recovery code does not belong to this backup. Check for typos, or try an older kit.');
       }
-      vault = { id: outer.key_id, key: await deriveBackupKey(raw), created_at: new Date().toISOString() };
+      vault = await this._entryFor(raw);
       usedRecoveryCode = true;
     }
 
@@ -329,6 +345,162 @@ export class KeyVault {
     if (usedRecoveryCode) await store.setMetadata(RECOVERY_KIT_SAVED_AT, new Date().toISOString());
     await store.setMetadata(M.backupKey, vault);
     await this.forgetLocalTeacherKey(store);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Vault secrets
+  // ---------------------------------------------------------------------------
+
+  static async setSecret(store, name, value) {
+    const vault = await this.ensure(store);
+    const all = (await store.getMetadata(VAULT_SECRETS)) || {};
+    const sealed = await aesEncrypt(vault.key, enc.encode(JSON.stringify(value)), secretAad(vault.id, name));
+    await store.setMetadata(VAULT_SECRETS, { ...all, [name]: { backup_key_id: vault.id, ...sealed } });
+    this._cache.clear();
+  }
+
+  /** The secret's value, or null if missing or encrypted under a key this device lacks */
+  static async getSecret(store, name) {
+    const entry = ((await store.getMetadata(VAULT_SECRETS)) || {})[name];
+    if (!entry?.ct) return null;
+    const vault = await this._keyById(store, entry.backup_key_id);
+    if (!vault) return null;
+    return JSON.parse(dec.decode(await aesDecrypt(vault.key, entry, secretAad(vault.id, name))));
+  }
+
+  static async deleteSecret(store, name) {
+    const all = { ...((await store.getMetadata(VAULT_SECRETS)) || {}) };
+    delete all[name];
+    await store.setMetadata(VAULT_SECRETS, all);
+    this._cache.clear();
+  }
+
+  static async listSecretNames(store, prefix = '') {
+    return Object.keys((await store.getMetadata(VAULT_SECRETS)) || {}).filter(n => n.startsWith(prefix));
+  }
+
+  static async _readAllSecrets(store) {
+    const out = {};
+    for (const name of await this.listSecretNames(store)) {
+      const value = await this.getSecret(store, name);
+      if (value !== null) out[name] = value;
+    }
+    return out;
+  }
+
+  static async _writeAllSecrets(store, vault, values) {
+    const sealed = {};
+    for (const [name, value] of Object.entries(values)) {
+      sealed[name] = { backup_key_id: vault.id, ...(await aesEncrypt(vault.key, enc.encode(JSON.stringify(value)), secretAad(vault.id, name))) };
+    }
+    await store.setMetadata(VAULT_SECRETS, sealed);
+    this._cache.clear();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Class keys (co-teaching): student work for a shared class is encrypted to the class key,
+  // which every co-teacher holds, instead of to one teacher's personal key.
+  // ---------------------------------------------------------------------------
+
+  static async getClassKey(store, courseId) {
+    const value = courseId ? await this.getSecret(store, `class_key:${courseId}`) : null;
+    if (!value) return null;
+    return { publicJwk: value.publicJwk, fingerprint: value.fingerprint, privateKey: await this._importCached(value.privateJwk) };
+  }
+
+  /** Create (or return) the class key for a course; resolves `{ publicJwk, fingerprint, privateKey }` */
+  static async ensureClassKey(store, courseId) {
+    const existing = await this.getClassKey(store, courseId);
+    if (existing) return existing;
+    const pair = await SubmissionCrypto.generateKeyPair();
+    const value = { publicJwk: pair.publicJwk, privateJwk: pair.privateJwk, fingerprint: pair.fingerprint, created_at: pair.created_at };
+    await this.setSecret(store, `class_key:${courseId}`, value);
+    return this.getClassKey(store, courseId);
+  }
+
+  /** Raw class key value, for sending to a co-teacher inside an encrypted invite */
+  static async exportClassKey(store, courseId) {
+    return this.getSecret(store, `class_key:${courseId}`);
+  }
+
+  static async importClassKey(store, courseId, value) {
+    await this.setSecret(store, `class_key:${courseId}`, value);
+  }
+
+  /**
+   * Every private key that may open a submission on this device: the teacher's own key, keys of
+   * shared classes (current and replaced), and personal keys retired by linking to another device.
+   */
+  static async decryptionKeys(store) {
+    const keys = [(await this.getTeacherKeys(store)).privateKey];
+    for (const name of await this.listSecretNames(store)) {
+      if (!['class_key:', 'retired_class_key:', 'retired_teacher_key:'].some(p => name.startsWith(p))) continue;
+      const value = await this.getSecret(store, name);
+      if (value?.privateJwk) keys.push(await this._importCached(value.privateJwk));
+    }
+    return keys;
+  }
+
+  static async _importCached(privateJwk) {
+    const id = `${privateJwk.x}|${privateJwk.y}`;
+    if (!this._cache.has(id)) this._cache.set(id, await importPrivate(privateJwk));
+    return this._cache.get(id);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Device linking
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Everything a teacher's new device needs to act as this one: the recovery secret (so both
+   * devices write and open the same backups), the submission key and all vault secrets. Only ever
+   * sent encrypted to the new device's one-time key (see sync/link.js).
+   */
+  static async exportLinkBundle(store) {
+    let vault = await this.ensure(store);
+    if (!vault.secret) {
+      // Vaults created before linking existed don't keep the raw secret: start a new recovery code
+      await this.rotateRecoveryCode(store);
+      vault = await this.ensure(store);
+    }
+    await this.getTeacherKeys(store);
+    const teacher = await this._readWrappedJwk(store);
+    return {
+      v: LINK_BUNDLE_VERSION,
+      recovery_secret: bytesToB64(vault.secret),
+      recovery_kit_saved_at: (await store.getMetadata(RECOVERY_KIT_SAVED_AT)) || null,
+      teacher: { jwk: teacher.jwk, meta: teacher.meta },
+      secrets: await this._readAllSecrets(store)
+    };
+  }
+
+  /** Make this device share the linked device's vault. Keys it had before stay usable. */
+  static async importLinkBundle(store, bundle) {
+    if (bundle?.v !== LINK_BUNDLE_VERSION || !bundle.recovery_secret || !bundle.teacher?.jwk) {
+      throw new VaultError('BAD_BUNDLE', 'This link code is not from a compatible version of KennisBoost.');
+    }
+    // A plaintext key from an older version is moved into the vault first so it can be retired below
+    if (await store.getMetadata(LEGACY_TEACHER_KEY)) await this.getTeacherKeys(store);
+    const ownSecrets = (await store.getMetadata(M.backupKey)) ? await this._readAllSecrets(store) : {};
+    let ownTeacher = null;
+    try {
+      ownTeacher = await this._readWrappedJwk(store);
+    } catch (_) {}
+
+    const vault = await this._entryFor(b64ToBytes(bundle.recovery_secret));
+    await this.adoptBackupKey(store, vault, { usedRecoveryCode: false });
+    await store.setMetadata(M.pendingRecoveryCode, bundle.recovery_kit_saved_at ? null : encodeRecoveryCode(b64ToBytes(bundle.recovery_secret)));
+    await store.setMetadata(RECOVERY_KIT_SAVED_AT, bundle.recovery_kit_saved_at || null);
+    await store.setMetadata(LEGACY_TEACHER_KEY, null);
+    await this._storeWrapped(store, vault, bundle.teacher.jwk, bundle.teacher.meta);
+
+    const merged = { ...ownSecrets, ...bundle.secrets };
+    if (ownTeacher && ownTeacher.meta.fingerprint !== bundle.teacher.meta.fingerprint) {
+      merged[`retired_teacher_key:${ownTeacher.meta.fingerprint}`] = { ...ownTeacher.meta, privateJwk: ownTeacher.jwk };
+    }
+    await this._writeAllSecrets(store, vault, merged);
+    await this.forgetLocalTeacherKey(store);
+    return this.getTeacherKeys(store);
   }
 
   /** Called after any restore: the local key may belong to the replaced data */

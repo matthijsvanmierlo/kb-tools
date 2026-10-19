@@ -37,6 +37,7 @@ import { LinkBuilder } from '../../core/links.js';
 import { toCSV, downloadCSV } from '../../core/csv.js';
 import { splitName, joinName } from '../../core/names.js';
 import { getTransport } from '../../core/transport.js';
+import { replication } from '../../core/replication/manager.js';
 
 /**
  * Bump the publish version and build the student payload.
@@ -49,7 +50,8 @@ import { getTransport } from '../../core/transport.js';
  */
 export async function publishAssignment(assignment, roster, { handinEmail = '', transport = null } = {}) {
   const activeTransport = transport || await getTransport();
-  const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
+  // A class shared with co-teachers gets work encrypted to the class key they all hold
+  const keys = await replication.publishKeysFor(assignment.class_id);
   const next = {
     ...assignment,
     publish: {

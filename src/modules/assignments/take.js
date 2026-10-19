@@ -8,6 +8,7 @@ import { buildStudentPayload, checkAnswerLocally, gradeSubmission, INSTANT_CHECK
 import { createSubmission, checkAccessCode } from './pipeline.js';
 import { QUESTION_TYPE_META } from './question-types.js';
 import { RelayTransport } from '../../core/transport.js';
+import { DraftRoamer } from './draft-roaming.js';
 
 /**
  * Student Take Mode (KB-ASSIGN-005)
@@ -81,10 +82,19 @@ export async function renderTakeView(params, router, container) {
   };
   const draftKey = () => `kb_asg_draft_${payload.assignment_id}_${payload.publish_version}_${String(state.student.id).toUpperCase()}`;
   const receiptKey = () => `kb_asg_receipt_${payload.assignment_id}_${payload.publish_version}_${String(state.student.id).toUpperCase()}`;
+  // Also saved (encrypted with the access code) to the class's drop box, to continue on another device
+  let roamer = null;
   const saveDraft = () => {
     if (preview) return;
-    safeStorage.set(draftKey(), { answers: state.answers, checked: state.checked, startedAt: state.startedAt, index: state.index, name: state.student.name });
+    const draft = { answers: state.answers, checked: state.checked, startedAt: state.startedAt, index: state.index, name: state.student.name, saved_at: new Date().toISOString() };
+    safeStorage.set(draftKey(), draft);
+    roamer?.schedule(draft);
   };
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') roamer?.flush().catch(() => {});
+    });
+  }
 
   const isAnswered = (q) => {
     const v = state.answers[q.id];
@@ -139,7 +149,9 @@ export async function renderTakeView(params, router, container) {
               <sl-icon slot="prefix" name="play-fill"></sl-icon> Start
             </sl-button>
           </form>
-          <p class="text-xs text-slate-400 text-center">Your answers stay in this browser until you hand in your encrypted submission. Only your teacher can open it (key <span class="font-mono">${esc(payload.teacher_key?.fingerprint)}</span>).</p>
+          <p class="text-xs text-slate-400 text-center">${payload.relay?.drop_id
+            ? 'Your answers are saved in this browser and, if you enter your access code, encrypted on your school\'s server so you can continue on another device.'
+            : 'Your answers stay in this browser until you hand in your encrypted submission.'} Only your teacher can open your submission (key <span class="font-mono">${esc(payload.teacher_key?.fingerprint)}</span>).</p>
         </div>
       </div>`;
 
@@ -161,14 +173,33 @@ export async function renderTakeView(params, router, container) {
     });
 
     async function begin() {
-      // Restore a draft for this student if one exists
-      const draft = preview ? null : safeStorage.get(draftKey());
+      // Restore a draft for this student if one exists, here or (newer) from another device
+      let draft = preview ? null : safeStorage.get(draftKey());
+      let fromElsewhere = false;
+      if (!preview && DraftRoamer.canRoam(payload, state.student.code)) {
+        roamer = new DraftRoamer({
+          relay: payload.relay,
+          assignmentId: payload.assignment_id,
+          publishVersion: payload.publish_version,
+          studentId: state.student.id,
+          accessCode: state.student.code
+        });
+        try {
+          const remote = await roamer.load();
+          if (remote && (!draft || (remote.saved_at || '') > (draft.saved_at || ''))) {
+            draft = remote;
+            fromElsewhere = true;
+          }
+        } catch (_) {
+          // Offline or no server: the local draft is enough
+        }
+      }
       if (draft) {
         state.answers = draft.answers || {};
         state.checked = draft.checked || {};
         state.startedAt = draft.startedAt || new Date().toISOString();
         state.index = Math.min(draft.index || 0, questions.length - 1);
-        toast.info('Restored your saved answers.');
+        toast.info(fromElsewhere ? 'Restored the answers you saved on another device.' : 'Restored your saved answers.');
       } else {
         state.startedAt = new Date().toISOString();
       }
@@ -548,6 +579,7 @@ export async function renderTakeView(params, router, container) {
     if (!preview) {
       safeStorage.set(receiptKey(), state.result);
       safeStorage.remove(draftKey());
+      roamer?.markSubmitted().catch(() => {});
     }
     state.screen = 'results';
     render();

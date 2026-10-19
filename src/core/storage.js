@@ -1,7 +1,7 @@
 import Dexie from 'dexie';
 import { splitName } from './names.js';
 import {
-  BACKUP_TABLES, BACKUP_VERSION, DEVICE_BOUND_METADATA, parseBackup, stripDeviceMetadata, blobToBase64, base64ToBlob
+  BACKUP_TABLES, BACKUP_VERSION, isDeviceBoundKey, parseBackup, stripDeviceMetadata, blobToBase64, base64ToBlob
 } from './backup.js';
 
 const DATA_TABLES = new Set([
@@ -18,6 +18,27 @@ const DATA_TABLES = new Set([
 ]);
 
 const WRITE_OPS = new Set(['put', 'bulkPut', 'delete', 'bulkDelete', 'clear']);
+
+/**
+ * Which class a record belongs to, so class-scoped sync (co-teachers) can route changes. Stored
+ * on every outbox row; deletes capture it from the record before it is removed.
+ */
+export function scopeOf(tableName, record) {
+  if (!record) return null;
+  switch (tableName) {
+    case 'gradebook_courses': return { course_id: record.id };
+    case 'gradebook_students':
+    case 'gradebook_assignments':
+    case 'gradebook_grades':
+    case 'gradebook_rubrics': return { course_id: record.course_id || null };
+    case 'assignments':
+    case 'flashcards':
+    case 'timelines':
+    case 'video_assessments': return { course_id: record.class_id || null };
+    case 'assignment_submissions': return { assignment_id: record.assignment_id || null };
+    default: return null;
+  }
+}
 
 export function isQuotaError(err) {
   const names = [err?.name, err?.inner?.name];
@@ -67,6 +88,7 @@ function wrapDexieTable(rawTable, tableName, storageManager) {
               key,
               op: 'put',
               record,
+              scope: scopeOf(tableName, record),
               created_at: now,
               pushed_at: null,
               device_id: storageManager.deviceId || null
@@ -101,6 +123,7 @@ function wrapDexieTable(rawTable, tableName, storageManager) {
                 key,
                 op: 'put',
                 record: r,
+                scope: scopeOf(tableName, r),
                 created_at: now,
                 pushed_at: null,
                 device_id: storageManager.deviceId || null
@@ -118,11 +141,13 @@ function wrapDexieTable(rawTable, tableName, storageManager) {
         if (storageManager._outboxEnabled && target.db.outbox) {
           const now = new Date().toISOString();
           return target.db.transaction('rw', [target, target.db.outbox], async () => {
+            const prior = await target.get(key);
             const res = await target.delete(key, ...rest);
             await target.db.outbox.add({
               table: tableName,
               key,
               op: 'delete',
+              scope: scopeOf(tableName, prior),
               created_at: now,
               pushed_at: null,
               device_id: storageManager.deviceId || null
@@ -139,12 +164,14 @@ function wrapDexieTable(rawTable, tableName, storageManager) {
         if (storageManager._outboxEnabled && target.db.outbox) {
           const now = new Date().toISOString();
           return target.db.transaction('rw', [target, target.db.outbox], async () => {
+            const priors = await target.bulkGet(keys);
             const res = await target.bulkDelete(keys, ...rest);
-            for (const key of keys) {
+            for (const [i, key] of keys.entries()) {
               await target.db.outbox.add({
                 table: tableName,
                 key,
                 op: 'delete',
+                scope: scopeOf(tableName, priors[i]),
                 created_at: now,
                 pushed_at: null,
                 device_id: storageManager.deviceId || null
@@ -196,8 +223,9 @@ export function isTemporaryProfileQuota(estimate) {
  * ephemeral memory fallback for private browsing, and storage quota monitoring.
  */
 export class StorageManager {
-  constructor() {
-    this.db = new Dexie('KennisBoostDB');
+  /** @param {{ dbName?: string }} [opts] - a separate database (tests simulate several devices) */
+  constructor({ dbName = 'KennisBoostDB' } = {}) {
+    this.db = new Dexie(dbName);
     this.ephemeralMode = false;
     this.memoryStore = new Map();
     this.objectUrls = new Set();
@@ -682,6 +710,35 @@ export class StorageManager {
           }
         });
       },
+      /** Highest outbox sequence number so far (0 when empty) */
+      latestSeq: async () => {
+        if (this.ephemeralMode) {
+          const rows = Array.from((this.memoryStore.get('outbox') || new Map()).values());
+          return rows.reduce((m, r) => Math.max(m, r.seq || 0), 0);
+        }
+        return (await this.db.outbox.orderBy('seq').last())?.seq || 0;
+      },
+      /** Log a change that isn't a table write (e.g. a KeyVault secret for linked devices) */
+      append: async (row) => {
+        const entry = { ...row, created_at: new Date().toISOString(), pushed_at: null, device_id: this.deviceId || null };
+        if (this.ephemeralMode) {
+          const mem = this.memoryStore.get('outbox');
+          const seq = (await this.outbox.latestSeq()) + 1;
+          mem?.set(seq, { ...entry, seq });
+          return seq;
+        }
+        return this.db.outbox.add(entry);
+      },
+      /** Drop rows every sync channel has already pushed */
+      pruneThrough: async (seq) => {
+        if (!(seq > 0)) return;
+        if (this.ephemeralMode) {
+          const mem = this.memoryStore.get('outbox');
+          for (const k of [...(mem?.keys() || [])]) if (k <= seq) mem.delete(k);
+          return;
+        }
+        await this.db.outbox.where('seq').belowOrEqual(seq).delete();
+      },
       prune: async (olderThanDays = 30, onlyPushed = true) => {
         const cutoff = new Date(Date.now() - olderThanDays * 86400000).toISOString();
         if (this.ephemeralMode) {
@@ -705,6 +762,31 @@ export class StorageManager {
         });
       }
     };
+  }
+
+  /**
+   * Apply a change that came from another device. Bypasses the outbox (it must not be echoed back
+   * as a local edit) but still notifies mutation listeners, so backups pick it up.
+   */
+  async applyRemoteChange(tableName, op, key, record) {
+    if (!DATA_TABLES.has(tableName)) throw new Error(`Not a synced table: ${tableName}`);
+    if (this.ephemeralMode) {
+      const mem = this.memoryStore.get(tableName);
+      const k = Array.isArray(key) ? key.join('+') : key;
+      if (op === 'put') mem.set(k, record);
+      else if (op === 'delete') mem.delete(k);
+      return;
+    }
+    if (op === 'put') await this.db[tableName].put(record);
+    else if (op === 'delete') await this.db[tableName].delete(key);
+  }
+
+  /** Read a record by the key used in outbox rows (grades use [student_id, assignment_id]) */
+  async getByChangeKey(tableName, key) {
+    if (this.ephemeralMode) {
+      return this.memoryStore.get(tableName)?.get(Array.isArray(key) ? key.join('+') : key) || null;
+    }
+    return (await this.db[tableName].get(key)) || null;
   }
 
   // --- Generic Table Interface for CRUD with Ephemeral Mode Support ---
@@ -917,7 +999,7 @@ export class StorageManager {
     for (const tbl of tables) {
       let rows = valid.data[tbl].map(r => ({ ...r }));
       if (tbl === 'app_metadata') {
-        const keep = (await this.table('app_metadata').toArray()).filter(r => DEVICE_BOUND_METADATA.has(r.key));
+        const keep = (await this.table('app_metadata').toArray()).filter(r => isDeviceBoundKey(r.key));
         rows = [...stripDeviceMetadata(rows), ...keep];
       } else if (DATA_TABLES.has(tbl)) {
         for (const r of rows) {

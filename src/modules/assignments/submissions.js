@@ -16,6 +16,7 @@ import { createFeedbackLink } from './feedback-link.js';
 import { generateFeedbackZip } from './feedback-pdf.js';
 import { feedbackSummary, buildStudentPayload, answerToText } from './grading.js';
 import { CryptoShareEngine } from '../../core/crypto-share.js';
+import { replication } from '../../core/replication/manager.js';
 
 /**
  * Submissions Inbox (KB-ASSIGN-006)
@@ -450,7 +451,7 @@ export async function renderSubmissions(assignment, router, container) {
 
     let publishedUrl = '';
     try {
-      const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
+      const keys = await replication.publishKeysFor(a.class_id);
       let rosterChecks = null;
       if (a.settings?.require_access_code && roster.length) {
         rosterChecks = {};

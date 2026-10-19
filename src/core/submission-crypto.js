@@ -88,13 +88,15 @@ export class SubmissionCrypto {
   }
 
   /**
-   * Load the teacher key pair, creating it on first use: `{ publicJwk, fingerprint, privateKey }`.
-   * The private key is a non-extractable CryptoKey kept by the KeyVault; backups carry it only
-   * encrypted under the teacher's recovery code.
+   * Load the teacher key pair, creating it on first use: `{ publicJwk, fingerprint, privateKey,
+   * decryptionKeys }`. The private key is a non-extractable CryptoKey kept by the KeyVault; backups
+   * carry it only encrypted under the teacher's recovery code. decryptionKeys adds the keys of
+   * shared classes and of devices this one was linked to, for opening hand-ins.
    * @param {{ getMetadata: Function, setMetadata: Function }} store
    */
   static async getOrCreateTeacherKeys(store) {
-    return KeyVault.getTeacherKeys(store);
+    const keys = await KeyVault.getTeacherKeys(store);
+    return { ...keys, decryptionKeys: await KeyVault.decryptionKeys(store) };
   }
 
   // ---------------------------------------------------------------------------
@@ -191,12 +193,23 @@ export class SubmissionCrypto {
   }
 
   /**
-   * Decrypt an envelope with the teacher's private key (a CryptoKey from the KeyVault, or a JWK).
-   * The header is authenticated, so a tampered routing header causes decryption to fail.
+   * Decrypt an envelope with the teacher's private key (a CryptoKey from the KeyVault, or a JWK),
+   * or with whichever of several keys it was encrypted to. The header is authenticated, so a
+   * tampered routing header causes decryption to fail.
    */
   static async decryptFromStudent(teacherPrivateKey, envelope) {
     if (!envelope || envelope.kbsub !== 1 || !envelope.epk || !envelope.ct) {
       throw new Error('NOT_A_SUBMISSION');
+    }
+    if (Array.isArray(teacherPrivateKey)) {
+      for (const key of teacherPrivateKey) {
+        try {
+          return await this.decryptFromStudent(key, envelope);
+        } catch (err) {
+          if (err.message !== 'DECRYPTION_FAILED') throw err;
+        }
+      }
+      throw new Error('DECRYPTION_FAILED');
     }
     const priv = isCryptoKey(teacherPrivateKey)
       ? teacherPrivateKey

@@ -74,6 +74,16 @@ async function bootstrapApp() {
     // 2. Initialize sync engine & check 72h backup
     await sync.init();
 
+    // Multi-device / co-teacher sync (a no-op that just prunes the outbox until set up)
+    const { replication } = await import('./core/replication/manager.js');
+    replication.start();
+    window.addEventListener('kb-remote-changes', () => {
+      // Show changes from other devices, unless the teacher is typing
+      const el = document.activeElement;
+      const typing = el && (el.isContentEditable || /^(INPUT|TEXTAREA|SL-INPUT|SL-TEXTAREA|SELECT)$/.test(el.tagName));
+      if (!typing && !document.querySelector('sl-dialog[open]')) router.handleRoute();
+    });
+
     // 3. Register module routes
     router.register('#/', loadHomeModule);
     router.register('#/home', loadHomeModule);
@@ -205,6 +215,11 @@ function bindStorageControls() {
   document.getElementById('menu-btn-recovery-kit')?.addEventListener('click', async () => {
     const { RecoveryKit } = await import('./components/recovery-kit.js');
     RecoveryKit.open();
+  });
+
+  document.getElementById('menu-btn-devices')?.addEventListener('click', async () => {
+    const { openDevicesDialog } = await import('./components/devices-dialog.js');
+    openDevicesDialog();
   });
 
   const btnRelayConnect = document.getElementById('menu-btn-relay-connect');

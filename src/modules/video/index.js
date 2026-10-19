@@ -15,6 +15,7 @@ import { ProjectLibraryView } from '../../components/project-library.js';
 import { ClassManager } from '../../components/class-manager.js';
 import { ConfirmDialog } from '../../utils/dialogs.js';
 import { RichTextEditor } from '../../components/rich-text-editor.js';
+import { replication } from '../../core/replication/manager.js';
 
 /**
  * Format seconds into mm:ss or mm:ss.s
@@ -166,7 +167,7 @@ export async function renderVideoView(params, router, container) {
     // Kiosk always runs from the student-safe payload; build one locally when launched on this device
     let kioskPayload = activeVideo;
     if (!activeVideo.secure) {
-      const teacherKeys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
+      const teacherKeys = await replication.publishKeysFor(activeVideo.class_id);
       const { checks } = await rosterChecksFor(activeVideo);
       kioskPayload = await buildStudentVideoPayload(activeVideo, { teacherKeys, rosterChecks: checks, instantFeedback: true });
       kioskPayload.secure.local = true;
@@ -1416,7 +1417,7 @@ async function renderKioskCompletion(assessment, student, responseLogs, containe
 export async function openReceiptOnThisDevice(text) {
   const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
   return openReceipt(text, {
-    teacherPrivateKey: keys.privateKey,
+    teacherPrivateKey: keys.decryptionKeys || keys.privateKey,
     getAssessment: (id) => storage.table('video_assessments').get(id),
     getStudents: (courseId) => storage.table('gradebook_students').where('course_id').equals(courseId).toArray()
   });

@@ -56,6 +56,45 @@ export function createDatabase(filePath = ':memory:') {
       FOREIGN KEY (drop_id) REFERENCES drops(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS drafts (
+      drop_id TEXT NOT NULL,
+      draft_id TEXT NOT NULL,
+      ciphertext TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY (drop_id, draft_id),
+      FOREIGN KEY (drop_id) REFERENCES drops(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS workspaces (
+      id TEXT PRIMARY KEY,
+      key_hash TEXT NOT NULL,
+      created_by TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY (created_by) REFERENCES teachers(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_chunks (
+      seq INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      start_seq INTEGER NOT NULL,
+      end_seq INTEGER NOT NULL,
+      body TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      UNIQUE (workspace_id, device_id, start_seq, end_seq),
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_snapshots (
+      workspace_id TEXT NOT NULL,
+      device_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      body TEXT NOT NULL,
+      PRIMARY KEY (workspace_id, device_id),
+      FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_sync_chunks_ws ON sync_chunks(workspace_id, seq);
     CREATE INDEX IF NOT EXISTS idx_payloads_expires ON payloads(expires_at);
     CREATE INDEX IF NOT EXISTS idx_drops_expires ON drops(expires_at);
     CREATE INDEX IF NOT EXISTS idx_submissions_drop ON submissions(drop_id, received_at);
@@ -128,6 +167,58 @@ export function createDatabase(filePath = ':memory:') {
         const stmt = db.prepare('DELETE FROM drops WHERE id = ? AND teacher_id = ?');
         const res = stmt.run(id, teacherId);
         return res.changes > 0;
+      }
+    },
+
+    drafts: {
+      put({ dropId, draftId, ciphertext }) {
+        const now = new Date().toISOString();
+        db.prepare(`INSERT INTO drafts (drop_id, draft_id, ciphertext, updated_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT (drop_id, draft_id) DO UPDATE SET ciphertext = excluded.ciphertext, updated_at = excluded.updated_at`)
+          .run(dropId, draftId, ciphertext, now);
+        return { updatedAt: now };
+      },
+      get(dropId, draftId) {
+        return db.prepare('SELECT ciphertext, updated_at FROM drafts WHERE drop_id = ? AND draft_id = ?').get(dropId, draftId) || null;
+      }
+    },
+
+    workspaces: {
+      create({ id, keyHash, createdBy }) {
+        db.prepare('INSERT INTO workspaces (id, key_hash, created_by, created_at) VALUES (?, ?, ?, ?)')
+          .run(id, keyHash, createdBy, new Date().toISOString());
+        return { id };
+      },
+      get(id) {
+        return db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id) || null;
+      }
+    },
+
+    sync: {
+      putChunk({ workspaceId, deviceId, start, end, body }) {
+        const res = db.prepare(`INSERT OR IGNORE INTO sync_chunks (workspace_id, device_id, start_seq, end_seq, body, created_at)
+          VALUES (?, ?, ?, ?, ?, ?)`).run(workspaceId, deviceId, start, end, body, new Date().toISOString());
+        return { created: res.changes > 0 };
+      },
+      listChunks(workspaceId, { after = 0, limit = 200 } = {}) {
+        const rows = db.prepare(`SELECT seq, device_id, start_seq AS start, end_seq AS end, body FROM sync_chunks
+          WHERE workspace_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?`).all(workspaceId, after, limit + 1);
+        return { items: rows.slice(0, limit), more: rows.length > limit };
+      },
+      deleteChunks(workspaceId, deviceId, through) {
+        return db.prepare('DELETE FROM sync_chunks WHERE workspace_id = ? AND device_id = ? AND end_seq <= ?')
+          .run(workspaceId, deviceId, through).changes;
+      },
+      putSnapshot({ workspaceId, deviceId, createdAt, body }) {
+        db.prepare(`INSERT INTO sync_snapshots (workspace_id, device_id, created_at, body) VALUES (?, ?, ?, ?)
+          ON CONFLICT (workspace_id, device_id) DO UPDATE SET created_at = excluded.created_at, body = excluded.body`)
+          .run(workspaceId, deviceId, createdAt, body);
+      },
+      listSnapshots(workspaceId) {
+        return db.prepare('SELECT device_id, created_at FROM sync_snapshots WHERE workspace_id = ? ORDER BY created_at DESC').all(workspaceId);
+      },
+      getSnapshot(workspaceId, deviceId) {
+        return db.prepare('SELECT created_at, body FROM sync_snapshots WHERE workspace_id = ? AND device_id = ?').get(workspaceId, deviceId) || null;
       }
     },
 

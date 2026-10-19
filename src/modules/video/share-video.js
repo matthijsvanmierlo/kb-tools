@@ -8,6 +8,7 @@ import { LinkBuilder } from '../../core/links.js';
 import { toCSV, downloadCSV } from '../../core/csv.js';
 import { splitName, joinName } from '../../core/names.js';
 import { getTransport } from '../../core/transport.js';
+import { replication } from '../../core/replication/manager.js';
 
 /**
  * Student-safe sharing for video assessments (KB-VID-005).
@@ -93,7 +94,7 @@ export async function openVideoShareDialog(assessment) {
     const btn = dialog.querySelector('#vs-generate');
     btn.loading = true;
     try {
-      const teacherKeys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
+      const teacherKeys = await replication.publishKeysFor(assessment.class_id);
       const { checks } = await rosterChecksFor(assessment);
       const payload = await buildStudentVideoPayload(assessment, {
         teacherKeys,

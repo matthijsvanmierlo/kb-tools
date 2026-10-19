@@ -19,8 +19,7 @@ export class SyncTransport {
     return {
       hostPayload: false,
       collectSubmissions: false,
-      pushChanges: false,
-      pullChanges: false,
+      replication: false,
       roster: false
     };
   }
@@ -89,19 +88,8 @@ export class SyncTransport {
     throw new Error('deleteDrop not supported by this transport');
   }
 
-  /**
-   * State sync (Option B) - push change log ops.
-   */
-  async pushChanges(ops) {
-    throw new Error('pushChanges not supported in this transport');
-  }
-
-  /**
-   * State sync (Option B) - pull remote ops.
-   */
-  async pullChanges({ sinceServerSeq } = {}) {
-    throw new Error('pullChanges not supported in this transport');
-  }
+  // State sync (Option B) is implemented in src/core/replication/ on top of the relay's
+  // /sync endpoints (RelayTransport.sync*) or the teacher's backup location.
 }
 
 /**
@@ -141,8 +129,7 @@ export class RelayTransport extends SyncTransport {
     return {
       hostPayload: true,
       collectSubmissions: true,
-      pushChanges: false,
-      pullChanges: false,
+      replication: true,
       roster: false
     };
   }
@@ -266,6 +253,74 @@ export class RelayTransport extends SyncTransport {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || `Failed to delete drop: ${res.status}`);
     }
+  }
+
+  // --- Student draft roaming (no auth; drafts are encrypted with the student's access code) ---
+
+  async putDraft(dropId, draftId, ciphertext) {
+    const res = await fetch(`${this.apiBase}/drops/${encodeURIComponent(dropId)}/drafts/${encodeURIComponent(draftId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain' },
+      body: ciphertext
+    });
+    if (!res.ok) throw new Error(`Failed to save draft: ${res.status}`);
+    return res.json();
+  }
+
+  /** @returns {Promise<{ ciphertext: string, updated_at: string }|null>} */
+  async getDraft(dropId, draftId) {
+    const res = await fetch(`${this.apiBase}/drops/${encodeURIComponent(dropId)}/drafts/${encodeURIComponent(draftId)}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Failed to load draft: ${res.status}`);
+    return res.json();
+  }
+
+  // --- Replication workspaces (src/core/replication) ---
+
+  async _syncRequest(path, { method = 'GET', workspaceKey = null, body } = {}) {
+    const headers = { 'Authorization': `Bearer ${this.token}` };
+    if (workspaceKey) headers['X-KB-Workspace-Key'] = workspaceKey;
+    if (body !== undefined) headers['Content-Type'] = 'application/json';
+    const res = await fetch(`${this.apiBase}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      const e = new Error(err.error || `Sync request failed: ${res.status}`);
+      e.status = res.status;
+      throw e;
+    }
+    return res.status === 204 ? null : res.json();
+  }
+
+  /** @returns {Promise<{ workspaceId: string, workspaceKey: string }>} */
+  async syncCreateWorkspace() {
+    const data = await this._syncRequest('/sync', { method: 'POST', body: {} });
+    return { workspaceId: data.workspace_id, workspaceKey: data.workspace_key };
+  }
+
+  syncPutChunk(workspaceId, workspaceKey, chunk) {
+    return this._syncRequest(`/sync/${encodeURIComponent(workspaceId)}/chunks`, { method: 'POST', workspaceKey, body: chunk });
+  }
+
+  syncListChunks(workspaceId, workspaceKey, { after = null } = {}) {
+    const q = after ? `?after=${encodeURIComponent(after)}` : '';
+    return this._syncRequest(`/sync/${encodeURIComponent(workspaceId)}/chunks${q}`, { workspaceKey });
+  }
+
+  syncDeleteChunks(workspaceId, workspaceKey, { device_id, through }) {
+    const q = new URLSearchParams({ device_id, through: String(through) });
+    return this._syncRequest(`/sync/${encodeURIComponent(workspaceId)}/chunks?${q}`, { method: 'DELETE', workspaceKey });
+  }
+
+  syncPutSnapshot(workspaceId, workspaceKey, deviceId, snapshot) {
+    return this._syncRequest(`/sync/${encodeURIComponent(workspaceId)}/snapshots/${encodeURIComponent(deviceId)}`, { method: 'PUT', workspaceKey, body: snapshot });
+  }
+
+  async syncListSnapshots(workspaceId, workspaceKey) {
+    return (await this._syncRequest(`/sync/${encodeURIComponent(workspaceId)}/snapshots`, { workspaceKey })).items || [];
+  }
+
+  syncGetSnapshot(workspaceId, workspaceKey, deviceId) {
+    return this._syncRequest(`/sync/${encodeURIComponent(workspaceId)}/snapshots/${encodeURIComponent(deviceId)}`, { workspaceKey });
   }
 }
 
