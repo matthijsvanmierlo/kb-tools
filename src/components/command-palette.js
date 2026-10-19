@@ -93,6 +93,7 @@ export class CommandPalette {
       { category: 'Navigation', title: 'Teacher Guide: Recommended Workflows', icon: 'signpost-split', run: () => router.navigate('#/guide') },
       { category: 'Navigation', title: 'New Auto-graded Assignment', icon: 'plus-lg', run: () => router.navigate('#/assignments/edit') },
       { category: 'Navigation', title: 'Open Gradebook Spreadsheet', icon: 'journal-check', run: () => router.navigate('#/gradebook') },
+      { category: 'Actions', title: 'Import Content (.kbshare, CSV, JSON)', icon: 'cloud-download', run: async () => { const { UniversalImportDialog } = await import('./universal-import-dialog.js'); UniversalImportDialog.open(); } },
       { category: 'Actions', title: 'Create New Flashcard Deck', icon: 'plus-circle', run: () => router.navigate('#/flashcards/edit') },
       { category: 'Actions', title: 'Manage Classes & Rosters', icon: 'mortarboard', run: () => ClassManager.openClassManagerModal() },
       { category: 'Actions', title: 'Load sample workspace', icon: 'box-arrow-in-down', run: async () => { const { loadDemoWorkspace } = await import('../core/demo.js'); await loadDemoWorkspace(); router.handleRoute(); } },

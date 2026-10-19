@@ -162,6 +162,17 @@ async function bootstrapApp() {
     const { CommandPalette } = await import('./components/command-palette.js');
     CommandPalette.init();
 
+    // Universal Import Content header buttons & notification handler
+    const openUniversalImport = async () => {
+      const { UniversalImportDialog } = await import('./components/universal-import-dialog.js');
+      UniversalImportDialog.open();
+    };
+    document.getElementById('btn-header-import-content')?.addEventListener('click', openUniversalImport);
+    document.getElementById('btn-header-import-content-mobile')?.addEventListener('click', openUniversalImport);
+    window.addEventListener('kb-content-imported', () => {
+      router.handleRoute();
+    });
+
     // 7. Register PWA Service Worker and OS file-launch / share-target handlers
     registerServiceWorker();
     initLaunchHandlers(router);

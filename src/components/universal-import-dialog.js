@@ -1,0 +1,479 @@
+/**
+ * UniversalImportDialog - Universal Content Import Dialog (KB-COMP-IMPORT)
+ * Ingests .kbshare files, assignments, flashcard decks, timelines, video assessments,
+ * student hand-ins (.kbsub), and spreadsheet data into the user's local database.
+ */
+
+import { ContentImporter, ContentImportError } from '../core/content-importer.js';
+import { Sanitizer } from '../core/sanitizer.js';
+import { ClassManager } from './class-manager.js';
+import { toast } from '../utils/toast.js';
+import { router } from '../router.js';
+import { parseCSVWithValidation, FlashcardItemSchema } from '../core/validator.js';
+
+export class UniversalImportDialog {
+  /**
+   * Open the universal content import dialog
+   * @param {object} [options]
+   * @param {string|null} [options.defaultClassId=null]
+   * @param {(result: object) => void} [options.onComplete]
+   * @returns {Promise<HTMLElement>}
+   */
+  static async open({ defaultClassId = null, onComplete = null } = {}) {
+    const dialog = document.createElement('sl-dialog');
+    dialog.setAttribute('label', 'Import Educational Content');
+    dialog.className = 'kb-universal-import-dialog';
+    dialog.style.setProperty('--width', '680px');
+
+    const classes = await ClassManager.getClasses().catch(() => []);
+    const initialClassId = defaultClassId || ClassManager.getActiveFilter() || null;
+
+    let activeTab = 'file';
+    let currentFile = null;
+    let isProcessing = false;
+    let inspectionResult = null;
+    let unpackedData = null; // { type, payload }
+
+    dialog.innerHTML = `
+      <div class="space-y-4 py-1 text-sm">
+        <div class="text-xs text-slate-500">
+          Upload any <strong>.kbshare</strong> lesson package, assignment, flashcard deck, or spreadsheet file. Content is saved directly to your local library with zero server uploads.
+        </div>
+
+        <sl-tab-group id="univ-import-tabs">
+          <sl-tab slot="nav" panel="tab-file" active>
+            <sl-icon slot="prefix" name="file-earmark-arrow-up"></sl-icon> Upload File
+          </sl-tab>
+          <sl-tab slot="nav" panel="tab-paste">
+            <sl-icon slot="prefix" name="clipboard"></sl-icon> Paste Content
+          </sl-tab>
+
+          <!-- Tab 1: File Upload -->
+          <sl-tab-panel name="tab-file">
+            <div class="mt-3 p-6 border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl text-center bg-slate-50 transition-colors cursor-pointer" id="univ-drop-zone">
+              <sl-icon name="cloud-arrow-up" class="text-3xl text-blue-500 mb-2"></sl-icon>
+              <p class="font-medium text-slate-800 text-sm" id="univ-drop-title">Drop a .kbshare, .kbsub, CSV, or JSON file here</p>
+              <p class="text-xs text-slate-500 mt-1">Supports .kbshare (lessons/decks), .kbsub (student work), .csv, .tsv, and .json</p>
+              <input type="file" id="univ-file-input" accept=".kbshare,.kbsub,.kbr,.csv,.tsv,.json,.txt" class="hidden" />
+            </div>
+
+            <div id="univ-file-info" class="hidden mt-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between text-xs text-blue-900">
+              <div class="flex items-center gap-2 truncate">
+                <sl-icon name="file-earmark-text" class="text-blue-600 shrink-0"></sl-icon>
+                <span id="univ-file-name" class="font-semibold truncate"></span>
+                <span id="univ-file-size" class="text-blue-500 font-mono"></span>
+              </div>
+              <button type="button" id="btn-univ-clear-file" class="text-blue-600 hover:text-blue-900 font-medium ml-2">Change</button>
+            </div>
+          </sl-tab-panel>
+
+          <!-- Tab 2: Paste Content -->
+          <sl-tab-panel name="tab-paste">
+            <div class="mt-3 space-y-2">
+              <p class="text-xs text-slate-500">
+                Paste spreadsheet rows (from Excel or Google Sheets), raw .kbshare contents, or student submission codes:
+              </p>
+              <sl-textarea id="univ-paste-textarea" rows="6" placeholder="Paste .kbshare data, spreadsheet cells, or KBSUB1. submission code here..."></sl-textarea>
+            </div>
+          </sl-tab-panel>
+        </sl-tab-group>
+
+        <!-- Optional Class Assignment -->
+        <div class="pt-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-t border-slate-100">
+          <label for="select-univ-class" class="text-xs font-medium text-slate-600">Assign to Class (optional):</label>
+          <sl-select id="select-univ-class" size="small" class="w-full sm:w-56" value="${initialClassId || 'none'}">
+            <sl-option value="none">None / Unassigned</sl-option>
+            ${classes.map(c => `<sl-option value="${Sanitizer.escapeHTML(c.id)}">${Sanitizer.escapeHTML(c.name)}</sl-option>`).join('')}
+          </sl-select>
+        </div>
+
+        <!-- Live Preview / Status Container -->
+        <div id="univ-preview-container" class="hidden border border-slate-200 rounded-xl bg-slate-50/60 p-3.5 space-y-2.5">
+          <div class="flex items-center justify-between text-xs">
+            <div id="univ-preview-status" class="flex items-center gap-1.5 font-medium text-slate-700"></div>
+            <span id="univ-preview-badge" class="text-[11px] text-slate-400"></span>
+          </div>
+
+          <!-- Dynamic Decrypt Prompt (if encrypted) -->
+          <div id="univ-decrypt-box" class="hidden p-3 bg-amber-50 border border-amber-200 rounded-lg space-y-2">
+            <div class="flex items-center gap-1.5 text-xs font-semibold text-amber-900">
+              <sl-icon name="lock"></sl-icon> Protected .kbshare Lesson (AES-256)
+            </div>
+            <p class="text-xs text-amber-700">This content is password-protected. Enter the passphrase or access code to unlock it:</p>
+            <div class="flex gap-2">
+              <sl-input id="input-univ-passphrase" type="password" password-toggle placeholder="Passphrase or code" size="small" class="flex-1"></sl-input>
+              <sl-button size="small" variant="primary" id="btn-univ-unlock">Unlock</sl-button>
+            </div>
+            <div id="univ-decrypt-error" class="text-xs text-red-600 hidden font-medium"></div>
+          </div>
+
+          <!-- Preview Items List -->
+          <div id="univ-preview-content" class="overflow-x-auto max-h-40 text-xs bg-white rounded-lg border border-slate-200 divide-y divide-slate-100"></div>
+          <div id="univ-preview-error" class="hidden text-xs text-red-600 bg-red-50 p-2.5 rounded-lg border border-red-200"></div>
+        </div>
+      </div>
+
+      <div slot="footer" class="flex items-center justify-between w-full">
+        <sl-button variant="default" id="btn-univ-cancel">Cancel</sl-button>
+        <sl-button variant="primary" id="btn-univ-submit" disabled>
+          <sl-icon slot="prefix" name="cloud-download"></sl-icon>
+          <span id="btn-univ-submit-text">Import to Library</span>
+        </sl-button>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+
+    const tabs = dialog.querySelector('#univ-import-tabs');
+    const dropZone = dialog.querySelector('#univ-drop-zone');
+    const fileInput = dialog.querySelector('#univ-file-input');
+    const fileInfo = dialog.querySelector('#univ-file-info');
+    const fileNameEl = dialog.querySelector('#univ-file-name');
+    const fileSizeEl = dialog.querySelector('#univ-file-size');
+    const clearFileBtn = dialog.querySelector('#btn-univ-clear-file');
+    const pasteTextarea = dialog.querySelector('#univ-paste-textarea');
+    const classSelect = dialog.querySelector('#select-univ-class');
+    const previewContainer = dialog.querySelector('#univ-preview-container');
+    const previewStatus = dialog.querySelector('#univ-preview-status');
+    const previewBadge = dialog.querySelector('#univ-preview-badge');
+    const previewContent = dialog.querySelector('#univ-preview-content');
+    const previewError = dialog.querySelector('#univ-preview-error');
+    const decryptBox = dialog.querySelector('#univ-decrypt-box');
+    const passInput = dialog.querySelector('#input-univ-passphrase');
+    const unlockBtn = dialog.querySelector('#btn-univ-unlock');
+    const decryptError = dialog.querySelector('#univ-decrypt-error');
+    const submitBtn = dialog.querySelector('#btn-univ-submit');
+    const submitBtnText = dialog.querySelector('#btn-univ-submit-text');
+    const cancelBtn = dialog.querySelector('#btn-univ-cancel');
+
+    // UI State updater
+    const renderPreviewForUnpacked = (type, payload, filename) => {
+      unpackedData = { type, payload };
+      decryptBox.classList.add('hidden');
+      previewError.classList.add('hidden');
+      previewContent.classList.remove('hidden');
+
+      const title = payload.title || payload.name || filename.replace(/\.[^/.]+$/, '') || 'Untitled Content';
+      const safeTitle = Sanitizer.escapeHTML(title);
+
+      let items = [];
+      let typeLabel = 'Content';
+      let badgeColor = 'bg-blue-100 text-blue-800';
+      let icon = 'collection';
+
+      if (type === 'flashcards') {
+        items = Array.isArray(payload.cards) ? payload.cards : [];
+        typeLabel = `Flashcard Deck (${items.length} cards)`;
+        badgeColor = 'bg-blue-100 text-blue-800';
+        icon = 'stack';
+      } else if (type === 'assignment') {
+        items = Array.isArray(payload.questions) ? payload.questions : [];
+        typeLabel = `Assignment (${items.length} questions)`;
+        badgeColor = 'bg-amber-100 text-amber-800';
+        icon = 'ui-checks';
+      } else if (type === 'timeline') {
+        items = Array.isArray(payload.events) ? payload.events : [];
+        typeLabel = `Timeline (${items.length} events)`;
+        badgeColor = 'bg-purple-100 text-purple-800';
+        icon = 'bar-chart-steps';
+      } else if (type === 'video') {
+        items = Array.isArray(payload.checkpoints) ? payload.checkpoints : [];
+        typeLabel = `Video Assessment (${items.length} checkpoints)`;
+        badgeColor = 'bg-rose-100 text-rose-800';
+        icon = 'play-circle';
+      }
+
+      previewStatus.innerHTML = `
+        <span class="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold ${badgeColor}">
+          <sl-icon name="${icon}"></sl-icon> ${Sanitizer.escapeHTML(typeLabel)}
+        </span>
+        <span class="font-bold text-slate-800 ml-1.5 truncate max-w-xs">${safeTitle}</span>
+      `;
+
+      previewBadge.textContent = 'Preview';
+
+      if (items.length === 0) {
+        previewContent.innerHTML = '<div class="p-3 text-slate-400 italic text-center">No items found in payload.</div>';
+      } else {
+        previewContent.innerHTML = items.slice(0, 4).map((it, idx) => {
+          const f = it.title || it.prompt || it.front?.text || it.front || `Item #${idx + 1}`;
+          const b = it.description || it.back?.text || it.back || (it.start_date ? `Date: ${it.start_date}` : (it.points ? `${it.points} pts` : ''));
+          return `
+            <div class="p-2 flex items-center justify-between text-xs gap-3">
+              <span class="font-medium text-slate-800 truncate">${Sanitizer.escapeHTML(String(f))}</span>
+              <span class="text-slate-500 truncate max-w-xs text-[11px]">${Sanitizer.escapeHTML(String(b))}</span>
+            </div>
+          `;
+        }).join('');
+      }
+
+      submitBtn.disabled = false;
+      submitBtnText.textContent = `Save ${safeTitle} to Library`;
+    };
+
+    const inspectAndPreview = async (text, filename = '') => {
+      unpackedData = null;
+      submitBtn.disabled = true;
+      submitBtnText.textContent = 'Import to Library';
+      decryptBox.classList.add('hidden');
+      decryptError.classList.add('hidden');
+      previewError.classList.add('hidden');
+      previewContent.innerHTML = '';
+
+      const trimmed = (text || '').trim();
+      if (!trimmed) {
+        previewContainer.classList.add('hidden');
+        return;
+      }
+
+      previewContainer.classList.remove('hidden');
+      inspectionResult = ContentImporter.inspect(trimmed, filename);
+
+      // Case A: Student Submission (.kbsub or KBSUB1.)
+      if (inspectionResult.kind === 'kbsub') {
+        previewStatus.innerHTML = `
+          <span class="inline-flex items-center gap-1 text-emerald-800 bg-emerald-100 font-semibold px-2.5 py-0.5 rounded-full text-xs">
+            <sl-icon name="inbox"></sl-icon> Student Submission Work
+          </span>
+        `;
+        previewBadge.textContent = 'Inbox';
+        previewContent.innerHTML = `
+          <div class="p-3 text-slate-600 text-xs">
+            This file contains student assignment hand-in data. Click below to route directly to your Inbox for grading.
+          </div>
+        `;
+        submitBtn.disabled = false;
+        submitBtnText.textContent = 'Route to Inbox';
+        return;
+      }
+
+      // Case B: .kbshare File
+      if (inspectionResult.kind === 'kbshare') {
+        if (inspectionResult.isEncrypted) {
+          previewStatus.innerHTML = `
+            <span class="inline-flex items-center gap-1 text-amber-800 bg-amber-100 font-semibold px-2.5 py-0.5 rounded-full text-xs">
+              <sl-icon name="lock"></sl-icon> Encrypted .kbshare Lesson
+            </span>
+          `;
+          previewBadge.textContent = 'Protected';
+          decryptBox.classList.remove('hidden');
+          previewContent.classList.add('hidden');
+          submitBtn.disabled = true;
+          submitBtnText.textContent = 'Unlock Required';
+          return;
+        }
+
+        try {
+          const unpacked = await ContentImporter.unpackKbShare(trimmed);
+          renderPreviewForUnpacked(unpacked.type, unpacked.payload, filename);
+          return;
+        } catch (err) {
+          previewStatus.innerHTML = `
+            <span class="inline-flex items-center gap-1 text-rose-800 bg-rose-100 font-semibold px-2 py-0.5 rounded-full text-xs">
+              <sl-icon name="exclamation-triangle"></sl-icon> Corrupted .kbshare
+            </span>
+          `;
+          previewError.classList.remove('hidden');
+          previewError.textContent = err.message || 'Could not parse .kbshare payload.';
+          return;
+        }
+      }
+
+      // Case C: Raw JSON
+      if (inspectionResult.kind === 'json') {
+        const p = inspectionResult.parsed;
+        let detectedType = 'flashcards';
+        let payload = p;
+
+        if (inspectionResult.isSharedEnvelope) {
+          detectedType = inspectionResult.shareType;
+          payload = p.payload;
+        } else if (p.questions) {
+          detectedType = 'assignment';
+        } else if (p.events) {
+          detectedType = 'timeline';
+        } else if (p.checkpoints) {
+          detectedType = 'video';
+        }
+
+        renderPreviewForUnpacked(detectedType, payload, filename);
+        return;
+      }
+
+      // Case D: CSV / TSV spreadsheet
+      if (inspectionResult.kind === 'csv') {
+        const validated = parseCSVWithValidation(trimmed, FlashcardItemSchema);
+        if (validated.success && validated.data?.length > 0) {
+          const deckPayload = {
+            title: filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ') || 'Imported Flashcards',
+            cards: validated.data
+          };
+          renderPreviewForUnpacked('flashcards', deckPayload, filename);
+          return;
+        }
+
+        previewStatus.innerHTML = `
+          <span class="inline-flex items-center gap-1 text-slate-800 bg-slate-100 font-semibold px-2 py-0.5 rounded-full text-xs">
+            <sl-icon name="file-earmark-spreadsheet"></sl-icon> Spreadsheet Data
+          </span>
+        `;
+        previewError.classList.remove('hidden');
+        previewError.textContent = validated.errors?.[0]?.message || 'CSV format not recognized.';
+        return;
+      }
+
+      // Fallback
+      previewStatus.innerHTML = '<span class="text-slate-500">Unrecognized file content</span>';
+      previewError.classList.remove('hidden');
+      previewError.textContent = 'Please choose a valid .kbshare, .kbsub, CSV, or JSON file.';
+    };
+
+    // Unlock button handler
+    unlockBtn?.addEventListener('click', async () => {
+      const pass = passInput?.value || '';
+      if (!pass) return;
+
+      unlockBtn.loading = true;
+      decryptError.classList.add('hidden');
+
+      try {
+        const text = inspectionResult?.rawText || '';
+        const unpacked = await ContentImporter.unpackKbShare(text, pass);
+        renderPreviewForUnpacked(unpacked.type, unpacked.payload, inspectionResult?.filename || '');
+      } catch (err) {
+        decryptError.textContent = err.message || 'Incorrect passphrase.';
+        decryptError.classList.remove('hidden');
+      } finally {
+        unlockBtn.loading = false;
+      }
+    });
+
+    passInput?.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') unlockBtn?.click();
+    });
+
+    // File handlers
+    const handleFile = async (file) => {
+      if (!file) return;
+      currentFile = file;
+      fileNameEl.textContent = file.name;
+      fileSizeEl.textContent = `(${Math.round(file.size / 1024)} KB)`;
+      fileInfo.classList.remove('hidden');
+      dropZone.classList.add('hidden');
+
+      try {
+        const text = await file.text();
+        await inspectAndPreview(text, file.name);
+      } catch (err) {
+        console.error('Error reading file:', err);
+      }
+    };
+
+    dropZone?.addEventListener('click', () => fileInput?.click());
+    dropZone?.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      dropZone.classList.add('border-blue-500', 'bg-blue-50');
+    });
+    dropZone?.addEventListener('dragleave', () => {
+      dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+    });
+    dropZone?.addEventListener('drop', (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('border-blue-500', 'bg-blue-50');
+      const file = e.dataTransfer?.files?.[0];
+      if (file) handleFile(file);
+    });
+
+    fileInput?.addEventListener('change', () => {
+      const file = fileInput.files?.[0];
+      if (file) handleFile(file);
+    });
+
+    clearFileBtn?.addEventListener('click', () => {
+      currentFile = null;
+      fileInput.value = '';
+      fileInfo.classList.add('hidden');
+      dropZone.classList.remove('hidden');
+      inspectAndPreview('', '');
+    });
+
+    // Tab change
+    tabs?.addEventListener('sl-tab-show', (e) => {
+      activeTab = e.detail.name === 'tab-paste' ? 'paste' : 'file';
+      if (activeTab === 'paste') {
+        inspectAndPreview(pasteTextarea?.value || '', 'pasted_data.txt');
+      } else if (currentFile) {
+        currentFile.text().then(t => inspectAndPreview(t, currentFile.name));
+      } else {
+        inspectAndPreview('', '');
+      }
+    });
+
+    pasteTextarea?.addEventListener('sl-input', () => {
+      inspectAndPreview(pasteTextarea.value, 'pasted_data.txt');
+    });
+
+    // Submit handler
+    submitBtn?.addEventListener('click', async () => {
+      if (isProcessing) return;
+
+      // 1. If it's a student submission, route to Inbox
+      if (inspectionResult?.kind === 'kbsub') {
+        const { openIncomingFiles } = await import('../core/pwa.js');
+        if (currentFile) {
+          await openIncomingFiles([currentFile], router);
+        } else {
+          const fakeFile = new File([pasteTextarea.value], 'submission.kbsub', { type: 'text/plain' });
+          await openIncomingFiles([fakeFile], router);
+        }
+        dialog.hide();
+        return;
+      }
+
+      // 2. Educational Content (flashcards, assignment, timeline, video)
+      if (!unpackedData || !unpackedData.type || !unpackedData.payload) {
+        toast.warning('No valid content available to import.');
+        return;
+      }
+
+      const selectedClass = classSelect.value === 'none' ? null : classSelect.value;
+      const filename = inspectionResult?.filename || currentFile?.name || '';
+
+      isProcessing = true;
+      submitBtn.loading = true;
+
+      try {
+        const res = await ContentImporter.importRecordToLibrary(
+          unpackedData.type,
+          unpackedData.payload,
+          { classId: selectedClass, filename }
+        );
+
+        toast.success(`Imported "${res.title}" into ${res.table.replace('_', ' ')}!`);
+
+        // Dispatch global notification event
+        window.dispatchEvent(new CustomEvent('kb-content-imported', {
+          detail: { type: res.type, id: res.id, table: res.table }
+        }));
+
+        if (typeof onComplete === 'function') {
+          onComplete(res);
+        }
+
+        await dialog.hide();
+      } catch (err) {
+        console.error('Import failed:', err);
+        toast.danger('Import failed: ' + (err.message || 'unknown error'));
+      } finally {
+        isProcessing = false;
+        submitBtn.loading = false;
+      }
+    });
+
+    cancelBtn?.addEventListener('click', () => dialog.hide());
+    dialog.addEventListener('sl-after-hide', () => dialog.remove());
+
+    await dialog.show();
+    return dialog;
+  }
+}

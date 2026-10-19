@@ -400,10 +400,11 @@ function bindHomeEvents(container, courses, router) {
     ClassManager.openClassEditorModal(null, () => renderHomeView(null, router, container));
   });
 
-  // Open shared file action
+  // Open shared file action (Universal Importer)
   const fileInput = container.querySelector('#home-input-shared-file');
-  container.querySelector('[data-action="open_file"]')?.addEventListener('click', () => {
-    fileInput?.click();
+  container.querySelector('[data-action="open_file"]')?.addEventListener('click', async () => {
+    const { UniversalImportDialog } = await import('../../components/universal-import-dialog.js');
+    UniversalImportDialog.open();
   });
 
   fileInput?.addEventListener('change', async (e) => {

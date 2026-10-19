@@ -9,6 +9,7 @@ import { Exporter, FlashcardItemSchema } from '../../core/validator.js';
 import { CSVImportDialog } from '../../components/csv-import-dialog.js';
 import { FLASHCARDS_CSV_TEMPLATE, downloadCSVTemplate } from '../../core/csv-templates.js';
 import { downloadCSV } from '../../core/csv.js';
+import { ContentImporter } from '../../core/content-importer.js';
 
 /**
  * Deck & Card Editor (KB-CARD-001)
@@ -218,11 +219,11 @@ export class FlashcardEditor {
               </sl-button>
               <sl-dropdown placement="bottom-end">
                 <sl-button slot="trigger" variant="default" size="small" caret>
-                  <sl-icon slot="prefix" name="filetype-csv"></sl-icon> CSV
+                  <sl-icon slot="prefix" name="arrow-down-up"></sl-icon> Import / Export
                 </sl-button>
                 <sl-menu id="menu-editor-deck-actions">
                   <sl-menu-item value="import-cards">
-                    <sl-icon slot="prefix" name="upload"></sl-icon> Import from CSV / Spreadsheet…
+                    <sl-icon slot="prefix" name="upload"></sl-icon> Import Cards (.kbshare / CSV / Sheets)…
                   </sl-menu-item>
                   <sl-menu-item value="export-csv">
                     <sl-icon slot="prefix" name="download"></sl-icon> Export Cards to CSV
@@ -412,35 +413,33 @@ export class FlashcardEditor {
       if (val === 'import-cards') {
         CSVImportDialog.open({
           title: `Import Cards into "${this.deck.title || 'Deck'}"`,
-          subtitle: 'Upload a CSV file or paste cells directly from Google Sheets / Excel to add cards to this deck.',
+          subtitle: 'Upload a .kbshare lesson file, CSV file, or paste rows from Google Sheets / Excel to add cards to this deck.',
           templateFilename: 'flashcards_template.csv',
           templateContent: FLASHCARDS_CSV_TEMPLATE,
           schema: FlashcardItemSchema,
-          acceptJson: false,
-          onImport: async (resultData, rawText, { filename } = {}) => {
-            if (!Array.isArray(resultData) || resultData.length === 0) return;
-            const newCards = resultData.map(c => ({
-              id: generateUUID(),
-              type: 'text',
-              front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : (c.front || { text: '', ttsLang: 'en-US' }),
-              back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : (c.back || { text: '', ttsLang: 'en-US' }),
-              fsrs: { state: 0, stability: 0, difficulty: 0, due: new Date().toISOString() }
-            }));
-
-            // If deck has only 1 empty card, replace it with the imported cards
-            const hasOnlyEmptyCard = this.deck.cards.length === 1 &&
-              (!this.deck.cards[0].front?.text || this.deck.cards[0].front.text.trim() === '') &&
-              (!this.deck.cards[0].back?.text || this.deck.cards[0].back.text.trim() === '');
-
-            if (hasOnlyEmptyCard) {
-              this.deck.cards = newCards;
-            } else {
-              this.deck.cards.push(...newCards);
+          acceptJson: true,
+          acceptKbShare: true,
+          onImport: async (resultData, rawText, { filename, isKbShare } = {}) => {
+            if (!resultData) return;
+            let rawCards = [];
+            if (isKbShare) {
+              rawCards = Array.isArray(resultData.cards) ? resultData.cards : [];
+            } else if (Array.isArray(resultData)) {
+              rawCards = resultData;
+            } else if (resultData.cards && Array.isArray(resultData.cards)) {
+              rawCards = resultData.cards;
             }
 
-            // Update title if still untitled and a meaningful filename is provided
-            if ((!this.deck.title || this.deck.title === 'Untitled Flashcard Deck') && filename) {
-              const clean = filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ');
+            if (rawCards.length === 0) {
+              toast.warning('No cards found in imported file.');
+              return;
+            }
+
+            const count = ContentImporter.mergeCardsIntoDeck(this.deck, rawCards);
+
+            // Update title if still untitled and a meaningful filename/title is provided
+            if ((!this.deck.title || this.deck.title === 'Untitled Flashcard Deck')) {
+              const clean = (resultData.title || filename || '').replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ').trim();
               if (clean && !clean.includes('template') && !clean.includes('pasted')) {
                 this.deck.title = clean.charAt(0).toUpperCase() + clean.slice(1);
               }
@@ -449,7 +448,7 @@ export class FlashcardEditor {
             this.selectedCardIndex = 0;
             this._render();
             await this.saveDeck(false);
-            toast.success(`Imported ${newCards.length} cards from CSV!`);
+            toast.success(`Imported ${count} cards into deck!`);
           }
         });
       } else if (val === 'export-csv') {

@@ -8,6 +8,7 @@ import { parseCSVWithValidation, showImportErrorsDialog } from '../core/validato
 import { downloadCSVTemplate } from '../core/csv-templates.js';
 import { Sanitizer } from '../core/sanitizer.js';
 import { toast } from '../utils/toast.js';
+import { ContentImporter } from '../core/content-importer.js';
 
 export class CSVImportDialog {
   /**
@@ -30,6 +31,7 @@ export class CSVImportDialog {
     templateContent = '',
     schema = null,
     acceptJson = false,
+    acceptKbShare = acceptJson,
     onImport
   }) {
     const dialog = document.createElement('sl-dialog');
@@ -42,7 +44,9 @@ export class CSVImportDialog {
     let pendingText = '';
     let isProcessing = false;
 
-    const acceptTypes = acceptJson ? '.csv,.tsv,.txt,.json' : '.csv,.tsv,.txt';
+    const acceptTypes = acceptKbShare
+      ? (acceptJson ? '.csv,.tsv,.txt,.json,.kbshare' : '.csv,.tsv,.txt,.kbshare')
+      : (acceptJson ? '.csv,.tsv,.txt,.json' : '.csv,.tsv,.txt');
 
     dialog.innerHTML = `
       <div class="space-y-4 py-1 text-sm">
@@ -65,8 +69,8 @@ export class CSVImportDialog {
           <sl-tab-panel name="tab-file">
             <div class="mt-3 p-6 border-2 border-dashed border-slate-300 hover:border-blue-500 rounded-xl text-center bg-slate-50 transition-colors cursor-pointer" id="csv-drop-zone">
               <sl-icon name="cloud-arrow-up" class="text-3xl text-blue-500 mb-2"></sl-icon>
-              <p class="font-medium text-slate-800 text-sm" id="csv-drop-title">Drop a CSV or TSV file here or click to browse</p>
-              <p class="text-xs text-slate-500 mt-1" id="csv-drop-hint">Supports .csv, .tsv, and spreadsheet exports${acceptJson ? ' (or .json)' : ''}</p>
+              <p class="font-medium text-slate-800 text-sm" id="csv-drop-title">Drop a ${acceptKbShare ? '.kbshare, CSV, or TSV' : 'CSV or TSV'} file here or click to browse</p>
+              <p class="text-xs text-slate-500 mt-1" id="csv-drop-hint">Supports ${acceptKbShare ? '.kbshare, ' : ''}.csv, .tsv, and spreadsheet exports${acceptJson ? ' (or .json)' : ''}</p>
               <input type="file" id="csv-file-input" accept="${acceptTypes}" class="hidden" />
             </div>
             <div id="file-selection-info" class="hidden mt-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between text-xs text-blue-900">
@@ -165,6 +169,103 @@ export class CSVImportDialog {
       }
 
       previewContainer.classList.remove('hidden');
+
+      if (acceptKbShare) {
+        const insp = ContentImporter.inspect(trimmed, displayFilename);
+        if (insp.kind === 'kbshare') {
+          const renderUnpacked = (unpacked) => {
+            const payload = unpacked.payload || {};
+            const items = Array.isArray(payload.cards) ? payload.cards : (Array.isArray(payload.events) ? payload.events : (Array.isArray(payload.questions) ? payload.questions : [payload]));
+            parsedCache = { isKbShare: true, type: unpacked.type, data: payload, items, filename: displayFilename };
+
+            previewStatus.innerHTML = `
+              <span class="inline-flex items-center gap-1 text-blue-700 bg-blue-100 font-semibold px-2 py-0.5 rounded-full text-[11px]">
+                <sl-icon name="stack"></sl-icon> .kbshare (${Sanitizer.escapeHTML(unpacked.type)}) • ${items.length} ${unpacked.type === 'flashcards' ? 'Cards' : 'Items'}
+              </span>
+            `;
+            previewError.classList.add('hidden');
+
+            previewContent.innerHTML = items.slice(0, 4).map((it, idx) => {
+              const fText = it.title || it.name || it.front?.text || it.front || `Item #${idx + 1}`;
+              const bText = it.description || it.back?.text || it.back || (it.start_date ? `Date: ${it.start_date}` : '');
+              return `
+                <div class="p-2 flex items-center justify-between text-xs gap-3">
+                  <span class="font-medium text-slate-800 truncate">${Sanitizer.escapeHTML(String(fText))}</span>
+                  <span class="text-slate-500 truncate max-w-xs text-[11px]">${Sanitizer.escapeHTML(String(bText))}</span>
+                </div>
+              `;
+            }).join('');
+
+            submitBtn.disabled = false;
+            if (submitBtnText) submitBtnText.textContent = `Import ${items.length} ${unpacked.type === 'flashcards' ? 'Cards' : 'Items'}`;
+          };
+
+          if (insp.isEncrypted) {
+            previewStatus.innerHTML = `
+              <span class="inline-flex items-center gap-1 text-amber-800 bg-amber-100 font-semibold px-2 py-0.5 rounded-full text-[11px]">
+                <sl-icon name="lock"></sl-icon> Encrypted .kbshare File
+              </span>
+            `;
+            previewError.classList.add('hidden');
+            previewContent.innerHTML = `
+              <div class="p-3 bg-amber-50/70 border border-amber-200 rounded-lg space-y-2">
+                <p class="text-xs text-amber-800 font-medium">This file is protected with AES-256 encryption. Enter the passphrase or access code:</p>
+                <div class="flex items-center gap-2">
+                  <sl-input id="input-dialog-kbshare-pass" type="password" password-toggle placeholder="Passphrase or code" size="small" class="flex-1"></sl-input>
+                  <sl-button size="small" variant="primary" id="btn-dialog-unlock-kbshare">
+                    <sl-icon slot="prefix" name="unlock"></sl-icon> Unlock
+                  </sl-button>
+                </div>
+                <div id="dialog-kbshare-decrypt-err" class="text-xs text-red-600 font-medium hidden"></div>
+              </div>
+            `;
+            if (submitBtnText) submitBtnText.textContent = 'Unlock Required';
+            submitBtn.disabled = true;
+
+            const passInput = previewContent.querySelector('#input-dialog-kbshare-pass');
+            const unlockBtn = previewContent.querySelector('#btn-dialog-unlock-kbshare');
+            const errEl = previewContent.querySelector('#dialog-kbshare-decrypt-err');
+
+            const doUnlock = async () => {
+              const pass = passInput?.value || '';
+              if (!pass) return;
+              unlockBtn.loading = true;
+              try {
+                const unpacked = await ContentImporter.unpackKbShare(trimmed, pass);
+                errEl.classList.add('hidden');
+                submitBtn.disabled = false;
+                renderUnpacked(unpacked);
+              } catch (err) {
+                errEl.textContent = err.message || 'Incorrect passphrase.';
+                errEl.classList.remove('hidden');
+              } finally {
+                unlockBtn.loading = false;
+              }
+            };
+
+            unlockBtn?.addEventListener('click', doUnlock);
+            passInput?.addEventListener('keydown', (e) => {
+              if (e.key === 'Enter') doUnlock();
+            });
+            return;
+          }
+
+          // Unencrypted .kbshare
+          ContentImporter.unpackKbShare(trimmed).then(unpacked => {
+            renderUnpacked(unpacked);
+          }).catch(err => {
+            previewStatus.innerHTML = `
+              <span class="inline-flex items-center gap-1 text-rose-700 bg-rose-100 font-semibold px-2 py-0.5 rounded-full text-[11px]">
+                <sl-icon name="exclamation-triangle"></sl-icon> Corrupted .kbshare File
+              </span>
+            `;
+            previewError.classList.remove('hidden');
+            previewError.textContent = err.message || 'Failed to unpack .kbshare file.';
+            previewContent.innerHTML = '';
+          });
+          return;
+        }
+      }
 
       if (isJsonFile || (trimmed.startsWith('{') && trimmed.endsWith('}')) || (trimmed.startsWith('[') && trimmed.endsWith(']'))) {
         try {
@@ -358,7 +459,15 @@ export class CSVImportDialog {
       submitBtn.disabled = true;
 
       try {
-        if (isJson) {
+        if (parsedCache && parsedCache.isKbShare) {
+          await onImport(parsedCache.data, text, {
+            filename,
+            isJson: false,
+            isKbShare: true,
+            shareType: parsedCache.type
+          });
+          await dialog.hide();
+        } else if (isJson) {
           // JSON path
           const parsed = JSON.parse(text);
           await onImport(parsed, text, { filename, isJson: true });

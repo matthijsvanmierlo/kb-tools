@@ -12,6 +12,7 @@ import { CSVImportDialog } from '../../components/csv-import-dialog.js';
 import { FLASHCARDS_CSV_TEMPLATE } from '../../core/csv-templates.js';
 import { renderStudyPlanner, applySavedRetention } from './study-planner.js';
 import { normalizeSharedEnvelope } from '../../core/shared-payload.js';
+import { ContentImporter } from '../../core/content-importer.js';
 import { ClassManager } from '../../components/class-manager.js';
 import * as jspdfLib from 'jspdf';
 import * as autotableLib from 'jspdf-autotable';
@@ -164,14 +165,21 @@ async function renderLibrary(container, router) {
     onImport: () => {
       CSVImportDialog.open({
         title: 'Import Flashcards',
-        subtitle: 'Upload a CSV/JSON file or copy and paste rows directly from Google Sheets or Excel.',
+        subtitle: 'Upload a .kbshare lesson file, CSV/JSON file, or copy and paste rows from Google Sheets or Excel.',
         templateFilename: 'flashcards_template.csv',
         templateContent: FLASHCARDS_CSV_TEMPLATE,
         schema: FlashcardItemSchema,
         acceptJson: true,
-        onImport: async (resultData, rawText, { filename, isJson }) => {
+        acceptKbShare: true,
+        onImport: async (resultData, rawText, { filename, isJson, isKbShare }) => {
           const activeClass = ClassManager.getActiveFilter() || null;
-          if (isJson) {
+          if (isKbShare) {
+            const res = await ContentImporter.importRecordToLibrary('flashcards', resultData, {
+              classId: activeClass,
+              filename
+            });
+            toast.success(`Imported deck "${res.title}" with ${res.count} cards from .kbshare!`);
+          } else if (isJson) {
             const parsed = normalizeSharedEnvelope({ type: 'flashcards', payload: resultData }).payload;
             const newDeck = {
               version: 1,
