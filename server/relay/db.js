@@ -95,21 +95,40 @@ export function createDatabase(filePath = ':memory:') {
     );
 
     CREATE INDEX IF NOT EXISTS idx_sync_chunks_ws ON sync_chunks(workspace_id, seq);
+    CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at);
+    CREATE INDEX IF NOT EXISTS idx_sync_chunks_created ON sync_chunks(created_at);
     CREATE INDEX IF NOT EXISTS idx_payloads_expires ON payloads(expires_at);
     CREATE INDEX IF NOT EXISTS idx_drops_expires ON drops(expires_at);
     CREATE INDEX IF NOT EXISTS idx_submissions_drop ON submissions(drop_id, received_at);
   `);
 
+  // Databases created before drop secrets existed get the column (old drops keep working without)
+  const dropColumns = db.prepare('PRAGMA table_info(drops)').all().map(c => c.name);
+  if (!dropColumns.includes('secret_hash')) db.exec('ALTER TABLE drops ADD COLUMN secret_hash TEXT');
+
   return {
     raw: db,
 
-    pruneExpired() {
+    /**
+     * Remove expired payloads and drops, and student data older than the retention period:
+     * submissions and drafts (teachers import them long before), and sync chunks (each device's
+     * snapshot already contains them; snapshots themselves are kept).
+     * @param {{ retentionDays?: number|null }} [opts]
+     */
+    pruneExpired({ retentionDays = null } = {}) {
       const now = new Date().toISOString();
       const prunePayloads = db.prepare('DELETE FROM payloads WHERE expires_at IS NOT NULL AND expires_at < ?');
       const pruneDrops = db.prepare('DELETE FROM drops WHERE expires_at IS NOT NULL AND expires_at < ?');
       const pRes = prunePayloads.run(now);
       const dRes = pruneDrops.run(now);
-      return { payloadsPruned: pRes.changes, dropsPruned: dRes.changes };
+      const result = { payloadsPruned: pRes.changes, dropsPruned: dRes.changes, submissionsPruned: 0, draftsPruned: 0, chunksPruned: 0 };
+      if (retentionDays > 0) {
+        const cutoff = new Date(Date.now() - retentionDays * 86400000).toISOString();
+        result.submissionsPruned = db.prepare('DELETE FROM submissions WHERE received_at < ?').run(cutoff).changes;
+        result.draftsPruned = db.prepare('DELETE FROM drafts WHERE updated_at < ?').run(cutoff).changes;
+        result.chunksPruned = db.prepare('DELETE FROM sync_chunks WHERE created_at < ?').run(cutoff).changes;
+      }
+      return result;
     },
 
     teachers: {
@@ -148,10 +167,10 @@ export function createDatabase(filePath = ':memory:') {
     },
 
     drops: {
-      create({ id, teacherId, assignmentId, publishVersion, expiresAt }) {
+      create({ id, teacherId, assignmentId, publishVersion, expiresAt, secretHash = null }) {
         const now = new Date().toISOString();
-        const stmt = db.prepare('INSERT INTO drops (id, teacher_id, assignment_id, publish_version, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)');
-        stmt.run(id, teacherId, assignmentId, publishVersion ?? null, now, expiresAt || null);
+        const stmt = db.prepare('INSERT INTO drops (id, teacher_id, assignment_id, publish_version, created_at, expires_at, secret_hash) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        stmt.run(id, teacherId, assignmentId, publishVersion ?? null, now, expiresAt || null, secretHash);
         return { id };
       },
       get(id) {

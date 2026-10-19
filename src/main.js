@@ -134,6 +134,7 @@ async function bootstrapApp() {
     bindStorageControls();
     window.addEventListener('kb-request-backup', () => sync.exportManualBackup());
     window.addEventListener('kb-open-backup-location', () => openBackupLocation('setup'));
+    window.addEventListener('kb-restore-backup-text', (e) => restoreBackupText(e.detail.text, e.detail.sourceName));
     bindHelpControls();
     initThemeSwitcher();
     updateRelayStatusIndicator();

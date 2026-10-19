@@ -83,7 +83,7 @@ export async function publishAssignment(assignment, roster, { handinEmail = '', 
         publishVersion: next.publish.version,
         expiresAt: new Date(Date.now() + 180 * 86400000).toISOString()
       });
-      payload.relay = { base_url: activeTransport.baseUrl, drop_id: drop.dropId };
+      payload.relay = { base_url: activeTransport.baseUrl, drop_id: drop.dropId, drop_secret: drop.dropSecret };
       next.publish.relay = payload.relay;
     } catch (e) {
       console.warn('Could not create drop on relay:', e);

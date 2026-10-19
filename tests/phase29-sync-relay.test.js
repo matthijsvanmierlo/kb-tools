@@ -74,14 +74,16 @@ describe('Phase 29: Relay sync endpoints', () => {
 
   it('stores student drafts only as KBDRAFT1 ciphertext under a 64-hex id', async () => {
     const t = new RelayTransport({ baseUrl, token: tokens.T1 });
-    const { dropId } = await t.createDrop({ assignmentId: 'as-1' });
+    const { dropId, dropSecret } = await t.createDrop({ assignmentId: 'as-1' });
     const anon = new RelayTransport({ baseUrl });
     const id = 'a'.repeat(64);
-    expect(await anon.getDraft(dropId, id)).toBeNull();
-    await expect(anon.putDraft(dropId, id, 'plain text')).rejects.toThrow(/400/);
-    await expect(anon.putDraft(dropId, 'short', 'KBDRAFT1.x')).rejects.toThrow(/400/);
-    await anon.putDraft(dropId, id, 'KBDRAFT1.abc');
-    expect((await anon.getDraft(dropId, id)).ciphertext).toBe('KBDRAFT1.abc');
+    const opts = { dropSecret };
+    await expect(anon.getDraft(dropId, id)).rejects.toThrow(/403/);
+    expect(await anon.getDraft(dropId, id, opts)).toBeNull();
+    await expect(anon.putDraft(dropId, id, 'plain text', opts)).rejects.toThrow(/400/);
+    await expect(anon.putDraft(dropId, 'short', 'KBDRAFT1.x', opts)).rejects.toThrow(/400/);
+    await anon.putDraft(dropId, id, 'KBDRAFT1.abc', opts);
+    expect((await anon.getDraft(dropId, id, opts)).ciphertext).toBe('KBDRAFT1.abc');
     expect((await fetch(`${baseUrl}/api/v1/health`).then(json)).features).toEqual(expect.arrayContaining(['sync', 'drafts']));
   });
 });
@@ -179,8 +181,8 @@ describe('Phase 29: Co-teaching a class', () => {
 describe('Phase 29: Student drafts that follow the student', () => {
   it('continues on another device only with the right access code, and never in the clear', async () => {
     const t = new RelayTransport({ baseUrl, token: tokens.T1 });
-    const { dropId } = await t.createDrop({ assignmentId: 'as-9' });
-    const params = { relay: { base_url: baseUrl, drop_id: dropId }, assignmentId: 'as-9', publishVersion: 1, studentId: 's1' };
+    const { dropId, dropSecret } = await t.createDrop({ assignmentId: 'as-9' });
+    const params = { relay: { base_url: baseUrl, drop_id: dropId, drop_secret: dropSecret }, assignmentId: 'as-9', publishVersion: 1, studentId: 's1' };
     expect(DraftRoamer.canRoam({ relay: params.relay }, 'K7M2-QX9P')).toBe(true);
     expect(DraftRoamer.canRoam({ relay: params.relay }, '')).toBe(false);
 

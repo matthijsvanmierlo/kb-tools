@@ -72,7 +72,11 @@ export function resolveRequestPath(rawUrl, rootDir = __dirname) {
   return resolved;
 }
 
-const server = http.createServer((req, res) => {
+/**
+ * Serve the static app with security headers. Exported so the relay can serve the app on its own
+ * origin (KB_RELAY_SERVE_APP=1), e.g. on a school LAN server.
+ */
+export function appHandler(req, res) {
   const headers = securityHeaders();
 
   if (req.method !== 'GET' && req.method !== 'HEAD') {
@@ -111,7 +115,9 @@ const server = http.createServer((req, res) => {
     });
     res.end(req.method === 'HEAD' ? undefined : content);
   });
-});
+}
+
+const server = http.createServer(appHandler);
 
 if (process.argv[1] && path.resolve(process.argv[1]) === __filename) {
   server.listen(PORT, () => {

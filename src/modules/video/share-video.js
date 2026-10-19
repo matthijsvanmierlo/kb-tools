@@ -108,7 +108,7 @@ export async function openVideoShareDialog(assessment) {
             assignmentId: assessment.id,
             expiresAt: new Date(Date.now() + 180 * 86400000).toISOString()
           });
-          payload.relay = { base_url: transport.baseUrl, drop_id: drop.dropId };
+          payload.relay = { base_url: transport.baseUrl, drop_id: drop.dropId, drop_secret: drop.dropSecret };
         } catch (e) {
           console.warn('Could not create drop on relay for video:', e);
         }

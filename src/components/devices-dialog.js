@@ -4,83 +4,11 @@ import { toast } from '../utils/toast.js';
 import { replication, CLASS_SHARE_PREFIX } from '../core/replication/manager.js';
 import { createOffer } from '../core/replication/link.js';
 import { KeyVault } from '../core/keyvault.js';
-import { showQrSequence, openQrScanner } from './qr-handoff.js';
+import { showQrSequence } from './qr-handoff.js';
+import { modal, copyBlock, bindCopy, receiveCode } from './code-exchange.js';
 
 const esc = (v) => Sanitizer.escapeHTML(v);
 const fmt = (iso) => (iso ? new Date(iso).toLocaleString() : 'never');
-
-function modal(label, html, buttons, { width = '560px', onReady = null } = {}) {
-  return new Promise((resolve) => {
-    const dialog = document.createElement('sl-dialog');
-    dialog.label = label;
-    dialog.style.setProperty('--width', `min(${width}, 96vw)`);
-    dialog.innerHTML = `${html}<div slot="footer" class="flex flex-wrap justify-end gap-2">${buttons
-      .map(b => `<sl-button data-value="${esc(b.value)}" variant="${b.variant || 'default'}">${esc(b.label)}</sl-button>`).join('')}</div>`;
-    let result = null;
-    dialog.addEventListener('click', (e) => {
-      const btn = e.target.closest('[data-value]');
-      if (!btn || !dialog.contains(btn)) return;
-      result = { value: btn.dataset.value, dialog };
-      dialog.hide();
-    });
-    dialog.addEventListener('sl-after-hide', (e) => {
-      if (e.target !== dialog) return;
-      dialog.remove();
-      resolve(result);
-    });
-    document.body.appendChild(dialog);
-    onReady?.(dialog);
-    dialog.show();
-  });
-}
-
-const copyBlock = (code) => `
-  <details class="text-left text-xs mt-2">
-    <summary class="cursor-pointer text-blue-700">No camera? Copy the code instead</summary>
-    <textarea readonly class="w-full mt-2 font-mono text-[11px] border border-slate-200 rounded-lg p-2 h-24" data-code>${esc(code)}</textarea>
-    <sl-button size="small" data-copy class="mt-1">Copy</sl-button>
-  </details>`;
-
-function bindCopy(dialog) {
-  dialog.querySelector('[data-copy]')?.addEventListener('click', async () => {
-    const text = dialog.querySelector('[data-code]')?.value || '';
-    try {
-      await navigator.clipboard.writeText(text);
-      toast.success('Copied.');
-    } catch (_) {
-      dialog.querySelector('[data-code]')?.select();
-    }
-  });
-}
-
-/** Get a code from the other screen: camera scan, or paste */
-async function receiveCode({ label, intro }) {
-  const choice = await modal(label, `
-    <div class="space-y-3 text-sm">
-      <p class="text-slate-700">${esc(intro)}</p>
-      <sl-textarea id="dv-paste" rows="3" placeholder="…or paste the code here" class="font-mono"></sl-textarea>
-    </div>`, [
-    { value: 'cancel', label: 'Cancel' },
-    { value: 'scan', label: 'Scan with camera' },
-    { value: 'paste', label: 'Use pasted code', variant: 'primary' }
-  ]);
-  if (!choice || choice.value === 'cancel') return null;
-  if (choice.value === 'paste') {
-    const text = choice.dialog.querySelector('#dv-paste')?.value?.trim();
-    return text || null;
-  }
-  return new Promise((resolve) => {
-    let got = null;
-    openQrScanner({
-      label,
-      once: true,
-      readyText: 'Point the camera at the code on the other screen.',
-      noCamera: 'This browser cannot use the camera. Paste the code instead.',
-      onSubmission: (text) => { got = text; },
-      onClose: () => resolve(got)
-    });
-  });
-}
 
 async function confirmSafety(safety, what) {
   const r = await modal('Check the safety number', `
@@ -157,7 +85,9 @@ async function setUpFromOtherDevice() {
     if (!(await confirmSafety(link.safety, 'link this device'))) return;
     const { status, needsLocation } = await link.apply();
     toast.success('This device is now linked. It can open your hand-ins and backups.');
-    if (needsLocation) {
+    if (link.channel === 'none') {
+      toast.info('Your other device has no sync set up. To copy your data now, use "Receive data from a nearby device" here and "Send your data to a nearby device" there.', 12000);
+    } else if (needsLocation) {
       toast.info('Choose the same backup location as on your other device to start syncing.', 10000);
       window.dispatchEvent(new CustomEvent('kb-open-backup-location'));
     } else if (status.state === 'error') {
@@ -167,6 +97,27 @@ async function setUpFromOtherDevice() {
   } catch (err) {
     toast.danger(err.message || 'Could not link this device.');
   }
+}
+
+/** Copy everything to a nearby device as an encrypted backup (no server or cloud needed) */
+async function sendDataNearby() {
+  const { sync } = await import('../core/sync.js');
+  const { sendDirect } = await import('./direct-transfer.js');
+  const text = await sync.buildBackupText();
+  await sendDirect(text, {
+    label: 'Send your data to a nearby device',
+    receiverSteps: 'On the other device: Devices & sharing → "Receive data from a nearby device", then scan this code.'
+  });
+}
+
+async function receiveDataNearby() {
+  const { receiveDirect } = await import('./direct-transfer.js');
+  const text = await receiveDirect({
+    label: 'Receive data from a nearby device',
+    senderSteps: 'On the other device: Devices & sharing → "Send your data to a nearby device". Scan or paste the code it shows.'
+  });
+  // Restored like a backup file: confirmation first, recovery code if this device isn't linked
+  if (text) window.dispatchEvent(new CustomEvent('kb-restore-backup-text', { detail: { text, sourceName: 'Nearby device' } }));
 }
 
 async function shareClass() {
@@ -271,6 +222,8 @@ export async function openDevicesDialog() {
           <sl-button size="small" data-value="link"><sl-icon slot="prefix" name="phone"></sl-icon>Link a new device</sl-button>
           <sl-button size="small" data-value="setup"><sl-icon slot="prefix" name="laptop"></sl-icon>Set up this device from another one</sl-button>
           ${ws && ws.channel.type !== 'none' ? '<sl-button size="small" data-value="sync"><sl-icon slot="prefix" name="arrow-repeat"></sl-icon>Sync now</sl-button>' : ''}
+          <sl-button size="small" data-value="send-nearby"><sl-icon slot="prefix" name="wifi"></sl-icon>Send your data to a nearby device</sl-button>
+          <sl-button size="small" data-value="receive-nearby"><sl-icon slot="prefix" name="download"></sl-icon>Receive data from a nearby device</sl-button>
           ${conflicts ? `<sl-button size="small" variant="warning" data-value="conflicts">Review ${conflicts} grade conflict${conflicts === 1 ? '' : 's'}</sl-button>` : ''}
         </div>
       </section>
@@ -303,6 +256,8 @@ export async function openDevicesDialog() {
     case 'share': return shareClass();
     case 'join': return joinClass();
     case 'conflicts': return reviewConflicts();
+    case 'send-nearby': return sendDataNearby();
+    case 'receive-nearby': return receiveDataNearby();
     case 'sync': {
       const s = await replication.syncNow();
       if (s.state === 'error') toast.warning(s.error);

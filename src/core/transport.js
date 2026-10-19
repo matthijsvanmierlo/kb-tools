@@ -63,9 +63,10 @@ export class SyncTransport {
    * Submit an encrypted submission envelope to a drop box (student side, no auth).
    * @param {string} dropId
    * @param {string} envelopeText
+   * @param {{ dropSecret?: string|null }} [opts] - from the assignment payload (newer drops require it)
    * @returns {Promise<{ receiptId: string, received_at: string }>}
    */
-  async submitToDrop(dropId, envelopeText) {
+  async submitToDrop(dropId, envelopeText, opts = {}) {
     throw new Error('submitToDrop not supported by this transport');
   }
 
@@ -204,14 +205,15 @@ export class RelayTransport extends SyncTransport {
       throw new Error(err.error || `Failed to create drop: ${res.status}`);
     }
     const data = await res.json();
-    return { dropId: data.drop_id || data.dropId };
+    return { dropId: data.drop_id || data.dropId, dropSecret: data.drop_secret || null };
   }
 
-  async submitToDrop(dropId, envelopeText) {
+  async submitToDrop(dropId, envelopeText, { dropSecret = null } = {}) {
     const res = await fetch(`${this.apiBase}/drops/${encodeURIComponent(dropId)}/submissions`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'text/plain'
+        'Content-Type': 'text/plain',
+        ...(dropSecret ? { 'X-KB-Drop-Secret': dropSecret } : {})
       },
       body: envelopeText
     });
@@ -257,10 +259,10 @@ export class RelayTransport extends SyncTransport {
 
   // --- Student draft roaming (no auth; drafts are encrypted with the student's access code) ---
 
-  async putDraft(dropId, draftId, ciphertext) {
+  async putDraft(dropId, draftId, ciphertext, { dropSecret = null } = {}) {
     const res = await fetch(`${this.apiBase}/drops/${encodeURIComponent(dropId)}/drafts/${encodeURIComponent(draftId)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'text/plain' },
+      headers: { 'Content-Type': 'text/plain', ...(dropSecret ? { 'X-KB-Drop-Secret': dropSecret } : {}) },
       body: ciphertext
     });
     if (!res.ok) throw new Error(`Failed to save draft: ${res.status}`);
@@ -268,8 +270,10 @@ export class RelayTransport extends SyncTransport {
   }
 
   /** @returns {Promise<{ ciphertext: string, updated_at: string }|null>} */
-  async getDraft(dropId, draftId) {
-    const res = await fetch(`${this.apiBase}/drops/${encodeURIComponent(dropId)}/drafts/${encodeURIComponent(draftId)}`);
+  async getDraft(dropId, draftId, { dropSecret = null } = {}) {
+    const res = await fetch(`${this.apiBase}/drops/${encodeURIComponent(dropId)}/drafts/${encodeURIComponent(draftId)}`, {
+      headers: dropSecret ? { 'X-KB-Drop-Secret': dropSecret } : {}
+    });
     if (res.status === 404) return null;
     if (!res.ok) throw new Error(`Failed to load draft: ${res.status}`);
     return res.json();

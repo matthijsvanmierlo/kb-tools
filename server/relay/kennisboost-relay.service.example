@@ -1,0 +1,40 @@
+# KennisBoost relay as a systemd service (Linux server, Raspberry Pi OS, Ubuntu, Debian).
+#
+#   sudo useradd --system --home /opt/kennisboost-tools --shell /usr/sbin/nologin kennisboost
+#   sudo cp server/relay/kennisboost-relay.service.example /etc/systemd/system/kennisboost-relay.service
+#   (adjust the paths below to where you cloned the app and ran `npm run relay:init`)
+#   sudo systemctl daemon-reload && sudo systemctl enable --now kennisboost-relay
+#   journalctl -u kennisboost-relay -f        # logs
+#
+# Requires Node.js 22.13 or newer (built-in node:sqlite). No npm install is needed for the relay.
+
+[Unit]
+Description=KennisBoost relay (encrypted hand-in, short links and sync)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kennisboost
+Group=kennisboost
+WorkingDirectory=/opt/kennisboost-tools
+EnvironmentFile=/opt/kennisboost-tools/relay-deploy/relay.env
+ExecStart=/usr/bin/node server/relay/index.js
+Restart=on-failure
+RestartSec=5
+
+# To listen on port 443 directly (PORT=443 in relay.env), uncomment:
+# AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+# Hardening: the relay only needs to write its database directory
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ReadWritePaths=/opt/kennisboost-tools/relay-deploy/data
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

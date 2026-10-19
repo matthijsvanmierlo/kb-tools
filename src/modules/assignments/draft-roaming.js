@@ -54,7 +54,7 @@ export async function openDraft(secrets, text) {
 export class DraftRoamer {
   /**
    * @param {object} opts
-   * @param {{ base_url?: string, drop_id: string }} opts.relay - from the assignment payload
+   * @param {{ base_url?: string, drop_id: string, drop_secret?: string }} opts.relay - from the assignment payload
    * @param {string} opts.assignmentId
    * @param {number} opts.publishVersion
    * @param {string} opts.studentId
@@ -63,6 +63,7 @@ export class DraftRoamer {
    */
   constructor({ relay, assignmentId, publishVersion, studentId, accessCode, transport = null }) {
     this.dropId = relay.drop_id;
+    this.dropOpts = { dropSecret: relay.drop_secret || null };
     this.transport = transport || new RelayTransport({ baseUrl: relay.base_url || '' });
     this.params = { assignmentId, publishVersion, studentId, accessCode };
     this._secrets = null;
@@ -82,7 +83,7 @@ export class DraftRoamer {
   /** The newest saved draft, or null (none, unreadable, or the work was already handed in) */
   async load() {
     const secrets = await this._getSecrets();
-    const row = await this.transport.getDraft(this.dropId, secrets.id);
+    const row = await this.transport.getDraft(this.dropId, secrets.id, this.dropOpts);
     if (!row) return null;
     const draft = await openDraft(secrets, row.ciphertext);
     return draft && !draft.submitted ? draft : null;
@@ -101,7 +102,7 @@ export class DraftRoamer {
     const draft = this._pending;
     this._pending = null;
     const secrets = await this._getSecrets();
-    await this.transport.putDraft(this.dropId, secrets.id, await sealDraft(secrets, draft));
+    await this.transport.putDraft(this.dropId, secrets.id, await sealDraft(secrets, draft), this.dropOpts);
   }
 
   /** After handing in: overwrite the draft so another device doesn't offer stale answers */

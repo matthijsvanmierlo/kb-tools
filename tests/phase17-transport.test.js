@@ -263,21 +263,24 @@ describe('Phase 17: Sync-Server Readiness & Transport (§9)', () => {
       const teacherTransport = new RelayTransport({ baseUrl: serverUrl, token: teacherToken });
 
       // 1. Teacher creates drop
-      const { dropId } = await teacherTransport.createDrop({
+      const { dropId, dropSecret } = await teacherTransport.createDrop({
         assignmentId: 'asg-drop-1',
         publishVersion: 1
       });
       expect(typeof dropId).toBe('string');
+      expect(dropSecret).toMatch(/^[0-9a-f]{48}$/);
 
-      // 2. Student submits envelope (no auth needed)
+      // 2. Student submits envelope (no auth, but the drop secret from the assignment payload)
       const studentTransport = new RelayTransport({ baseUrl: serverUrl });
       const envelope = 'KBSUB1.header.iv.ciphertext.mac';
-      const subResult = await studentTransport.submitToDrop(dropId, envelope);
+      await expect(studentTransport.submitToDrop(dropId, envelope)).rejects.toThrow(/drop secret/);
+      await expect(studentTransport.submitToDrop(dropId, envelope, { dropSecret: 'wrong' })).rejects.toThrow(/drop secret/);
+      const subResult = await studentTransport.submitToDrop(dropId, envelope, { dropSecret });
       expect(subResult.receiptId).toBeDefined();
       expect(subResult.received_at).toBeDefined();
 
       // Invalid format rejected
-      await expect(studentTransport.submitToDrop(dropId, 'INVALID.envelope')).rejects.toThrow();
+      await expect(studentTransport.submitToDrop(dropId, 'INVALID.envelope', { dropSecret })).rejects.toThrow();
 
       // 3. Teacher lists drop submissions
       const list = await teacherTransport.listDrop(dropId);
@@ -291,7 +294,7 @@ describe('Phase 17: Sync-Server Readiness & Transport (§9)', () => {
 
       // 4. Delete drop
       await teacherTransport.deleteDrop(dropId);
-      await expect(studentTransport.submitToDrop(dropId, envelope)).rejects.toThrow();
+      await expect(studentTransport.submitToDrop(dropId, envelope, { dropSecret })).rejects.toThrow();
     });
 
     it('enforces payload size limit (512KB)', async () => {
@@ -306,7 +309,7 @@ describe('Phase 17: Sync-Server Readiness & Transport (§9)', () => {
 
     it('enforces rate limiting on submission endpoint (30/min)', async () => {
       const teacherTransport = new RelayTransport({ baseUrl: serverUrl, token: teacherToken });
-      const { dropId } = await teacherTransport.createDrop({ assignmentId: 'rate-limit-test' });
+      const { dropId, dropSecret } = await teacherTransport.createDrop({ assignmentId: 'rate-limit-test' });
 
       const studentTransport = new RelayTransport({ baseUrl: serverUrl });
       const envelope = 'KBSUB1.test-envelope';
@@ -314,7 +317,7 @@ describe('Phase 17: Sync-Server Readiness & Transport (§9)', () => {
       let rateLimited = false;
       for (let i = 0; i < 35; i++) {
         try {
-          await studentTransport.submitToDrop(dropId, envelope);
+          await studentTransport.submitToDrop(dropId, envelope, { dropSecret });
         } catch (err) {
           if (err.message.includes('Rate limit exceeded')) {
             rateLimited = true;

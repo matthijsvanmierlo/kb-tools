@@ -115,6 +115,9 @@ export async function renderInboxView(params, router, container) {
             <sl-button size="small" id="btn-scan-qr">
               <sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Scan QR codes
             </sl-button>
+            <sl-button size="small" id="btn-receive-direct" title="A student sends straight from their device on the same network">
+              <sl-icon slot="prefix" name="wifi"></sl-icon> Receive directly
+            </sl-button>
             <sl-button size="small" id="btn-paste-codes">
               <sl-icon slot="prefix" name="clipboard-plus"></sl-icon> Paste codes
             </sl-button>
@@ -346,6 +349,15 @@ export async function renderInboxView(params, router, container) {
       await openQrScanner({
         onSubmission: (text) => classifyAndStage([{ source: `QR scan #${++n}`, text }])
       });
+    });
+
+    container.querySelector('#btn-receive-direct')?.addEventListener('click', async () => {
+      const { receiveDirect } = await import('../../components/direct-transfer.js');
+      const text = await receiveDirect({
+        label: 'Receive a student\'s work directly',
+        senderSteps: 'On the student\'s device: More ways to hand in → "Send directly to your teacher\'s device". Scan or paste the code it shows.'
+      });
+      if (text) await classifyAndStage([{ source: 'Direct transfer', text }]);
     });
 
     clearBtn?.addEventListener('click', () => {

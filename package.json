@@ -11,6 +11,7 @@
     "watch:css": "tailwindcss -c tailwind.config.js -i css/tailwind.src.css -o css/tailwind.output.css --watch",
     "relay": "node server/relay/index.js",
     "relay:add-teacher": "node scripts/relay-add-teacher.mjs",
+    "relay:init": "node scripts/relay-init.mjs",
     "vendor": "node scripts/vendor.mjs",
     "csp": "node scripts/csp.mjs",
     "build:sw": "node scripts/sw-manifest.mjs",

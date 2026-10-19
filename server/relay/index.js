@@ -1,4 +1,6 @@
 import http from 'node:http';
+import https from 'node:https';
+import fs from 'node:fs';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { createDatabase } from './db.js';
 import { extractBearerToken, hashToken } from './auth.js';
@@ -25,21 +27,36 @@ function sameHash(a, b) {
   return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
 }
 
+const DEFAULT_RETENTION_DAYS = 180;
+
 /**
- * In-memory IP rate limiter for public submission endpoints.
+ * In-memory rate limiter for public endpoints. Clients are keyed by a salted hash of their IP
+ * (the salt is random per process), and entries are dropped when their window ends, so the relay
+ * never keeps students' IP addresses, not even in memory.
  */
-class RateLimiter {
+export class RateLimiter {
   constructor(limit = RATE_LIMIT_MAX, windowMs = RATE_LIMIT_WINDOW_MS) {
     this.limit = limit;
     this.windowMs = windowMs;
     this.clients = new Map();
+    this.salt = randomBytes(16).toString('hex');
+  }
+
+  _key(ip) {
+    return createHash('sha256').update(`${this.salt}|${ip}`).digest('hex').slice(0, 24);
+  }
+
+  sweep(now = Date.now()) {
+    for (const [k, e] of this.clients) if (now > e.resetAt) this.clients.delete(k);
   }
 
   isAllowed(ip) {
     const now = Date.now();
-    const entry = this.clients.get(ip);
+    if (this.clients.size > 5000) this.sweep(now);
+    const key = this._key(ip);
+    const entry = this.clients.get(key);
     if (!entry || now > entry.resetAt) {
-      this.clients.set(ip, { count: 1, resetAt: now + this.windowMs });
+      this.clients.set(key, { count: 1, resetAt: now + this.windowMs });
       return true;
     }
     if (entry.count >= this.limit) {
@@ -82,37 +99,54 @@ function readBody(req, maxBytes) {
 }
 
 /**
- * Create and configure relay HTTP server.
- * @param {{ dbPath?: string, port?: number, origins?: string }} [opts]
- * @returns {{ server: http.Server, db: any, close: () => Promise<void> }}
+ * Create and configure the relay server.
+ * @param {object} [opts]
+ * @param {string} [opts.dbPath]
+ * @param {string} [opts.origins] - comma-separated CORS origins (default *)
+ * @param {number} [opts.retentionDays] - delete submissions, drafts and sync chunks older than this (0 = keep)
+ * @param {{ cert: string|Buffer, key: string|Buffer }} [opts.tls] - serve HTTPS (needed on a LAN for PWAs)
+ * @param {(req, res) => void} [opts.appHandler] - also serve the KennisBoost app for non-/api/ paths,
+ *   so app and relay share one origin and the CSP needs no extra entries
+ * @returns {{ server: http.Server|https.Server, db: any, limiters: RateLimiter[], close: () => Promise<void> }}
  */
 export function createRelayServer(opts = {}) {
   const dbPath = opts.dbPath || process.env.KB_RELAY_DB || ':memory:';
   const originsEnv = opts.origins ?? process.env.KB_RELAY_ORIGINS;
   const allowedOrigins = originsEnv ? originsEnv.split(',').map(s => s.trim()) : ['*'];
+  const retentionEnv = process.env.KB_RELAY_RETENTION_DAYS;
+  const retentionDays = opts.retentionDays ?? (retentionEnv !== undefined ? Number(retentionEnv) : DEFAULT_RETENTION_DAYS);
 
   const db = createDatabase(dbPath);
   const limiter = new RateLimiter();
   const draftLimiter = new RateLimiter(DRAFT_RATE_LIMIT_MAX);
 
-  // Hourly pruning
-  const pruneInterval = setInterval(() => {
+  // Hourly pruning of expired data and rate-limit entries
+  const prune = () => {
     try {
-      db.pruneExpired();
+      db.pruneExpired({ retentionDays });
+      limiter.sweep();
+      draftLimiter.sweep();
     } catch (e) {
       console.error('[Relay] Prune error:', e);
     }
-  }, 3600 * 1000);
+  };
+  prune();
+  const pruneInterval = setInterval(prune, 3600 * 1000);
   if (pruneInterval.unref) pruneInterval.unref();
 
-  const server = http.createServer(async (req, res) => {
+  const handler = async (req, res) => {
+    if (opts.appHandler && !String(req.url || '').startsWith('/api/')) {
+      opts.appHandler(req, res);
+      return;
+    }
+
     const origin = req.headers['origin'] || '*';
     const isOriginAllowed = allowedOrigins.includes('*') || allowedOrigins.includes(origin);
 
     if (isOriginAllowed) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-KB-Workspace-Key');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-KB-Workspace-Key, X-KB-Drop-Secret');
     }
 
     if (req.method === 'OPTIONS') {
@@ -210,6 +244,11 @@ export function createRelayServer(opts = {}) {
         });
         return;
       }
+
+      // Drops created with a secret only accept submissions and drafts that present it. The drop id
+      // shows up in the teacher's listing URLs; the secret travels only in a header.
+      const dropSecretOk = (drop) => !drop.secret_hash
+        || sameHash(drop.secret_hash, sha256(req.headers['x-kb-drop-secret'] || ''));
 
       const readJson = async (max) => {
         try {
@@ -333,6 +372,10 @@ export function createRelayServer(opts = {}) {
           sendError(410, 'Drop box expired');
           return;
         }
+        if (!dropSecretOk(drop)) {
+          sendError(403, 'Forbidden: missing or wrong drop secret');
+          return;
+        }
         if (req.method === 'PUT') {
           const text = (await readBody(req, MAX_DRAFT_SIZE)).trim();
           if (!text.startsWith('KBDRAFT1.')) {
@@ -375,15 +418,17 @@ export function createRelayServer(opts = {}) {
         }
 
         const dropId = randomBytes(12).toString('hex');
+        const dropSecret = randomBytes(24).toString('hex');
         db.drops.create({
           id: dropId,
           teacherId: teacher.id,
           assignmentId: parsed.assignment_id,
           publishVersion: parsed.publish_version ?? null,
-          expiresAt: parsed.expires_at || null
+          expiresAt: parsed.expires_at || null,
+          secretHash: sha256(dropSecret)
         });
 
-        sendJson(201, { drop_id: dropId });
+        sendJson(201, { drop_id: dropId, drop_secret: dropSecret });
         return;
       }
 
@@ -404,6 +449,10 @@ export function createRelayServer(opts = {}) {
         }
         if (drop.expired) {
           sendError(410, 'Drop box expired');
+          return;
+        }
+        if (!dropSecretOk(drop)) {
+          sendError(403, 'Forbidden: missing or wrong drop secret');
           return;
         }
 
@@ -484,11 +533,14 @@ export function createRelayServer(opts = {}) {
         sendError(500, 'Internal server error');
       }
     }
-  });
+  };
+
+  const server = opts.tls ? https.createServer(opts.tls, handler) : http.createServer(handler);
 
   return {
     server,
     db,
+    limiters: [limiter, draftLimiter],
     close: () => {
       clearInterval(pruneInterval);
       return new Promise((resolve, reject) => {
@@ -501,11 +553,22 @@ export function createRelayServer(opts = {}) {
 // CLI entry point
 if (process.argv[1] && process.argv[1].endsWith('server/relay/index.js')) {
   const port = parseInt(process.env.PORT || process.env.KB_RELAY_PORT || String(DEFAULT_PORT), 10);
+  const host = process.env.KB_RELAY_HOST || undefined;
   const dbPath = process.env.KB_RELAY_DB || './data/relay.sqlite';
-  const instance = createRelayServer({ dbPath, port });
-  instance.server.listen(port, () => {
+  const certPath = process.env.KB_RELAY_TLS_CERT;
+  const keyPath = process.env.KB_RELAY_TLS_KEY;
+  const tls = certPath && keyPath ? { cert: fs.readFileSync(certPath), key: fs.readFileSync(keyPath) } : null;
+  let appHandler = null;
+  if (process.env.KB_RELAY_SERVE_APP === '1') {
+    ({ appHandler } = await import('../../server.js'));
+  }
+  const instance = createRelayServer({ dbPath, port, tls, appHandler });
+  instance.server.listen(port, host, () => {
     const actualPort = instance.server.address().port;
-    console.log(`[KennisBoost Relay Server] listening on http://localhost:${actualPort}`);
+    const scheme = tls ? 'https' : 'http';
+    console.log(`[KennisBoost Relay Server] listening on ${scheme}://localhost:${actualPort}`);
     console.log(`[KennisBoost Relay Server] SQLite database: ${dbPath}`);
+    if (appHandler) console.log('[KennisBoost Relay Server] also serving the KennisBoost app on this origin');
+    if (!tls) console.log('[KennisBoost Relay Server] plain HTTP: put it behind HTTPS (or set KB_RELAY_TLS_CERT/KB_RELAY_TLS_KEY) for use on a network');
   });
 }

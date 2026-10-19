@@ -34,6 +34,8 @@ async function pipeBytes(bytes, transform) {
   const writer = transform.writable.getWriter();
   // Write and read concurrently: awaiting the write first can deadlock on backpressure
   const written = writer.write(bytes).then(() => writer.close());
+  // Damaged input fails the read below; the write fails too, and that must not go unhandled
+  written.catch(() => {});
   const reader = transform.readable.getReader();
   const chunks = [];
   let total = 0;

@@ -644,19 +644,11 @@ export async function renderTakeView(params, router, container) {
 
             <ol class="space-y-4 text-sm text-amber-950 list-decimal pl-5">
               <li>
-                <div class="font-semibold text-amber-900">Save your submission:</div>
+                <div class="font-semibold text-amber-900">Hand it in to your teacher${payload.relay?.drop_id ? ' (if you did not use the button above)' : ''}:</div>
+                <p class="text-xs text-amber-800 mt-1">Download the file and upload it to your school's LMS (e.g. Google Classroom, Canvas), or pick another way: QR codes, straight to your teacher's device, email…</p>
                 <div class="mt-2 flex flex-wrap gap-2">
                   <sl-button variant="primary" size="medium" id="res-download"><sl-icon slot="prefix" name="download"></sl-icon> Download submission file (.kbsub)</sl-button>
-                  <sl-button size="medium" id="res-copy"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy submission code</sl-button>
-                  <sl-button size="medium" id="res-qr"><sl-icon slot="prefix" name="qr-code"></sl-icon> Show QR code</sl-button>
-                </div>
-              </li>
-              <li>
-                <div class="font-semibold text-amber-900">Hand it in to your teacher:</div>
-                <p class="text-xs text-amber-800 mt-1">Upload the downloaded file into your school's LMS (e.g. Google Classroom, Canvas), or use one of these shortcuts:</p>
-                <div class="mt-2 flex flex-wrap gap-2">
-                  <sl-button size="medium" id="res-share" class="hidden"><sl-icon slot="prefix" name="share"></sl-icon> Share file…</sl-button>
-                  ${payload.handin?.email ? `<sl-button size="medium" id="res-email"><sl-icon slot="prefix" name="envelope"></sl-icon> Email to teacher</sl-button>` : ''}
+                  <sl-button size="medium" id="res-more"><sl-icon slot="prefix" name="send"></sl-icon> More ways to hand in…</sl-button>
                 </div>
               </li>
               <li>
@@ -707,7 +699,7 @@ export async function renderTakeView(params, router, container) {
       btnServerHandin.loading = true;
       try {
         const relayTransport = new RelayTransport({ baseUrl: payload.relay.base_url || '' });
-        const res = await relayTransport.submitToDrop(payload.relay.drop_id, r.text);
+        const res = await relayTransport.submitToDrop(payload.relay.drop_id, r.text, { dropSecret: payload.relay.drop_secret });
         const receipt = res.receiptId || res.receipt_id;
         serverStatus.className = 'mt-2 p-3 rounded-xl bg-emerald-100/90 border border-emerald-300 text-emerald-950 text-xs space-y-1';
         serverStatus.innerHTML = `
@@ -731,62 +723,24 @@ export async function renderTakeView(params, router, container) {
 
     const subFilename = `${payload.title}_${state.student.id}`.replace(/[^a-z0-9_-]+/gi, '_') + '.kbsub';
 
-    container.querySelector('#res-download')?.addEventListener('click', () => {
-      const blob = new Blob([r.text], { type: 'text/plain' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = subFilename;
-      document.body.appendChild(link);
-      link.click();
-      setTimeout(() => { link.remove(); URL.revokeObjectURL(url); }, 100);
+    container.querySelector('#res-download')?.addEventListener('click', async () => {
+      const { downloadText } = await import('../../components/send-sheet.js');
+      downloadText(r.text, subFilename);
       toast.success('Submission file downloaded. Now hand it in.');
     });
 
-    container.querySelector('#res-qr')?.addEventListener('click', async () => {
-      const { showSubmissionQr } = await import('../../components/qr-handoff.js');
-      await showSubmissionQr(r.text, { title: payload.title, studentName: state.student.name });
-    });
-
-    container.querySelector('#res-copy')?.addEventListener('click', async () => {
-      try {
-        await navigator.clipboard.writeText(r.text);
-        toast.success('Submission code copied. Paste it where your teacher asked.');
-      } catch (_) {
-        toast.warning('Copy failed — use the download button instead.');
-      }
-    });
-
-    // Web Share API support check
-    const shareBtn = container.querySelector('#res-share');
-    if (shareBtn && typeof navigator !== 'undefined' && typeof File !== 'undefined' && typeof navigator.canShare === 'function') {
-      try {
-        const testFile = new File(['test'], 'test.kbsub', { type: 'text/plain' });
-        if (navigator.canShare({ files: [testFile] })) {
-          shareBtn.classList.remove('hidden');
-          shareBtn.addEventListener('click', async () => {
-            try {
-              const file = new File([r.text], subFilename, { type: 'text/plain' });
-              await navigator.share({
-                files: [file],
-                title: payload.title,
-                text: `Submission for ${payload.title} - ${state.student.name}`
-              });
-            } catch (err) {
-              if (err.name !== 'AbortError') {
-                toast.warning('Share failed — please use the download button instead.');
-              }
-            }
-          });
-        }
-      } catch (_) {}
-    }
-
-    container.querySelector('#res-email')?.addEventListener('click', () => {
-      const email = payload.handin?.email || '';
-      const subject = `[${payload.title}] ${state.student.name} ${state.student.id}`;
-      const body = `Hi,\n\nPlease find attached my submission file (${subFilename}) for "${payload.title}".\nReceipt code: ${r.receiptId}\n\n(Remember to attach the downloaded .kbsub file to this email).`;
-      window.location.href = `mailto:${encodeURIComponent(email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    container.querySelector('#res-more')?.addEventListener('click', async () => {
+      const { openSendSheet } = await import('../../components/send-sheet.js');
+      openSendSheet({
+        text: r.text,
+        filename: subFilename,
+        title: payload.title,
+        studentName: state.student.name,
+        studentId: state.student.id,
+        receiptId: r.receiptId,
+        relay: payload.relay || null,
+        email: payload.handin?.email || ''
+      });
     });
   }
 
