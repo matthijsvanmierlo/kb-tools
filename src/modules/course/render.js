@@ -318,10 +318,10 @@ export async function renderCoursePage(courseId, container) {
           await markFeedPublished(courseId, feed.etag);
           toast.success('Course feed published to server!');
         } else {
-          // Download or local export
           await markFeedPublished(courseId, feed.etag);
-          toast.success('Course feed packaged and saved locally.');
+          toast.success('Course feed packaged!');
         }
+        await openShareCoursePackageDialog(course);
         render();
       } catch (err) {
         console.error('Failed to publish course feed:', err);
@@ -333,7 +333,7 @@ export async function renderCoursePage(courseId, container) {
 
     // Student Card / QR
     container.querySelector('#btn-course-share-card')?.addEventListener('click', () => {
-      openStudentCardDialog(course);
+      openShareCoursePackageDialog(course);
     });
   };
 
@@ -484,42 +484,144 @@ async function openChangeDueDialog(kind, sourceId, itemId, onSaved) {
 }
 
 function openStudentCardDialog(course) {
-  const code = course.access_code || '';
+  openShareCoursePackageDialog(course);
+}
+
+async function openShareCoursePackageDialog(course) {
+  const { CryptoShareEngine } = await import('../../core/crypto-share.js');
+  const { downloadClickableHtmlFile } = await import('../../core/html-launcher.js');
+  const { showQrSequence } = await import('../../components/qr-handoff.js');
+  const { buildCourseFeed } = await import('../../core/course-feed.js');
+
+  toast.info('Preparing course package...', 1500);
+  let sharePayload = null;
+  try {
+    const feed = await buildCourseFeed(course.id);
+    sharePayload = await CryptoShareEngine.createSharePayload('course_feed', feed.raw_payload, course.access_code);
+  } catch (err) {
+    console.error('Failed to create course package:', err);
+    toast.danger('Could not build course package: ' + err.message);
+    return;
+  }
+
   const base = window.location.origin + window.location.pathname;
-  const joinUrl = `${base}#/student?code=${encodeURIComponent(code)}`;
+  const joinUrl = `${base}#/student?code=${encodeURIComponent(course.access_code || '')}`;
+  const shareUrl = sharePayload.url;
 
   let qrSvg = '';
   try {
-    qrSvg = QRCode.generateSVG(joinUrl, { size: 180, margin: 1 });
+    qrSvg = QRCode.generateSVG(joinUrl, { size: 160, margin: 1 });
   } catch {
     qrSvg = '<span>QR Code</span>';
   }
 
   const dialog = document.createElement('sl-dialog');
-  dialog.label = 'Student Course Enrollment Card';
-  dialog.style.setProperty('--width', '460px');
+  dialog.label = `Share Course · ${course.name}`;
+  dialog.style.setProperty('--width', 'min(580px, 96vw)');
   dialog.innerHTML = `
-    <div class="flex flex-col items-center text-center p-4 space-y-4">
-      <div class="w-full p-4 rounded-2xl border-2 border-primary-500 bg-white shadow-md space-y-3">
-        <h3 class="text-xl font-bold text-slate-900">${esc(course.name)}</h3>
-        <p class="text-xs text-slate-500">${esc(course.section || '')} ${course.academic_year ? '• ' + esc(course.academic_year) : ''}</p>
-        <div class="flex justify-center p-2 bg-slate-50 rounded-xl border border-slate-100">
-          ${qrSvg}
-        </div>
+    <div class="space-y-4">
+      <div class="rounded-xl border border-primary-200 bg-primary-50/60 p-4 flex items-center justify-between gap-4">
         <div>
-          <span class="text-xs uppercase font-bold text-slate-400">Class Access Code</span>
-          <div class="text-3xl font-mono font-black text-primary-700 tracking-widest mt-0.5">${esc(code)}</div>
+          <h3 class="font-bold text-slate-900">${esc(course.name)}</h3>
+          <p class="text-xs text-slate-600 mt-0.5">${esc(course.section || '')} ${course.academic_year ? '• ' + esc(course.academic_year) : ''}</p>
+        </div>
+        <div class="text-right">
+          <span class="text-[10px] uppercase font-bold text-slate-500 block">Access Code</span>
+          <span class="font-mono font-bold text-primary-700 text-lg">${esc(course.access_code || '------')}</span>
         </div>
       </div>
-      <p class="text-xs text-slate-500">Project this card in class for students to scan, or share the code for zero-trust client-side course enrollment.</p>
+
+      <div class="flex justify-center p-2 bg-slate-50 rounded-xl border border-slate-100">
+        ${qrSvg}
+      </div>
+
+      <div class="space-y-3">
+        <div>
+          <label class="text-xs font-semibold text-slate-700 block mb-1">Student Join Link (Instant Enrollment)</label>
+          <div class="flex gap-2">
+            <sl-input id="input-join-url" value="${esc(joinUrl)}" readonly size="small" class="flex-1 font-mono text-xs"></sl-input>
+            <sl-button size="small" variant="default" id="btn-copy-join">
+              <sl-icon slot="prefix" name="clipboard"></sl-icon> Copy
+            </sl-button>
+          </div>
+        </div>
+
+        <div>
+          <label class="text-xs font-semibold text-slate-700 block mb-1">Encrypted Offline Course Package Link</label>
+          <div class="flex gap-2">
+            <sl-input id="input-feed-url" value="${esc(shareUrl)}" readonly size="small" class="flex-1 font-mono text-xs"></sl-input>
+            <sl-button size="small" variant="default" id="btn-copy-feed">
+              <sl-icon slot="prefix" name="clipboard"></sl-icon> Copy
+            </sl-button>
+          </div>
+        </div>
+      </div>
+
+      <div class="pt-2 border-t border-slate-100 flex flex-wrap gap-2">
+        <sl-button size="small" variant="primary" id="btn-show-course-qr">
+          <sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Project Join QR
+        </sl-button>
+        <sl-button size="small" variant="default" id="btn-download-course-html">
+          <sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Clickable Course (.html)
+        </sl-button>
+        <sl-button size="small" variant="default" id="btn-download-course-file">
+          <sl-icon slot="prefix" name="file-earmark-arrow-down"></sl-icon> Download .kbshare
+        </sl-button>
+      </div>
     </div>
     <div slot="footer" class="flex justify-end gap-2">
-      <sl-button variant="primary" id="btn-close-card">Done</sl-button>
+      <sl-button variant="primary" id="btn-close-share">Done</sl-button>
     </div>
   `;
   document.body.appendChild(dialog);
   dialog.show();
 
-  dialog.querySelector('#btn-close-card')?.addEventListener('click', () => dialog.hide());
+  dialog.querySelector('#btn-close-share')?.addEventListener('click', () => dialog.hide());
+  dialog.querySelector('#btn-copy-join')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+      toast.success('Join link copied!');
+    } catch (_) {
+      toast.warning('Copy failed.');
+    }
+  });
+
+  dialog.querySelector('#btn-copy-feed')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      toast.success('Course package link copied!');
+    } catch (_) {
+      toast.warning('Copy failed.');
+    }
+  });
+
+  dialog.querySelector('#btn-show-course-qr')?.addEventListener('click', () => {
+    showQrSequence(joinUrl, {
+      title: `Enroll in ${course.name}`,
+      intro: `Scan with camera to enroll in ${course.name} (Code: ${course.access_code}).`,
+      preferDirectUrl: true
+    });
+  });
+
+  dialog.querySelector('#btn-download-course-html')?.addEventListener('click', () => {
+    const cleanName = (course.name || 'course').replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    downloadClickableHtmlFile({
+      title: `${course.name} · Course Package`,
+      payloadType: 'course_feed',
+      payload: sharePayload.rawFileContent,
+      shareUrl
+    }, `${cleanName}_course.kbshare.html`);
+    toast.success('Downloaded clickable course package (.kbshare.html)!');
+  });
+
+  dialog.querySelector('#btn-download-course-file')?.addEventListener('click', () => {
+    const cleanName = (course.name || 'course').replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    CryptoShareEngine.downloadKbShareFile(
+      sharePayload.rawFileContent,
+      `${cleanName}_course.kbshare`
+    );
+    toast.success('Downloaded course package (.kbshare)!');
+  });
+
   dialog.addEventListener('sl-after-hide', () => dialog.remove());
 }

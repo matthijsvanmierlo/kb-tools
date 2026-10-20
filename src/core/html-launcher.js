@@ -294,6 +294,10 @@ ${serialized}
             targetUrl = targetUrl.replace(/#.*$/, '') + '#/student/gradebook';
           } else if (payloadType === 'submission') {
             targetUrl = targetUrl.replace(/#.*$/, '') + '#/inbox?import=1';
+          } else if (payloadType === 'report') {
+            targetUrl = targetUrl.replace(/#.*$/, '') + '#/report';
+          } else if (payloadType === 'lesson') {
+            targetUrl = targetUrl.replace(/#.*$/, '') + '#/';
           }
         }
 

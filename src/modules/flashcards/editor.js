@@ -414,11 +414,12 @@ export class FlashcardEditor {
           onImport: async (resultData, rawText, { filename, isKbShare } = {}) => {
             if (!resultData) return;
             let rawCards = [];
-            if (isKbShare) {
-              rawCards = Array.isArray(resultData.cards) ? resultData.cards : [];
-            } else if (Array.isArray(resultData)) {
-              rawCards = resultData;
-            } else if (resultData.cards && Array.isArray(resultData.cards)) {
+            const data = (resultData && typeof resultData === 'object' && resultData.payload) ? resultData.payload : resultData;
+            if (Array.isArray(data)) {
+              rawCards = data;
+            } else if (Array.isArray(data?.cards)) {
+              rawCards = data.cards;
+            } else if (Array.isArray(resultData?.cards)) {
               rawCards = resultData.cards;
             }
 
@@ -431,7 +432,7 @@ export class FlashcardEditor {
 
             // Update title if still untitled and a meaningful filename/title is provided
             if ((!this.deck.title || this.deck.title === 'Untitled Flashcard Deck')) {
-              const clean = (resultData.title || filename || '').replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ').trim();
+              const clean = (data?.title || resultData?.title || filename || '').replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ').trim();
               if (clean && !clean.includes('template') && !clean.includes('pasted')) {
                 this.deck.title = clean.charAt(0).toUpperCase() + clean.slice(1);
               }

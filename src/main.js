@@ -281,7 +281,7 @@ async function bootstrapApp() {
 
     // 7. Register PWA Service Worker and OS file-launch / share-target handlers
     registerServiceWorker();
-    initLaunchHandlers(router);
+    await initLaunchHandlers(router);
 
     // 8. Execute initial route
     await router.handleRoute();

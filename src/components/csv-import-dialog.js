@@ -45,7 +45,7 @@ export class CSVImportDialog {
     let isProcessing = false;
 
     const acceptTypes = acceptKbShare
-      ? (acceptJson ? '.csv,.tsv,.txt,.json,.kbshare' : '.csv,.tsv,.txt,.kbshare')
+      ? (acceptJson ? '.csv,.tsv,.txt,.json,.kbshare,.html,.htm' : '.csv,.tsv,.txt,.kbshare,.html,.htm')
       : (acceptJson ? '.csv,.tsv,.txt,.json' : '.csv,.tsv,.txt');
 
     dialog.innerHTML = `
@@ -394,7 +394,9 @@ export class CSVImportDialog {
         const rows = lines.length > 1 ? lines.length - 1 : lines.length;
         if (pasteRowCount) pasteRowCount.textContent = `${rows} ${rows === 1 ? 'row' : 'rows'} detected`;
       }
-      updatePreview(text, acceptJson && (text.startsWith('{') || text.startsWith('[')), 'scanned_qr_payload.txt');
+      const insp = ContentImporter.inspect(text, 'scanned_qr_payload.txt');
+      const isJson = acceptJson && (text.startsWith('{') || text.startsWith('[') || insp.kind === 'json');
+      updatePreview(text, isJson, 'scanned_qr_payload.txt');
     };
 
     csvQrCamBtn?.addEventListener('click', async () => {
@@ -412,26 +414,9 @@ export class CSVImportDialog {
       if (!file) return;
       csvQrFileInput.value = '';
       try {
-        const { openQrScanner } = await import('./qr-handoff.js');
+        const { scanQrFromSource } = await import('./qr-handoff.js');
         const bitmap = await createImageBitmap(file);
-        let decoded = null;
-        if ('BarcodeDetector' in window) {
-          try {
-            const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-            const res = await detector.detect(bitmap);
-            if (res?.[0]?.rawValue) decoded = res[0].rawValue;
-          } catch (_) {}
-        }
-        if (!decoded && window.jsQR) {
-          const canvas = document.createElement('canvas');
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(bitmap, 0, 0);
-          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = window.jsQR(img.data, img.width, img.height);
-          if (code?.data) decoded = code.data;
-        }
+        const decoded = await scanQrFromSource(bitmap);
         if (!decoded) {
           toast.warning('No QR code detected in that image.');
           return;

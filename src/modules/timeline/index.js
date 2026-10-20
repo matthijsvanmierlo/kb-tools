@@ -47,19 +47,23 @@ export async function renderTimelineView(params, router, container) {
           templateContent: TIMELINE_CSV_TEMPLATE,
           schema: TimelineEventSchema,
           acceptJson: true,
-          onImport: async (resultData, rawText, { filename, isJson }) => {
-            if (isJson) {
-              const parsed = resultData;
+          acceptKbShare: true,
+          onImport: async (resultData, rawText, { filename, isJson, isKbShare }) => {
+            const activeClassId = ClassManager.getActiveFilter() || null;
+            if (isKbShare || isJson) {
+              const parsed = resultData || {};
+              const events = Array.isArray(parsed.events) ? parsed.events : (Array.isArray(parsed) ? parsed : []);
+              const title = parsed.title || (filename || 'Imported Timeline').replace(/\.[^/.]+$/, '');
               const newTimeline = {
                 version: 1,
                 id: generateUUID(),
-                title: parsed.title || (filename || 'Imported Timeline').replace(/\.[^/.]+$/, ''),
-                class_id: null,
-                events: Array.isArray(parsed.events) ? parsed.events : [],
+                title,
+                class_id: activeClassId,
+                events: events.map(ev => ({ ...ev, id: ev.id || generateUUID() })),
                 updated_at: new Date().toISOString()
               };
               await storage.table('timelines').put(newTimeline);
-              toast.success('Imported timeline JSON!');
+              toast.success(`Imported timeline "${title}" with ${newTimeline.events.length} events!`);
             } else {
               let title = (filename || 'Imported Timeline').replace(/\.[^/.]+$/, '');
               if (title === 'pasted_data') title = 'Pasted Timeline';
@@ -72,7 +76,7 @@ export async function renderTimelineView(params, router, container) {
                 version: 1,
                 id: generateUUID(),
                 title,
-                class_id: activeClass,
+                class_id: activeClassId,
                 events: (resultData || []).map(ev => ({ ...ev, id: ev.id || generateUUID() })),
                 updated_at: new Date().toISOString()
               };
@@ -80,7 +84,7 @@ export async function renderTimelineView(params, router, container) {
               toast.success(`Imported timeline "${title}" with ${newTimeline.events.length} events!`);
             }
             library.searchQuery = '';
-            library.selectedClassId = activeClass;
+            library.selectedClassId = activeClassId;
             library.sortBy = 'updated';
             await library.render(container);
           }
@@ -698,16 +702,27 @@ export async function renderTimelineView(params, router, container) {
       templateFilename: 'timeline_events_template.csv',
       templateContent: TIMELINE_CSV_TEMPLATE,
       schema: TimelineEventSchema,
-      acceptJson: false,
+      acceptJson: true,
+      acceptKbShare: true,
       onImport: async (resultData) => {
-        if (!Array.isArray(resultData) || resultData.length === 0) return;
-        for (const ev of resultData) {
-          ev.id = ev.id || generateUUID();
-          activeTimeline.events.push(ev);
+        let events = [];
+        if (Array.isArray(resultData)) events = resultData;
+        else if (Array.isArray(resultData?.events)) events = resultData.events;
+        else if (Array.isArray(resultData?.payload?.events)) events = resultData.payload.events;
+
+        if (events.length === 0) {
+          toast.warning('No events found in imported data.');
+          return;
+        }
+        for (const ev of events) {
+          activeTimeline.events.push({
+            ...ev,
+            id: ev.id || generateUUID()
+          });
         }
         activeTimeline.updated_at = new Date().toISOString();
         await storage.table('timelines').put(activeTimeline);
-        toast.success(`Imported ${resultData.length} events!`);
+        toast.success(`Imported ${events.length} events!`);
         renderActiveViewMode();
       }
     });

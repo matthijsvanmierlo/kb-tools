@@ -377,7 +377,7 @@ export async function renderStudentGradebookView(params, router, container) {
           <sl-button size="small" variant="default" id="btn-scan-feedback-qr">
             <sl-icon slot="prefix" name="camera"></sl-icon> Scan Feedback QR
           </sl-button>
-          <input type="file" id="student-import-file" class="hidden" accept=".html,.htm,.kbfeedback,.json">
+          <input type="file" id="student-import-file" class="hidden" accept=".html,.htm,.kbfeedback,.kbshare,.json">
           <sl-button size="small" id="btn-choose-file">
             <sl-icon slot="prefix" name="file-earmark-arrow-up"></sl-icon> Choose feedback file
           </sl-button>
@@ -423,16 +423,52 @@ export async function renderStudentGradebookView(params, router, container) {
       if (!val) { toast.warning('Please enter a link or paste feedback.'); return; }
 
       try {
-        if (val.includes('#/share')) {
+        let text = val;
+        if (text.includes('<html') || text.includes('<!DOCTYPE') || text.includes('data-kbshare-envelope')) {
+          const { extractEnvelopeFromHtml } = await import('../../core/html-launcher.js');
+          const env = extractEnvelopeFromHtml(text);
+          if (env?.shareUrl) {
+            text = env.shareUrl;
+          } else if (env?.payload) {
+            text = typeof env.payload === 'string' ? env.payload : JSON.stringify(env.payload);
+          }
+        }
+
+        if (text.includes('#/share')) {
           dialog.hide();
-          router.navigate(val.slice(val.indexOf('#/share')));
+          router.navigate(text.slice(text.indexOf('#/share')));
+          return;
+        }
+
+        if (text.includes('#/student?code=')) {
+          dialog.hide();
+          router.navigate(text.slice(text.indexOf('#/student?code=')));
           return;
         }
 
         let parsed;
         try {
-          parsed = JSON.parse(val);
+          parsed = JSON.parse(text);
         } catch (_) {}
+
+        if (parsed?.payload && (parsed.type || parsed.kind)) {
+          if (parsed.type === 'assignment_feedback' || parsed.kind === 'assignment_feedback') {
+            await StudentLedger.ingestAssignmentFeedback(parsed.payload);
+            dialog.hide();
+            toast.success('Feedback added to your gradebook!');
+            courses = await StudentLedger.getStudentCourses();
+            allEntries = await StudentLedger.getAllLedgerEntries();
+            render();
+            return;
+          }
+          if (parsed.type === 'student_grade_report') {
+            dialog.hide();
+            const { store } = await import('../../state/store.js');
+            store.setState('ephemeralData', parsed);
+            router.navigate('#/report');
+            return;
+          }
+        }
 
         if (parsed && (parsed.kind === 'assignment_feedback' || parsed.type === 'assignment_feedback')) {
           await StudentLedger.ingestAssignmentFeedback(parsed.payload || parsed);
@@ -444,7 +480,7 @@ export async function renderStudentGradebookView(params, router, container) {
           return;
         }
 
-        toast.warning('Could not recognize feedback format. Please use the link your teacher shared.');
+        toast.warning('Could not recognize feedback format. Please use the link or file your teacher shared.');
       } catch (err) {
         toast.danger('Import failed: ' + err.message);
       }

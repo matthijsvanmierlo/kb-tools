@@ -13,6 +13,67 @@ import { splitSubmissionText, classifyText } from './envelope-router.js';
 import { extractEnvelopeFromHtml } from './html-launcher.js';
 import { cloneQuestion } from '../modules/assignments/question-types.js';
 
+/**
+ * Extract share envelope parameters from URLs or raw frame strings
+ * Handles:
+ *  - https://example.com/#/share?v=2&enc=0&d=...
+ *  - #/share?v=2&enc=0&d=...
+ *  - #/share?ref=xyz
+ *  - Query strings (?v=...&d=...)
+ */
+export function extractShareUrlParams(text) {
+  const s = String(text || '').trim();
+  if (!s) return null;
+
+  let searchStr = '';
+  if (s.includes('#/share')) {
+    searchStr = s.slice(s.indexOf('#/share') + 7);
+  } else if (s.includes('/share?')) {
+    searchStr = s.slice(s.indexOf('/share?') + 7);
+  } else if (s.includes('d=') && (s.includes('v=') || s.includes('enc='))) {
+    const qIdx = s.indexOf('?');
+    searchStr = qIdx !== -1 ? s.slice(qIdx + 1) : s;
+  } else if (s.includes('ref=') && (s.includes('#/share') || s.includes('/share'))) {
+    const qIdx = s.indexOf('?');
+    searchStr = qIdx !== -1 ? s.slice(qIdx + 1) : s;
+  }
+
+  if (!searchStr) return null;
+  if (searchStr.startsWith('?')) searchStr = searchStr.slice(1);
+  const cleanSearch = searchStr.split(/["'\s<>]/)[0];
+  try {
+    const params = new URLSearchParams(cleanSearch);
+    const d = params.get('d');
+    const ref = params.get('ref');
+    const enc = params.get('enc') || '0';
+    const v = Number(params.get('v')) || 2;
+    if (d || ref) {
+      return {
+        v,
+        enc,
+        d,
+        ref,
+        params,
+        version: v,
+        isEncrypted: enc === '1',
+        ciphertext: d
+      };
+    }
+  } catch (_) {}
+  return null;
+}
+
+export function extractStudentCode(text) {
+  const s = String(text || '').trim();
+  if (s.includes('code=')) {
+    const m = s.match(/code=([A-Za-z0-9_-]+)/i);
+    if (m) return m[1].toUpperCase();
+  } else if (/^[A-Za-z0-9_-]{4,16}$/.test(s)) {
+    return s.toUpperCase();
+  }
+  return null;
+}
+
 export class ContentImportError extends Error {
   constructor(message, code) {
     super(message);
@@ -27,10 +88,13 @@ export class ContentImporter {
    * @param {string} text
    * @param {string} [filename='']
    * @returns {{
-   *   kind: 'kbshare'|'kbsub'|'feedback'|'json'|'csv'|'unknown',
+   *   kind: 'kbshare'|'kbsub'|'feedback'|'student_join'|'json'|'csv'|'unknown',
    *   isEncrypted?: boolean,
    *   version?: number,
    *   shareType?: string,
+   *   isShareUrl?: boolean,
+   *   shareParams?: object,
+   *   envelope?: object,
    *   parsed?: any,
    *   rawText: string,
    *   filename: string
@@ -45,32 +109,73 @@ export class ContentImporter {
     }
 
     // 0. Unwrap HTML launcher if present
-    if (lowerFilename.endsWith('.html') || lowerFilename.endsWith('.htm') || raw.includes('kb-payload')) {
+    if (lowerFilename.endsWith('.html') || lowerFilename.endsWith('.htm') || raw.includes('kb-payload') || raw.includes('<!DOCTYPE html')) {
       const extracted = extractEnvelopeFromHtml(raw);
       if (extracted) {
-        if (typeof extracted === 'string') raw = extracted;
-        else if (typeof extracted === 'object') {
+        if (typeof extracted === 'string') {
+          raw = extracted;
+        } else if (typeof extracted === 'object') {
           if (extracted.kind === 'assignment_feedback' || extracted.type === 'assignment_feedback') {
             return { kind: 'feedback', parsed: extracted, rawText: JSON.stringify(extracted), filename };
+          }
+          if (extracted.kbsub === 1 || extracted.submission || extracted.kind === 'kbsub') {
+            return { kind: 'kbsub', parsed: extracted, rawText: JSON.stringify(extracted), filename };
+          }
+          if (extracted.d && (extracted.enc !== undefined || extracted.v !== undefined)) {
+            return {
+              kind: 'kbshare',
+              isEncrypted: String(extracted.enc) === '1',
+              version: Number(extracted.v) || 2,
+              envelope: extracted,
+              rawText: JSON.stringify(extracted),
+              filename
+            };
           }
           return { kind: 'json', parsed: extracted, rawText: JSON.stringify(extracted), filename };
         }
       }
     }
 
-    // 1. Check for KBSUB1 submission
+    // 1. Check for student course enrollment link (#/student?code=...)
+    const studentCode = extractStudentCode(raw);
+    if (studentCode) {
+      return { kind: 'student_join', code: studentCode, rawText: raw, filename };
+    }
+
+    // 2. Check for share URL (#/share?... or URL with d=/ref=)
+    const shareParams = extractShareUrlParams(raw);
+    if (shareParams) {
+      return {
+        kind: 'kbshare',
+        isShareUrl: true,
+        shareParams,
+        envelope: {
+          v: shareParams.v,
+          enc: shareParams.enc,
+          d: shareParams.d,
+          ref: shareParams.ref
+        },
+        isEncrypted: shareParams.enc === '1',
+        version: shareParams.v,
+        rawText: raw,
+        filename
+      };
+    }
+
+    // 3. Check for KBSUB1 submission
     if (/KBSUB1\.[A-Za-z0-9_-]+/.test(raw)) {
       return { kind: 'kbsub', rawText: raw, filename };
     }
 
-    // 2. Check for .kbshare envelope
+    // 4. Check for .kbshare envelope JSON
     if (lowerFilename.endsWith('.kbshare') || (raw.startsWith('{') && raw.includes('"d"') && (raw.includes('"enc"') || raw.includes('"v"')))) {
       try {
         const file = CryptoShareEngine.parseShareFile(raw);
         return {
           kind: 'kbshare',
-          isEncrypted: file.enc === '1',
-          version: file.v,
+          isEncrypted: String(file.enc) === '1',
+          version: Number(file.v) || 2,
+          envelope: file,
           rawText: raw,
           filename
         };
@@ -81,11 +186,27 @@ export class ContentImporter {
       }
     }
 
-    // 3. Check for JSON (shared envelope or direct payload)
+    // 5. Check for JSON (shared envelope or direct payload)
     if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
       try {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
+          if (parsed.kind === 'assignment_feedback' || parsed.type === 'assignment_feedback') {
+            return { kind: 'feedback', parsed, rawText: raw, filename };
+          }
+          if (parsed.kbsub === 1 || parsed.submission || parsed.kind === 'kbsub') {
+            return { kind: 'kbsub', parsed, rawText: raw, filename };
+          }
+          if (parsed.d && (parsed.enc !== undefined || parsed.v !== undefined)) {
+            return {
+              kind: 'kbshare',
+              isEncrypted: String(parsed.enc) === '1',
+              version: Number(parsed.v) || 2,
+              envelope: parsed,
+              rawText: raw,
+              filename
+            };
+          }
           // Could be a raw envelope { type, payload }
           if (parsed.type && SHARE_TYPES.has(parsed.type) && parsed.payload) {
             return {
@@ -111,7 +232,7 @@ export class ContentImporter {
       }
     }
 
-    // 4. Check for CSV / TSV
+    // 6. Check for CSV / TSV
     if (raw.includes(',') || raw.includes('\t') || raw.includes('\n') || lowerFilename.endsWith('.csv') || lowerFilename.endsWith('.tsv')) {
       return { kind: 'csv', rawText: raw, filename };
     }
@@ -120,27 +241,58 @@ export class ContentImporter {
   }
 
   /**
-   * Parse and unpack a .kbshare file string
-   * @param {string} shareText
+   * Parse and unpack a .kbshare file string, URL, or envelope object
+   * @param {string|object} shareInput
    * @param {string} [passphrase='']
    * @returns {Promise<{ type: string, payload: any, version: number }>}
    */
-  static async unpackKbShare(shareText, passphrase = '') {
+  static async unpackKbShare(shareInput, passphrase = '') {
     let file;
-    try {
-      file = CryptoShareEngine.parseShareFile(shareText);
-    } catch (_) {
-      throw new ContentImportError('Invalid or corrupted .kbshare file format.', 'INVALID_KBSHARE');
+    if (typeof shareInput === 'object' && shareInput !== null && (shareInput.d || shareInput.ref)) {
+      file = {
+        v: Number(shareInput.v) || 2,
+        enc: String(shareInput.enc ?? '0'),
+        d: shareInput.d || null,
+        ref: shareInput.ref || null
+      };
+    } else {
+      const trimmed = String(shareInput || '').trim();
+      const urlParams = extractShareUrlParams(trimmed);
+      if (urlParams) {
+        file = {
+          v: urlParams.v,
+          enc: String(urlParams.enc),
+          d: urlParams.d || null,
+          ref: urlParams.ref || null
+        };
+      } else {
+        try {
+          file = CryptoShareEngine.parseShareFile(trimmed);
+        } catch (_) {
+          throw new ContentImportError('Invalid or corrupted .kbshare file format.', 'INVALID_KBSHARE');
+        }
+      }
     }
 
-    const isEncrypted = file.enc === '1';
+    if (!file.d && file.ref) {
+      const { RelayTransport } = await import('./transport.js');
+      const fetched = await RelayTransport.fetchShortLink(file.ref);
+      if (!fetched || !fetched.d) {
+        throw new ContentImportError('Could not resolve short-link share reference.', 'SHORTLINK_NOT_FOUND');
+      }
+      file.d = fetched.d;
+      if (fetched.enc !== undefined) file.enc = String(fetched.enc);
+      if (fetched.v !== undefined) file.v = Number(fetched.v);
+    }
+
+    const isEncrypted = String(file.enc) === '1';
     if (isEncrypted && (!passphrase || !passphrase.trim())) {
       throw new ContentImportError('This .kbshare file is encrypted. A passphrase or access code is required.', 'PASSPHRASE_REQUIRED');
     }
 
     let unpacked;
     try {
-      unpacked = await CryptoShareEngine.unpackSharePayload(file.d, isEncrypted, passphrase.trim(), file.v);
+      unpacked = await CryptoShareEngine.unpackSharePayload(file.d, isEncrypted, (passphrase || '').trim(), file.v);
     } catch (err) {
       if (isEncrypted) {
         throw new ContentImportError('Incorrect passphrase or access code.', 'BAD_PASSPHRASE');
@@ -156,6 +308,21 @@ export class ContentImporter {
         version: file.v
       };
     } catch (err) {
+      if (unpacked && typeof unpacked === 'object') {
+        let detectedType = 'unknown';
+        if (Array.isArray(unpacked.cards) || unpacked.flashcards) detectedType = 'flashcards';
+        else if (Array.isArray(unpacked.events) || unpacked.timeline) detectedType = 'timeline';
+        else if (Array.isArray(unpacked.questions) || unpacked.assignment_id || unpacked.kind === 'kb-assignment') detectedType = 'assignment';
+        else if (Array.isArray(unpacked.checkpoints) || unpacked.video_url) detectedType = 'video';
+        else if (unpacked.course && Array.isArray(unpacked.items)) detectedType = 'course_feed';
+        else if (unpacked.kind === 'assignment_feedback' || unpacked.type === 'assignment_feedback') detectedType = 'assignment_feedback';
+        else if (unpacked.kind === 'student_grade_report' || unpacked.type === 'student_grade_report') detectedType = 'student_grade_report';
+        return {
+          type: detectedType,
+          payload: unpacked.payload || unpacked,
+          version: file.v
+        };
+      }
       throw new ContentImportError('Invalid educational content structure: ' + err.message, 'INVALID_ENVELOPE');
     }
   }
@@ -191,13 +358,21 @@ export class ContentImporter {
         title: Sanitizer.escapeHTML(title),
         description: payload.description ? Sanitizer.escapeHTML(payload.description) : '',
         class_id: classId || null,
-        cards: cards.map(c => ({
-          id: generateUUID(),
-          type: 'text',
-          front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : (c.front || { text: '', ttsLang: 'en-US' }),
-          back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : (c.back || { text: '', ttsLang: 'en-US' }),
-          fsrs: c.fsrs && typeof c.fsrs === 'object' ? c.fsrs : { state: 0, stability: 0, difficulty: 0, due: now }
-        })),
+        cards: cards.map(c => {
+          const frontText = typeof c.front === 'string' ? c.front : (c.front?.text || c.front_text || '');
+          const backText = typeof c.back === 'string' ? c.back : (c.back?.text || c.back_text || '');
+          const frontObj = typeof c.front === 'object' && c.front ? { ...c.front, text: frontText } : { text: frontText, ttsLang: 'en-US' };
+          const backObj = typeof c.back === 'object' && c.back ? { ...c.back, text: backText } : { text: backText, ttsLang: 'en-US' };
+          return {
+            id: generateUUID(),
+            type: c.type || 'text',
+            front: frontObj,
+            back: backObj,
+            imageRef: c.imageRef || c.image_ref || null,
+            audioRef: c.audioRef || c.audio_ref || null,
+            fsrs: c.fsrs && typeof c.fsrs === 'object' ? c.fsrs : { state: 0, stability: 0, difficulty: 0, due: now }
+          };
+        }),
         updated_at: now
       };
 
@@ -322,6 +497,20 @@ export class ContentImporter {
       };
     }
 
+    if (type === 'course_feed') {
+      const { mergeCourseFeed } = await import('../modules/student/course-store.js');
+      const res = await mergeCourseFeed(payload);
+      return {
+        success: true,
+        type: 'course_feed',
+        table: 'student_courses',
+        id: res.course.id,
+        title: res.course.name,
+        count: res.items?.length || 0,
+        record: res.course
+      };
+    }
+
     throw new ContentImportError(`Import for type "${type}" is not supported as a standalone library record.`, 'UNSUPPORTED_TYPE');
   }
 
@@ -338,13 +527,21 @@ export class ContentImporter {
     }
     if (!Array.isArray(newCards) || newCards.length === 0) return 0;
 
-    const formatted = newCards.map(c => ({
-      id: generateUUID(),
-      type: 'text',
-      front: typeof c.front === 'string' ? { text: c.front, ttsLang: 'en-US' } : (c.front || { text: '', ttsLang: 'en-US' }),
-      back: typeof c.back === 'string' ? { text: c.back, ttsLang: 'en-US' } : (c.back || { text: '', ttsLang: 'en-US' }),
-      fsrs: c.fsrs && typeof c.fsrs === 'object' ? c.fsrs : { state: 0, stability: 0, difficulty: 0, due: new Date().toISOString() }
-    }));
+    const formatted = newCards.map(c => {
+      const frontText = typeof c.front === 'string' ? c.front : (c.front?.text || c.front_text || '');
+      const backText = typeof c.back === 'string' ? c.back : (c.back?.text || c.back_text || '');
+      const frontObj = typeof c.front === 'object' && c.front ? { ...c.front, text: frontText } : { text: frontText, ttsLang: 'en-US' };
+      const backObj = typeof c.back === 'object' && c.back ? { ...c.back, text: backText } : { text: backText, ttsLang: 'en-US' };
+      return {
+        id: generateUUID(),
+        type: c.type || 'text',
+        front: frontObj,
+        back: backObj,
+        imageRef: c.imageRef || c.image_ref || null,
+        audioRef: c.audioRef || c.audio_ref || null,
+        fsrs: c.fsrs && typeof c.fsrs === 'object' ? c.fsrs : { state: 0, stability: 0, difficulty: 0, due: new Date().toISOString() }
+      };
+    });
 
     const hasOnlyEmptyCard = replaceIfEmpty && targetDeck.cards.length === 1 &&
       (!targetDeck.cards[0].front?.text || targetDeck.cards[0].front.text.trim() === '') &&

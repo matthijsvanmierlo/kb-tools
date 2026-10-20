@@ -43,9 +43,9 @@ export function extractShareHash(text, origin = (typeof window !== 'undefined' ?
   if (candidate.startsWith('#')) return candidate;
   try {
     const u = new URL(candidate);
-    // Only follow links to this installation; a foreign origin could be a look-alike
     if (origin && u.origin !== origin) return null;
-    return u.hash;
+    if (u.hash && u.hash.startsWith('#/share')) return u.hash;
+    return null;
   } catch (_) {
     return null;
   }
@@ -56,6 +56,7 @@ export function classifyIncomingFile(name = '') {
   const lower = name.toLowerCase();
   if (HANDIN_EXTENSIONS.some(ext => lower.endsWith(ext))) return 'inbox';
   if (lower.endsWith('.kbfeedback')) return 'feedback';
+  if (lower.endsWith('.kbsession')) return 'session';
   return 'share';
 }
 
@@ -97,7 +98,15 @@ export async function openIncomingFiles(files, router) {
             }
             return;
           }
-          if (extracted.kbsub === 1 || extracted.epk) {
+          if (extracted.kind === 'student_grade_report' || extracted.type === 'student_grade_report') {
+            if (typeof router._activateSharedPayload === 'function') {
+              router._activateSharedPayload({ type: 'student_grade_report', payload: extracted });
+            } else {
+              router.navigate('#/report');
+            }
+            return;
+          }
+          if (extracted.kbsub === 1 || extracted.epk || extracted.submission) {
             goToInbox(router, [file]);
             continue;
           }
@@ -119,10 +128,22 @@ export async function openIncomingFiles(files, router) {
       continue;
     }
 
-    // Inspect parsed JSON objects for feedback, grade reports, and assignment envelopes
+    // Inspect parsed JSON objects for session, feedback, grade reports, and assignment envelopes
     try {
       const parsed = typeof text === 'object' ? text : JSON.parse(text);
       if (parsed && typeof parsed === 'object') {
+        if (parsed.kennisboost_student_session || file.name.toLowerCase().endsWith('.kbsession')) {
+          const { importStudentSession } = await import('../modules/student/session-portability.js');
+          await importStudentSession(text);
+          router.navigate('#/student');
+          return;
+        }
+        if (parsed.course && (Array.isArray(parsed.items) || Array.isArray(parsed.units))) {
+          const { mergeCourseFeed } = await import('../modules/student/course-store.js');
+          await mergeCourseFeed(parsed);
+          router.navigate(`#/student/course?id=${parsed.course.id}`);
+          return;
+        }
         if (parsed.kind === 'assignment_feedback' || parsed.type === 'assignment_feedback') {
           if (typeof router._activateSharedPayload === 'function') {
             router._activateSharedPayload({ type: 'assignment_feedback', payload: parsed });
@@ -135,7 +156,7 @@ export async function openIncomingFiles(files, router) {
           if (typeof router._activateSharedPayload === 'function') {
             router._activateSharedPayload({ type: 'student_grade_report', payload: parsed });
           } else {
-            router.navigate('#/student/gradebook');
+            router.navigate('#/report');
           }
           return;
         }
@@ -217,11 +238,11 @@ export async function consumeWindowLaunchPayload(router) {
   return false;
 }
 
-export function initLaunchHandlers(router) {
+export async function initLaunchHandlers(router) {
   if (typeof window === 'undefined') return;
 
   // Consume any incoming launch payload passed via window.name or sessionStorage
-  consumeWindowLaunchPayload(router);
+  await consumeWindowLaunchPayload(router);
 
   if ('launchQueue' in window && typeof window.launchQueue.setConsumer === 'function') {
     window.launchQueue.setConsumer(async (params) => {

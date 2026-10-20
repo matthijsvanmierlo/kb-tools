@@ -108,7 +108,7 @@ export async function renderEditor(assignment, router, container) {
             </sl-button>
             <sl-menu id="asg-import-export-menu">
               <sl-menu-item value="import-csv">
-                <sl-icon slot="prefix" name="upload"></sl-icon> Import Questions from CSV…
+                <sl-icon slot="prefix" name="upload"></sl-icon> Import Questions (.kbshare / JSON / CSV)…
               </sl-menu-item>
               <sl-menu-item value="download-template">
                 <sl-icon slot="prefix" name="file-earmark-spreadsheet"></sl-icon> Download Assignment CSV Template
@@ -692,14 +692,24 @@ export async function renderEditor(assignment, router, container) {
   function openImportQuestionsDialog() {
     CSVImportDialog.open({
       title: 'Import Questions into Assignment',
-      subtitle: 'Upload a CSV file or paste rows from Google Sheets or Excel to append questions to this assignment.',
+      subtitle: 'Upload a .kbshare assignment, JSON or CSV file, or paste rows from Google Sheets/Excel to append questions.',
       templateFilename: 'assignment_template.csv',
       templateContent: ASSIGNMENT_CSV_TEMPLATE,
       schema: AssignmentQuestionRowSchema,
-      acceptJson: false,
-      acceptKbShare: false,
-      onImport: async (resultData) => {
-        const questionsToAdd = Array.isArray(resultData) ? resultData : [];
+      acceptJson: true,
+      acceptKbShare: true,
+      onImport: async (resultData, rawText, { isKbShare, isJson } = {}) => {
+        if (!resultData) return;
+        let questionsToAdd = [];
+        const data = (resultData && typeof resultData === 'object' && resultData.payload) ? resultData.payload : resultData;
+        if (Array.isArray(data)) {
+          questionsToAdd = data;
+        } else if (Array.isArray(data?.questions)) {
+          questionsToAdd = data.questions;
+        } else if (Array.isArray(resultData?.questions)) {
+          questionsToAdd = resultData.questions;
+        }
+
         if (questionsToAdd.length === 0) {
           toast.warning('No valid questions found to import.');
           return;

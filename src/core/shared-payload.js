@@ -10,7 +10,7 @@
 import { Sanitizer } from './sanitizer.js';
 
 export const SHARE_TYPES = new Set([
-  'flashcards', 'timeline', 'video', 'gradebook', 'student_grade_report', 'assignment', 'assignment_feedback'
+  'flashcards', 'timeline', 'video', 'gradebook', 'student_grade_report', 'assignment', 'assignment_feedback', 'course_feed'
 ]);
 
 const MAX_DEPTH = 32;

@@ -97,7 +97,7 @@ export async function renderHomeView(params, r, container) {
       </div>
 
       <!-- Hidden file input for open shared file -->
-      <input type="file" id="home-input-shared-file" class="hidden" accept=".kbshare,.kbr,.kbsub,.json,.txt">
+      <input type="file" id="home-input-shared-file" class="hidden" accept=".kbshare,.kbr,.kbsub,.json,.txt,.html,.htm,.kbfeedback,.kbsession">
     </div>
   `;
 

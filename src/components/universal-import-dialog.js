@@ -21,6 +21,7 @@ import {
   TIMELINE_CSV_TEMPLATE,
   ROSTER_CSV_TEMPLATE
 } from '../core/csv-templates.js';
+import { router } from '../router.js';
 
 export class UniversalImportDialog {
   /**
@@ -69,7 +70,7 @@ export class UniversalImportDialog {
               <sl-icon name="cloud-arrow-up" class="text-3xl text-blue-500 mb-2"></sl-icon>
               <p class="font-medium text-slate-800 text-sm" id="univ-drop-title">Drop a .kbshare, .kbsub, CSV, or JSON file here</p>
               <p class="text-xs text-slate-500 mt-1">Supports .kbshare (lessons/decks), .kbsub (student work), .csv, .tsv, and .json</p>
-              <input type="file" id="univ-file-input" accept=".kbshare,.kbsub,.kbr,.csv,.tsv,.json,.txt" class="hidden" />
+              <input type="file" id="univ-file-input" accept=".kbshare,.kbsub,.kbr,.csv,.tsv,.json,.txt,.html,.htm,.kbfeedback,.kbsession" class="hidden" />
             </div>
 
             <div id="univ-file-info" class="hidden mt-2 p-2.5 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between text-xs text-blue-900">
@@ -512,26 +513,9 @@ export class UniversalImportDialog {
       if (!file) return;
       qrFileInput.value = '';
       try {
-        const { openQrScanner } = await import('./qr-handoff.js');
+        const { scanQrFromSource } = await import('./qr-handoff.js');
         const bitmap = await createImageBitmap(file);
-        let decoded = null;
-        if ('BarcodeDetector' in window) {
-          try {
-            const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
-            const res = await detector.detect(bitmap);
-            if (res?.[0]?.rawValue) decoded = res[0].rawValue;
-          } catch (_) {}
-        }
-        if (!decoded && window.jsQR) {
-          const canvas = document.createElement('canvas');
-          canvas.width = bitmap.width;
-          canvas.height = bitmap.height;
-          const ctx = canvas.getContext('2d');
-          ctx.drawImage(bitmap, 0, 0);
-          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = window.jsQR(img.data, img.width, img.height);
-          if (code?.data) decoded = code.data;
-        }
+        const decoded = await scanQrFromSource(bitmap);
         if (!decoded) {
           toast.warning('No QR code detected in that image. Try taking a clearer screenshot.');
           return;
@@ -653,6 +637,18 @@ export class UniversalImportDialog {
     const { router: globalRouter } = await import('../router.js');
     const r = router || globalRouter;
 
+    // 0. Unwrap KBQ1 frames if passed directly
+    if (trimmed.startsWith('KBQ1:')) {
+      try {
+        const { QrAssembler } = await import('../core/qr-transfer.js');
+        const assembler = new QrAssembler({ allowSingleRaw: true });
+        const rFrame = await assembler.add(trimmed);
+        if (rFrame.status === 'complete' && rFrame.text) {
+          return UniversalImportDialog.handleScannedPayload(rFrame.text, { dialog, router: r, role, onScannedContent });
+        }
+      } catch (_) {}
+    }
+
     // 1. Direct URL or Hash Route (#/... or https://domain/#/...)
     if (trimmed.startsWith('#/') || trimmed.includes('#/')) {
       const hashIndex = trimmed.indexOf('#/');
@@ -673,7 +669,22 @@ export class UniversalImportDialog {
                 saved.push(upper);
                 await storage.setMetadata('student_saved_class_codes', saved);
               }
-              toast.success(`Saved class code "${upper}"!`);
+              try {
+                const localCourse = await storage.table('gradebook_courses').where('access_code').equals(upper).first();
+                if (localCourse) {
+                  const { mergeCourseFeed } = await import('../modules/student/course-store.js');
+                  const [units, items] = await Promise.all([
+                    storage.table('course_units').where('course_id').equals(localCourse.id).toArray().catch(() => []),
+                    storage.table('course_items').where('course_id').equals(localCourse.id).toArray().catch(() => [])
+                  ]);
+                  await mergeCourseFeed({ course: localCourse, units, items }, { accessCode: upper });
+                  toast.success(`Joined class "${localCourse.name}"!`);
+                } else {
+                  toast.success(`Saved class code "${upper}"!`);
+                }
+              } catch (_) {
+                toast.success(`Saved class code "${upper}"!`);
+              }
             }
           }
         } catch (_) {}
@@ -682,19 +693,10 @@ export class UniversalImportDialog {
         return true;
       }
 
-      // 1b. Check if user is in Teacher mode and wants to import a shared payload from a link with ?data=
-      const isStudent = role === 'student';
-      if (!isStudent && hash.includes('data=') && onScannedContent) {
-        try {
-          const { CryptoShareEngine } = await import('../core/crypto-share.js');
-          const unpacked = await CryptoShareEngine.unpackUrlHash(hash);
-          if (unpacked) {
-            onScannedContent(JSON.stringify(unpacked));
-            return true;
-          }
-        } catch (_) {
-          // If unpack fails, just navigate to the hash
-        }
+      // 1b. If scanned while an import dialog or preview is active, pass the share URL or payload to it
+      if (onScannedContent && (hash.includes('#/share') || hash.includes('/share?') || hash.includes('d=') || hash.includes('ref='))) {
+        onScannedContent(trimmed);
+        return true;
       }
 
       // Default: navigate straight to the shared activity

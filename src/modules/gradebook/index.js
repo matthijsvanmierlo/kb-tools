@@ -1295,6 +1295,8 @@ function showEncryptedLinkDialog(student, linkData, onOpenAccess) {
     </div>
     <div slot="footer" class="flex flex-wrap justify-end gap-2">
       ${newCode && onOpenAccess ? '<sl-button id="btn-link-codes" variant="text">Manage access codes</sl-button>' : ''}
+      <sl-button variant="default" id="btn-download-report-html"><sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Clickable File (.html)</sl-button>
+      <sl-button variant="default" id="btn-download-report-file"><sl-icon slot="prefix" name="file-earmark-arrow-down"></sl-icon> Download .kbshare</sl-button>
       <sl-button variant="default" id="btn-show-link-qr"><sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Show QR</sl-button>
       <sl-button id="btn-close-link">Close</sl-button>
       <sl-button variant="primary" id="btn-copy-link"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy link</sl-button>
@@ -1302,6 +1304,28 @@ function showEncryptedLinkDialog(student, linkData, onOpenAccess) {
   `;
   document.body.appendChild(dialog);
   dialog.show();
+
+  dialog.querySelector('#btn-download-report-html')?.addEventListener('click', async () => {
+    const { downloadClickableHtmlFile } = await import('../../core/html-launcher.js');
+    const safeStudentName = (student.full_name || student.student_id || 'student').replace(/[^a-z0-9_-]+/gi, '_').toLowerCase();
+    downloadClickableHtmlFile({
+      title: `Grade Report · ${student.full_name}`,
+      payloadType: 'report',
+      payload: linkData.rawFileContent,
+      shareUrl: url
+    }, `${safeStudentName}_grade_report.kbfeedback.html`);
+    toast.success('Downloaded clickable grade report (.kbfeedback.html)!');
+  });
+
+  dialog.querySelector('#btn-download-report-file')?.addEventListener('click', async () => {
+    const { CryptoShareEngine } = await import('../../core/crypto-share.js');
+    const safeStudentName = (student.full_name || student.student_id || 'student').replace(/[^a-z0-9_-]+/gi, '_').toLowerCase();
+    CryptoShareEngine.downloadKbShareFile(
+      linkData.rawFileContent,
+      `${safeStudentName}_grade_report.kbshare`
+    );
+    toast.success('Downloaded grade report (.kbshare)!');
+  });
 
   dialog.querySelector('#btn-show-link-qr')?.addEventListener('click', async () => {
     const { showQrSequence } = await import('../../components/qr-handoff.js');

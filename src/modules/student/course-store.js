@@ -40,28 +40,60 @@ export async function mergeCourseFeed(feedEnvelope, { accessCode } = {}) {
   };
   await coursesTable.put(courseRecord);
 
-  // 2. Upsert items into student_items
+  // 2. Upsert items into student_items and local lesson tables
   const itemsTable = storage.table('student_items');
   for (const item of items) {
     const existingItem = await itemsTable.get(item.id).catch(() => null);
+    const payload = item.payload || existingItem?.payload || null;
+    const kind = item.kind || item.type || 'assignment';
+    const sourceId = item.source_id || item.id;
+
     const itemRecord = {
       ...(existingItem || {}),
       id: item.id,
       course_id: course.id,
       unit_id: item.unit_id || null,
       title: item.title,
-      kind: item.kind || item.type || 'assignment',
-      type: item.kind || item.type || 'assignment',
-      source_id: item.source_id || item.id,
+      kind,
+      type: kind,
+      source_id: sourceId,
       order: item.order ?? 0,
       due_date: item.due_date || null,
       due_time: item.due_time || null,
       points: item.points ?? 100,
       description: item.description || '',
       settings: item.settings || {},
+      payload,
       updated_at: new Date().toISOString()
     };
     await itemsTable.put(itemRecord);
+
+    // If payload is present, also populate local tables so players work seamlessly
+    if (payload && typeof payload === 'object') {
+      try {
+        if (kind === 'flashcards' || kind === 'flashcard') {
+          const fcTable = storage.table('flashcards');
+          const existing = await fcTable.get(payload.id || sourceId).catch(() => null);
+          if (!existing) {
+            await fcTable.put({ ...payload, id: payload.id || sourceId });
+          }
+        } else if (kind === 'timeline') {
+          const tlTable = storage.table('timelines');
+          const existing = await tlTable.get(payload.id || sourceId).catch(() => null);
+          if (!existing) {
+            await tlTable.put({ ...payload, id: payload.id || sourceId });
+          }
+        } else if (kind === 'video') {
+          const vidTable = storage.table('video_assessments');
+          const existing = await vidTable.get(payload.id || sourceId).catch(() => null);
+          if (!existing) {
+            await vidTable.put({ ...payload, id: payload.id || sourceId });
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to cache course item locally:', err);
+      }
+    }
   }
 
   // 3. Dispatch event for UI reactivity

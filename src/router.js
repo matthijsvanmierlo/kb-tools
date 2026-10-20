@@ -574,26 +574,20 @@ export class Router {
 
     banner.querySelector('#btn-save-shared-local')?.addEventListener('click', async () => {
       try {
-        if (type === 'flashcards') {
-          const table = storage.table('flashcards');
-          const item = toLibraryRecord(payload);
-          await table.put(item);
-          toast.success('Deck saved to local library!');
-        } else if (type === 'timeline') {
-          const table = storage.table('timelines');
-          const item = toLibraryRecord(payload);
-          await table.put(item);
-          toast.success('Timeline saved to local library!');
-        } else if (type === 'video') {
-          const table = storage.table('video_assessments');
-          const item = toLibraryRecord(payload);
-          await table.put(item);
-          toast.success('Video assessment saved to local library!');
-        }
+        const { ContentImporter } = await import('./core/content-importer.js');
+        const res = await ContentImporter.importRecordToLibrary(type, payload);
+        store.setState('ephemeralData', null);
         banner.remove();
+        toast.success(`Saved "${res.title || 'lesson'}" to local library!`);
+        if (type === 'flashcards' && res.id) this.navigate(`#/flashcards/edit?id=${res.id}`);
+        else if (type === 'timeline' && res.id) this.navigate(`#/timeline/edit?id=${res.id}`);
+        else if (type === 'video' && res.id) this.navigate(`#/video/edit?id=${res.id}`);
+        else if (type === 'assignment' && res.id) this.navigate(`#/assignments/edit?id=${res.id}`);
+        else if (type === 'course_feed' && res.id) this.navigate(`#/course?courseId=${res.id}`);
+        else if (type === 'gradebook' && res.id) this.navigate(`#/gradebook?courseId=${res.id}`);
       } catch (err) {
         console.error('Save shared failed:', err);
-        toast.danger('Could not save to local library.');
+        toast.danger('Could not save to local library: ' + err.message);
       }
     });
 

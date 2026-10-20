@@ -19,7 +19,7 @@ export async function buildCourseFeed(courseId, { origin, studentId } = {}) {
     storage.table('course_items').where('course_id').equals(courseId).toArray().catch(() => [])
   ]);
 
-  // Enrich items with due dates and clean presentation metadata
+  // Enrich items with due dates, payloads, and clean presentation metadata
   const enrichedItems = await Promise.all(items.map(async (item) => {
     const kind = item.kind || item.type || 'assignment';
     const sourceId = item.source_id || item.id;
@@ -28,6 +28,21 @@ export async function buildCourseFeed(courseId, { origin, studentId } = {}) {
       due = await getDue(kind, sourceId);
     } catch (_) {
       due = { date: item.due_date || null, time: item.due_time || null };
+    }
+
+    let itemPayload = item.payload || null;
+    if (!itemPayload && sourceId) {
+      try {
+        if (kind === 'assignment') {
+          itemPayload = await storage.table('assignments').get(sourceId).catch(() => null);
+        } else if (kind === 'flashcards' || kind === 'flashcard') {
+          itemPayload = await storage.table('flashcards').get(sourceId).catch(() => null);
+        } else if (kind === 'timeline') {
+          itemPayload = await storage.table('timelines').get(sourceId).catch(() => null);
+        } else if (kind === 'video') {
+          itemPayload = await storage.table('video_assessments').get(sourceId).catch(() => null);
+        }
+      } catch (_) {}
     }
 
     return {
@@ -42,7 +57,8 @@ export async function buildCourseFeed(courseId, { origin, studentId } = {}) {
       due_time: due?.time || item.due_time || null,
       points: item.points ?? item.max_points ?? 100,
       description: item.description || '',
-      settings: item.settings || {}
+      settings: item.settings || {},
+      payload: itemPayload
     };
   }));
 
@@ -64,9 +80,8 @@ export async function buildCourseFeed(courseId, { origin, studentId } = {}) {
     revision: revisionHash
   };
 
-  const payloadString = JSON.stringify(feedPayload);
   const accessCode = (course.access_code || '').trim();
-  const packed = await CryptoShareEngine.packSharePayload(payloadString, accessCode);
+  const packed = await CryptoShareEngine.createSharePayload('course_feed', feedPayload, accessCode);
 
   return {
     course_id: courseId,
@@ -82,6 +97,8 @@ export async function decryptCourseFeed(feedEnvelope, accessCode) {
   if (!feedEnvelope) throw new Error('No feed envelope provided');
   const d = typeof feedEnvelope === 'string' ? feedEnvelope : feedEnvelope.ciphertext || feedEnvelope.d;
   const version = feedEnvelope.format_version || feedEnvelope.v || 2;
-  const unpacked = await CryptoShareEngine.unpackSharePayload(d, true, (accessCode || '').trim(), version);
-  return typeof unpacked === 'string' ? JSON.parse(unpacked) : unpacked;
+  const isEncrypted = Boolean(accessCode && String(accessCode).trim().length > 0);
+  const unpacked = await CryptoShareEngine.unpackSharePayload(d, isEncrypted, (accessCode || '').trim(), version);
+  const data = typeof unpacked === 'string' ? JSON.parse(unpacked) : unpacked;
+  return data?.payload || data;
 }

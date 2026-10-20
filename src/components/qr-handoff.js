@@ -292,6 +292,23 @@ async function createDetector() {
 }
 
 /**
+ * Detect and decode a QR code from an ImageBitmap, HTMLImageElement, HTMLCanvasElement, or HTMLVideoElement.
+ * Unpacks single-frame KBQ1 frames or raw URLs/codes automatically.
+ * @param {CanvasImageSource|ImageBitmap} source
+ * @returns {Promise<string|null>}
+ */
+export async function scanQrFromSource(source) {
+  const detect = await createDetector();
+  const results = await detect(source);
+  if (!results || !results.length) return null;
+  const raw = results[0];
+  const assembler = new QrAssembler({ allowSingleRaw: true });
+  const r = await assembler.add(raw);
+  if (r.status === 'complete') return r.text;
+  return raw;
+}
+
+/**
  * Open the camera scanner. Accepts both animated KBQ1 multi-frame codes and single-frame raw URLs/codes.
  * Also supports scanning from image/screenshot files when camera is unavailable.
  * @param {{
