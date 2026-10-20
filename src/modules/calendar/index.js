@@ -4,6 +4,7 @@ import { toast } from '../../utils/toast.js';
 import { setDue } from '../../core/due-dates.js';
 import { loadCalendarEvents, generateIcsExport } from './model.js';
 import { ClassManager } from '../../components/class-manager.js';
+import { RoleMode } from '../../state/role-mode.js';
 
 /**
  * Interactive Calendar Module (KB-CAL-002)
@@ -13,13 +14,62 @@ import { ClassManager } from '../../components/class-manager.js';
 const esc = (v) => Sanitizer.escapeHTML(v ?? '');
 const pad = (n) => String(n).padStart(2, '0');
 
+export function getEventLaunchUrl(ev, isStudent = false) {
+  if (!ev) return isStudent ? '#/student' : '#/classes';
+  const sourceId = encodeURIComponent(ev.sourceId || ev.id || '');
+  if (isStudent) {
+    if (ev.kind === 'assignment') return `#/assignments/take?id=${sourceId}`;
+    if (ev.kind === 'video') return `#/video/kiosk?id=${sourceId}`;
+    if (ev.kind === 'flashcards') return `#/flashcards/study?id=${sourceId}`;
+    if (ev.kind === 'timeline') return `#/timeline/view?id=${sourceId}`;
+    return ev.courseId ? `#/student/course?id=${encodeURIComponent(ev.courseId)}` : '#/student';
+  }
+  if (ev.kind === 'assignment') return `#/assignments/edit?id=${sourceId}`;
+  if (ev.kind === 'video') return `#/video/edit?id=${sourceId}`;
+  if (ev.kind === 'flashcards') return `#/flashcards/edit?id=${sourceId}`;
+  if (ev.kind === 'timeline') return `#/timeline/view?id=${sourceId}`;
+  return ev.courseId ? `#/course?id=${encodeURIComponent(ev.courseId)}` : '#/classes';
+}
+
+export function getEventActionLabel(ev, isStudent = false) {
+  if (!ev) return 'Open';
+  if (!isStudent) {
+    const kindName = ev.kind ? (ev.kind.charAt(0).toUpperCase() + ev.kind.slice(1)) : 'Lesson';
+    return `Edit ${kindName}`;
+  }
+  if (ev.kind === 'assignment') return 'Start Assignment';
+  if (ev.kind === 'video') return 'Watch Video Lesson';
+  if (ev.kind === 'flashcards') return 'Study Flashcards';
+  if (ev.kind === 'timeline') return 'Explore Timeline';
+  return 'Open Lesson';
+}
+
+export function getEventIcon(kind) {
+  if (kind === 'assignment') return 'file-earmark-check';
+  if (kind === 'video') return 'play-circle';
+  if (kind === 'flashcards') return 'collection';
+  if (kind === 'timeline') return 'clock-history';
+  return 'journal-text';
+}
+
 export async function renderCalendarView(params, router, container) {
   let activeView = params?.view || 'month'; // 'month', 'week', 'agenda'
   let currentDate = new Date();
   let filterCourseId = params?.courseId || '';
 
   const render = async () => {
-    const courses = await storage.table('gradebook_courses').toArray().catch(() => []);
+    const isStudent = RoleMode.get() === 'student';
+    const [gradebookCourses, studentCourses] = await Promise.all([
+      storage.table('gradebook_courses').toArray().catch(() => []),
+      storage.table('student_courses').toArray().catch(() => [])
+    ]);
+    const courseMap = new Map();
+    for (const c of [...gradebookCourses, ...studentCourses]) {
+      if (c?.id && !courseMap.has(c.id)) {
+        courseMap.set(c.id, c);
+      }
+    }
+    const courses = Array.from(courseMap.values());
     const events = await loadCalendarEvents({ courseId: filterCourseId || null });
 
     const year = currentDate.getFullYear();
@@ -81,11 +131,11 @@ export async function renderCalendarView(params, router, container) {
     const viewMount = container.querySelector('#cal-view-mount');
 
     if (activeView === 'month') {
-      renderMonthView(viewMount, year, month, events, todayStr);
+      renderMonthView(viewMount, year, month, events, todayStr, isStudent);
     } else if (activeView === 'week') {
-      renderWeekView(viewMount, currentDate, events, todayStr);
+      renderWeekView(viewMount, currentDate, events, todayStr, isStudent);
     } else {
-      renderAgendaView(viewMount, events, todayStr);
+      renderAgendaView(viewMount, events, todayStr, isStudent);
     }
 
     // Bind Navigation & Controls
@@ -143,7 +193,7 @@ export async function renderCalendarView(params, router, container) {
     });
   };
 
-  const renderMonthView = (mount, year, month, events, todayStr) => {
+  const renderMonthView = (mount, year, month, events, todayStr, isStudent = false) => {
     const firstDay = new Date(year, month, 1).getDay(); // 0 is Sunday
     const daysInMonth = new Date(year, month + 1, 0).getDate();
     const prevMonthDays = new Date(year, month, 0).getDate();
@@ -235,28 +285,30 @@ export async function renderCalendarView(params, router, container) {
       });
     });
 
-    // Drag-and-drop or click on day cell
-    mount.querySelectorAll('.cal-day-cell').forEach(cell => {
-      cell.addEventListener('dragover', (e) => e.preventDefault());
-      cell.addEventListener('drop', async (e) => {
-        e.preventDefault();
-        const targetDate = cell.dataset.date;
-        const evData = e.dataTransfer.getData('application/json');
-        if (evData) {
-          try {
-            const parsed = JSON.parse(evData);
-            await setDue(parsed.kind, parsed.sourceId, { date: targetDate, time: parsed.time });
-            toast.success(`Rescheduled to ${targetDate}!`);
-            render();
-          } catch (err) {
-            console.error('Failed to reschedule event:', err);
+    // Drag-and-drop or click on day cell (teacher only)
+    if (!isStudent) {
+      mount.querySelectorAll('.cal-day-cell').forEach(cell => {
+        cell.addEventListener('dragover', (e) => e.preventDefault());
+        cell.addEventListener('drop', async (e) => {
+          e.preventDefault();
+          const targetDate = cell.dataset.date;
+          const evData = e.dataTransfer.getData('application/json');
+          if (evData) {
+            try {
+              const parsed = JSON.parse(evData);
+              await setDue(parsed.kind, parsed.sourceId, { date: targetDate, time: parsed.time });
+              toast.success(`Rescheduled to ${targetDate}!`);
+              render();
+            } catch (err) {
+              console.error('Failed to reschedule event:', err);
+            }
           }
-        }
+        });
       });
-    });
+    }
   };
 
-  const renderWeekView = (mount, date, events, todayStr) => {
+  const renderWeekView = (mount, date, events, todayStr, isStudent = false) => {
     // Find start of week (Sunday)
     const startOfWeek = new Date(date);
     startOfWeek.setDate(date.getDate() - date.getDay());
@@ -312,7 +364,7 @@ export async function renderCalendarView(params, router, container) {
     });
   };
 
-  const renderAgendaView = (mount, events, todayStr) => {
+  const renderAgendaView = (mount, events, todayStr, isStudent = false) => {
     if (events.length === 0) {
       mount.innerHTML = `
         <div class="p-12 text-center text-slate-400">
@@ -354,10 +406,10 @@ export async function renderCalendarView(params, router, container) {
 
               <div class="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
                 <sl-button size="small" variant="default" class="btn-agenda-edit" data-id="${esc(ev.id)}">
-                  Reschedule
+                  ${isStudent ? 'Details' : 'Reschedule'}
                 </sl-button>
                 <sl-button size="small" variant="primary" class="btn-agenda-open" data-id="${esc(ev.id)}">
-                  Open
+                  ${isStudent ? getEventActionLabel(ev, true) : 'Open'}
                 </sl-button>
               </div>
             </div>
@@ -377,17 +429,45 @@ export async function renderCalendarView(params, router, container) {
       btn.addEventListener('click', () => {
         const ev = events.find(item => item.id === btn.dataset.id);
         if (!ev) return;
-        if (ev.kind === 'assignment') window.location.hash = `#/assignments/edit?id=${ev.sourceId}`;
-        else if (ev.kind === 'flashcards') window.location.hash = `#/flashcards/edit?id=${ev.sourceId}`;
-        else if (ev.kind === 'timeline') window.location.hash = `#/timeline/view?id=${ev.sourceId}`;
-        else if (ev.kind === 'video') window.location.hash = `#/video/edit?id=${ev.sourceId}`;
+        window.location.hash = getEventLaunchUrl(ev, isStudent);
       });
     });
   };
 
-  const openEventDetailDialog = (ev, onUpdated) => {
-    const dialog = document.createElement('sl-dialog');
-    dialog.label = ev.title;
+  await render();
+}
+
+export function openEventDetailDialog(ev, onUpdated) {
+  const isStudent = RoleMode.get() === 'student';
+  const dialog = document.createElement('sl-dialog');
+  dialog.label = ev.title;
+
+  if (isStudent) {
+    dialog.innerHTML = `
+      <div class="space-y-4 py-1 text-sm">
+        <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1">
+          <div>Class: <strong>${esc(ev.courseName)}</strong></div>
+          <div>Type: <span class="capitalize">${esc(ev.kind)}</span></div>
+          <div>Points: ${ev.points}</div>
+        </div>
+
+        <div class="p-3 rounded-xl bg-blue-50/60 border border-blue-100 text-xs text-blue-900 space-y-1">
+          <div class="font-semibold text-blue-950 flex items-center gap-1.5">
+            <sl-icon name="calendar-event"></sl-icon> Due Information
+          </div>
+          <div>Date: <strong>${ev.date ? esc(ev.date) : 'No due date'}</strong></div>
+          ${ev.time ? `<div>Time: <strong>${esc(ev.time)}</strong></div>` : ''}
+        </div>
+      </div>
+      <div slot="footer" class="flex justify-between items-center gap-2">
+        <sl-button variant="default" id="btn-cancel-ev">Close</sl-button>
+        <sl-button variant="primary" id="btn-open-lesson">
+          <sl-icon slot="prefix" name="${getEventIcon(ev.kind)}"></sl-icon>
+          ${getEventActionLabel(ev, true)}
+        </sl-button>
+      </div>
+    `;
+  } else {
     dialog.innerHTML = `
       <div class="space-y-4 py-1 text-sm">
         <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs space-y-1">
@@ -402,37 +482,34 @@ export async function renderCalendarView(params, router, container) {
         </div>
       </div>
       <div slot="footer" class="flex justify-between gap-2">
-        <sl-button variant="default" id="btn-open-lesson">Open Lesson</sl-button>
+        <sl-button variant="default" id="btn-open-lesson">${getEventActionLabel(ev, false)}</sl-button>
         <div class="flex gap-2">
           <sl-button variant="default" id="btn-cancel-ev">Cancel</sl-button>
           <sl-button variant="primary" id="btn-save-ev">Save Date</sl-button>
         </div>
       </div>
     `;
-    document.body.appendChild(dialog);
-    dialog.show();
+  }
 
-    dialog.querySelector('#btn-cancel-ev')?.addEventListener('click', () => dialog.hide());
-    dialog.querySelector('#btn-open-lesson')?.addEventListener('click', () => {
-      dialog.hide();
-      if (ev.kind === 'assignment') window.location.hash = `#/assignments/edit?id=${ev.sourceId}`;
-      else if (ev.kind === 'flashcards') window.location.hash = `#/flashcards/edit?id=${ev.sourceId}`;
-      else if (ev.kind === 'timeline') window.location.hash = `#/timeline/view?id=${ev.sourceId}`;
-      else if (ev.kind === 'video') window.location.hash = `#/video/edit?id=${ev.sourceId}`;
-    });
+  document.body.appendChild(dialog);
+  dialog.show?.();
 
-    dialog.querySelector('#btn-save-ev')?.addEventListener('click', async () => {
-      const newDate = dialog.querySelector('#input-ev-date')?.value || null;
-      const newTime = dialog.querySelector('#input-ev-time')?.value || null;
+  dialog.querySelector('#btn-cancel-ev')?.addEventListener('click', () => dialog.hide?.());
+  dialog.querySelector('#btn-open-lesson')?.addEventListener('click', () => {
+    dialog.hide?.();
+    window.location.hash = getEventLaunchUrl(ev, isStudent);
+  });
 
-      await setDue(ev.kind, ev.sourceId, { date: newDate, time: newTime });
-      toast.success('Due date updated!');
-      dialog.hide();
-      if (onUpdated) onUpdated();
-    });
+  dialog.querySelector('#btn-save-ev')?.addEventListener('click', async () => {
+    const newDate = dialog.querySelector('#input-ev-date')?.value || null;
+    const newTime = dialog.querySelector('#input-ev-time')?.value || null;
 
-    dialog.addEventListener('sl-after-hide', () => dialog.remove());
-  };
+    await setDue(ev.kind, ev.sourceId, { date: newDate, time: newTime });
+    toast.success('Due date updated!');
+    dialog.hide?.();
+    if (onUpdated) onUpdated();
+  });
 
-  await render();
+  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  return dialog;
 }

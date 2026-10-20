@@ -43,12 +43,30 @@ async function resolvePayload(params) {
     try { sessionStorage.setItem(PAYLOAD_SESSION_KEY, JSON.stringify(eph.payload)); } catch (_) {}
     return { payload: eph.payload, preview: false };
   }
-  if (params.itemId) {
+  const searchId = params.itemId || params.id;
+  if (searchId) {
     try {
       const items = await storage.table('student_items').toArray();
-      const match = items.find(it => it.item_id === params.itemId || it.id === params.itemId);
+      const match = items.find(it =>
+        it.item_id === searchId ||
+        it.id === searchId ||
+        it.payload?.assignment_id === searchId ||
+        it.payload?.id === searchId
+      );
       if (match?.payload?.kind === 'kb-assignment') {
         return { payload: match.payload, preview: false };
+      }
+    } catch (_) {}
+
+    try {
+      const a = await storage.table('assignments').get(searchId);
+      if (a) {
+        const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
+        const payload = await buildStudentPayload(
+          { ...a, publish: { version: a.publish?.version || 0, salt: a.publish?.salt || 'student-local' } },
+          { teacherKeys: keys }
+        );
+        return { payload, preview: false, teacherAssignment: a };
       }
     } catch (_) {}
   }

@@ -7,18 +7,21 @@ import { storage } from '../../core/storage.js';
  */
 
 export async function loadCalendarEvents({ courseId = null, startDate = null, endDate = null } = {}) {
-  const [courses, assignments, flashcards, timelines, videos, courseItems, gradebookAssignments] = await Promise.all([
+  const [courses, assignments, flashcards, timelines, videos, courseItems, gradebookAssignments, studentCourses, studentItems] = await Promise.all([
     storage.table('gradebook_courses').toArray().catch(() => []),
     storage.table('assignments').toArray().catch(() => []),
     storage.table('flashcards').toArray().catch(() => []),
     storage.table('timelines').toArray().catch(() => []),
     storage.table('video_assessments').toArray().catch(() => []),
     storage.table('course_items').toArray().catch(() => []),
-    storage.table('gradebook_assignments').toArray().catch(() => [])
+    storage.table('gradebook_assignments').toArray().catch(() => []),
+    storage.table('student_courses').toArray().catch(() => []),
+    storage.table('student_items').toArray().catch(() => [])
   ]);
 
   const courseMap = new Map();
-  for (const c of courses) {
+  for (const c of [...courses, ...studentCourses]) {
+    if (!c?.id) continue;
     courseMap.set(c.id, {
       name: c.name || 'Untitled Class',
       color: c.color || '#2563eb',
@@ -154,6 +157,25 @@ export async function loadCalendarEvents({ courseId = null, startDate = null, en
         cId: ga.course_id,
         points: ga.points_possible ?? 100,
         raw: ga
+      });
+    }
+  }
+
+  // 7. Student Items (enrolled coursework for student mode)
+  for (const si of studentItems) {
+    const date = si.due_date || si.payload?.due_date || si.payload?.settings?.due_date;
+    const time = si.due_time || si.payload?.due_time || si.payload?.settings?.due_time;
+    if (date) {
+      addEvent({
+        id: si.id,
+        kind: si.kind || si.payload?.kind || 'assignment',
+        sourceId: si.item_id || si.payload?.assignment_id || si.payload?.id || si.id,
+        title: si.title || si.payload?.title || 'Course Item',
+        date,
+        time,
+        cId: si.course_id,
+        points: si.points || si.payload?.points || si.payload?.total_points || 100,
+        raw: si
       });
     }
   }
