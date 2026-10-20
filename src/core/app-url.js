@@ -62,3 +62,12 @@ export async function setPublicAppUrl(url, storageInstance = storage) {
     await storageInstance.setMetadata('public_app_url', url ? String(url).trim() : null);
   }
 }
+
+export const AppUrl = {
+  isLocalOrigin,
+  getPublicAppUrl,
+  setPublicAppUrl
+};
+
+export default AppUrl;
+

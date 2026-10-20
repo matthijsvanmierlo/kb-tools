@@ -43,8 +43,8 @@ export async function renderStudentGradebookView(params, router, container) {
               <div>
                 <h1 class="text-2xl font-bold text-slate-900">My Gradebook &amp; Feedback</h1>
                 <p class="text-xs text-slate-500">
-                  ${profile.defaultIdentity.full_name ? esc(profile.defaultIdentity.full_name) : 'Student Workspace'}
-                  ${profile.defaultIdentity.student_id ? ` · ID: <span class="font-mono">${esc(profile.defaultIdentity.student_id)}</span>` : ''}
+                  ${profile?.defaultIdentity?.full_name ? esc(profile.defaultIdentity.full_name) : 'Student Workspace'}
+                  ${profile?.defaultIdentity?.student_id ? ` · ID: <span class="font-mono">${esc(profile.defaultIdentity.student_id)}</span>` : ''}
                 </p>
               </div>
             </div>
@@ -436,3 +436,6 @@ export async function renderStudentGradebookView(params, router, container) {
 
   render();
 }
+
+export default renderStudentGradebookView;
+
