@@ -116,7 +116,7 @@ export async function checkAccessCode(payload, studentId, accessCode) {
  * Build the encrypted submission a student hands in.
  * @returns {Promise<{ envelope: object, text: string, body: object }>}
  */
-export async function createSubmission({ payload, studentId, studentName, accessCode, answers, startedAt, clientScore = null }) {
+export async function createSubmission({ payload, studentId, studentName, accessCode, answers, startedAt, clientScore = null, commitment = null }) {
   const body = {
     assignment_id: payload.assignment_id,
     publish_version: payload.publish_version,
@@ -125,7 +125,8 @@ export async function createSubmission({ payload, studentId, studentName, access
     started_at: startedAt || null,
     submitted_at: new Date().toISOString(),
     answers: answers || {},
-    client_score: clientScore
+    client_score: clientScore,
+    commitment: commitment || null
   };
   const signature = normalizeAccessCode(accessCode)
     ? await SubmissionCrypto.signWithAccessCode(body, accessCode)
@@ -198,6 +199,18 @@ export async function evaluateSubmission({ text, teacherPrivateKey, assignment, 
   // Never trust client_score: grade again from the key that only the teacher holds
   const auto = gradeSubmission(assignment, body.answers || {});
   const answers_fingerprint = await computeAnswersFingerprint(body.answers || {});
+  const integrity_flags = [];
+  if (body.commitment) {
+    const qCount = assignment.questions?.length || 1;
+    const activeMs = body.commitment.total_active_ms || 0;
+    const pasteCount = body.commitment.paste_count || 0;
+    if (activeMs > 0 && activeMs < qCount * 3000) {
+      integrity_flags.push('rapid_completion');
+    }
+    if (pasteCount >= 3) {
+      integrity_flags.push('paste_heavy');
+    }
+  }
 
   return {
     id: generateUUID(),
@@ -217,6 +230,8 @@ export async function evaluateSubmission({ text, teacherPrivateKey, assignment, 
     signature: signature || null,
     answers_fingerprint,
     client_score: body.client_score ?? null,
+    commitment: body.commitment || null,
+    integrity_flags,
     auto,
     manual: {},
     feedback: '',

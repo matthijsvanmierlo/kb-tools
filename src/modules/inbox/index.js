@@ -19,6 +19,11 @@ const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 export async function renderInboxView(params, router, container) {
   let staged = []; // Session-only staging array: { id, source, text, classification, targetTitle, studentClaim, status, statusTone, errorDetail }
   let lastImportSummary = null; // Stored results after Import All: array of { title, type, added, duplicates, errors, link }
+  let watchDirHandle = null;
+  let watchInterval = null;
+  let watchFolderName = '';
+  let autoImport = Boolean(await storage.getMetadata('inbox_auto_import'));
+  const seenFiles = new Set();
 
   const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
 
@@ -110,6 +115,18 @@ export async function renderInboxView(params, router, container) {
             </div>
           </div>
           <div class="flex flex-wrap items-center gap-2">
+            <sl-button size="small" id="btn-watch-folder" variant="${watchDirHandle ? 'primary' : 'default'}">
+              <sl-icon slot="prefix" name="${watchDirHandle ? 'folder-check' : 'folder2-open'}"></sl-icon>
+              ${watchDirHandle ? `Watching "${esc(watchFolderName)}"` : 'Watch folder'}
+            </sl-button>
+            ${watchDirHandle ? `
+              <sl-button size="small" variant="default" id="btn-stop-watch" title="Stop watching">
+                <sl-icon name="x-lg"></sl-icon>
+              </sl-button>
+            ` : ''}
+            <sl-tooltip content="Automatically import matched submissions into gradebook as soon as files appear in the watched folder">
+              <sl-switch id="switch-auto-import" size="small" ${autoImport ? 'checked' : ''}>Auto-import</sl-switch>
+            </sl-tooltip>
             <sl-button size="small" id="btn-check-server">
               <sl-icon slot="prefix" name="cloud-download"></sl-icon> Check server
             </sl-button>
@@ -125,7 +142,7 @@ export async function renderInboxView(params, router, container) {
             <sl-button size="small" id="btn-browse-files">
               <sl-icon slot="prefix" name="upload"></sl-icon> Select files
             </sl-button>
-            <input type="file" id="inbox-file-input" multiple accept=".kbsub,.kbr,.txt,.json,.zip" class="hidden" />
+            <input type="file" id="inbox-file-input" multiple accept=".kbsub,.kbsub.html,.kbr,.zip,.html,.htm,.json,.txt" class="hidden" />
           </div>
         </div>
 
@@ -359,6 +376,25 @@ export async function renderInboxView(params, router, container) {
         senderSteps: 'On the student\'s device: More ways to hand in → "Send directly to your teacher\'s device". Scan or paste the code it shows.'
       });
       if (text) await classifyAndStage([{ source: 'Direct transfer', text }]);
+    });
+
+    container.querySelector('#btn-watch-folder')?.addEventListener('click', async () => {
+      if (watchDirHandle) {
+        stopWatchFolder();
+      } else {
+        await startWatchFolder();
+      }
+    });
+
+    container.querySelector('#btn-stop-watch')?.addEventListener('click', () => {
+      stopWatchFolder();
+    });
+
+    const autoImportSwitch = container.querySelector('#switch-auto-import');
+    autoImportSwitch?.addEventListener('sl-change', async (e) => {
+      autoImport = e.target.checked;
+      await storage.setMetadata('inbox_auto_import', autoImport);
+      toast.info(`Inbox auto-import ${autoImport ? 'enabled' : 'disabled'}.`);
     });
 
     clearBtn?.addEventListener('click', () => {
@@ -597,6 +633,76 @@ export async function renderInboxView(params, router, container) {
     }
   }
 
+  async function startWatchFolder() {
+    try {
+      if (!window.showDirectoryPicker) {
+        toast.warning('Directory access is not supported by your browser.');
+        return;
+      }
+      watchDirHandle = await window.showDirectoryPicker({ mode: 'read' });
+      watchFolderName = watchDirHandle.name || 'Folder';
+      seenFiles.clear();
+
+      await checkFolder();
+
+      if (watchInterval) clearInterval(watchInterval);
+      watchInterval = setInterval(() => checkFolder(), 4000);
+      toast.info(`Now watching folder "${watchFolderName}".`);
+      render();
+    } catch (err) {
+      if (err.name !== 'AbortError') {
+        console.error('Failed to watch folder:', err);
+        toast.danger('Could not watch folder: ' + err.message);
+      }
+    }
+  }
+
+  function stopWatchFolder() {
+    if (watchInterval) clearInterval(watchInterval);
+    watchInterval = null;
+    watchDirHandle = null;
+    watchFolderName = '';
+    toast.info('Stopped watching folder.');
+    render();
+  }
+
+  async function checkFolder() {
+    if (!watchDirHandle) return;
+    try {
+      const newFiles = [];
+      for await (const entry of watchDirHandle.values()) {
+        if (entry.kind === 'file') {
+          const name = entry.name.toLowerCase();
+          if (name.endsWith('.kbsub') || name.endsWith('.kbsub.html') || name.endsWith('.kbr') || name.endsWith('.zip') || name.endsWith('.html') || name.endsWith('.htm') || name.endsWith('.json') || name.endsWith('.txt')) {
+            const file = await entry.getFile();
+            const sig = `${entry.name}:${file.lastModified}:${file.size}`;
+            if (!seenFiles.has(sig)) {
+              seenFiles.add(sig);
+              newFiles.push(file);
+            }
+          }
+        }
+      }
+
+      if (newFiles.length > 0) {
+        const expanded = await expandFiles(newFiles);
+        if (expanded.length > 0) {
+          const prevStagedCount = staged.length;
+          await classifyAndStage(expanded);
+          if (autoImport) {
+            const count = staged.length - prevStagedCount;
+            await runImportAll();
+            toast.success(`Auto-imported ${count} submission(s) from Inbox folder`);
+          } else {
+            toast.info(`Detected ${newFiles.length} new file(s) in watched folder. Staged for review.`);
+          }
+        }
+      }
+    } catch (err) {
+      console.warn('Folder polling error:', err);
+    }
+  }
+
   // Handle files passed via global drop (store.getState('inboxDrop'))
   const dropped = store.getState('inboxDrop');
   if (dropped) {
@@ -605,6 +711,10 @@ export async function renderInboxView(params, router, container) {
   } else {
     render();
   }
+
+  return () => {
+    if (watchInterval) clearInterval(watchInterval);
+  };
 }
 
 export default renderInboxView;

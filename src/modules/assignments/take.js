@@ -43,6 +43,15 @@ async function resolvePayload(params) {
     try { sessionStorage.setItem(PAYLOAD_SESSION_KEY, JSON.stringify(eph.payload)); } catch (_) {}
     return { payload: eph.payload, preview: false };
   }
+  if (params.itemId) {
+    try {
+      const items = await storage.table('student_items').toArray();
+      const match = items.find(it => it.item_id === params.itemId || it.id === params.itemId);
+      if (match?.payload?.kind === 'kb-assignment') {
+        return { payload: match.payload, preview: false };
+      }
+    } catch (_) {}
+  }
   try {
     const cached = JSON.parse(sessionStorage.getItem(PAYLOAD_SESSION_KEY));
     if (cached?.kind === 'kb-assignment') return { payload: cached, preview: false };
@@ -200,6 +209,24 @@ export async function renderTakeView(params, router, container) {
     startedAt: null,
     result: null
   };
+
+  const commitment = {
+    chainHead: '',
+    totalActiveMs: 0,
+    pasteCount: 0,
+    blurCount: 0,
+    perQuestionMs: {},
+    qEnteredAt: Date.now()
+  };
+
+  const recordCommitmentEvent = async (type, extra = '') => {
+    try {
+      const seed = commitment.chainHead || `${payload.assignment_id}:${state.startedAt || Date.now()}`;
+      const entry = `${seed}:${type}:${Date.now()}:${extra}`;
+      commitment.chainHead = await sha256Hex(entry);
+    } catch (_) {}
+  };
+
   const draftKey = () => `kb_asg_draft_${payload.assignment_id}_${payload.publish_version}_${String(state.student.id).toUpperCase()}`;
   const receiptKey = () => `kb_asg_receipt_${payload.assignment_id}_${payload.publish_version}_${String(state.student.id).toUpperCase()}`;
   // Also saved (encrypted with the access code) to the class's drop box, to continue on another device
@@ -212,9 +239,18 @@ export async function renderTakeView(params, router, container) {
   };
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'hidden') roamer?.flush().catch(() => {});
+      if (document.visibilityState === 'hidden') {
+        commitment.blurCount++;
+        recordCommitmentEvent('tab_hidden');
+        roamer?.flush().catch(() => {});
+      }
     });
   }
+
+  container.addEventListener('paste', () => {
+    commitment.pasteCount++;
+    recordCommitmentEvent('paste_detected', questions[state.index]?.id || '');
+  });
 
   const isAnswered = (q) => {
     const v = state.answers[q.id];
@@ -724,6 +760,14 @@ export async function renderTakeView(params, router, container) {
 
     let submission = null;
     if (!preview) {
+      const curQ = questions[state.index];
+      if (curQ && commitment.qEnteredAt) {
+        const delta = Math.max(0, Date.now() - commitment.qEnteredAt);
+        commitment.perQuestionMs[curQ.id] = (commitment.perQuestionMs[curQ.id] || 0) + delta;
+        commitment.totalActiveMs += delta;
+        commitment.qEnteredAt = Date.now();
+      }
+
       try {
         submission = await createSubmission({
           payload,
@@ -732,7 +776,14 @@ export async function renderTakeView(params, router, container) {
           accessCode: state.student.code,
           answers: state.answers,
           startedAt: state.startedAt,
-          clientScore
+          clientScore,
+          commitment: {
+            chain_head: commitment.chainHead,
+            total_active_ms: commitment.totalActiveMs,
+            paste_count: commitment.pasteCount,
+            blur_count: commitment.blurCount,
+            per_question_ms: commitment.perQuestionMs
+          }
         });
       } catch (err) {
         console.error('Submission encryption failed:', err);
@@ -769,6 +820,7 @@ export async function renderTakeView(params, router, container) {
         courseId: payload.course_id || payload.course_meta?.course_id || null,
         courseName: payload.course_meta?.course_name || '',
         title: payload.title,
+        dueDate: payload.due_date || null,
         studentId: state.student.id,
         studentName: state.student.name,
         clientScore,
@@ -801,18 +853,6 @@ export async function renderTakeView(params, router, container) {
     const r = state.result;
     const showScore = feedback !== 'none' && (isPractice || releaseImmediately);
     const pct = r.clientScore.checkable ? Math.round((r.clientScore.earned / r.clientScore.checkable) * 100) : null;
-
-    // Persist submission into student ledger
-    StudentLedger.recordSubmission({
-      assignmentId: payload.assignment_id,
-      courseId: payload.course_id || null,
-      courseName: isPractice ? 'Self-Study' : 'Class Assignment',
-      title: payload.title || 'Assignment',
-      studentId: state.student.id || (isPractice ? 'self_study' : ''),
-      studentName: state.student.name || 'Student',
-      clientScore: r.clientScore,
-      receiptId: r.receiptId
-    }).catch(() => {});
 
     container.innerHTML = `
       <div class="max-w-3xl mx-auto space-y-6">

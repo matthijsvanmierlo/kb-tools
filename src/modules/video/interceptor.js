@@ -70,7 +70,48 @@ export class VideoGatekeeper {
   async resolveCheckpoint(checkpointId) {
     this.completedIds.add(checkpointId);
     this.isLocked = false;
-    await this.driver.play();
+    this.renderTranscript();
+    if (this.driver && typeof this.driver.play === 'function') {
+      await this.driver.play().catch(() => {});
+    }
+  }
+
+  triggerNextCheckpoint() {
+    const nextIncomplete = this.checkpoints.find(cp => !this.completedIds.has(cp.id));
+    if (nextIncomplete && typeof this.onTriggerCheckpoint === 'function') {
+      this.isLocked = true;
+      this.onTriggerCheckpoint(nextIncomplete);
+    }
+  }
+
+  setTranscript(containerEl, rawTranscript) {
+    this.transcriptContainer = containerEl;
+    this.transcriptSegments = parseTranscriptSegments(rawTranscript);
+    this.renderTranscript();
+  }
+
+  renderTranscript() {
+    if (!this.transcriptContainer || !this.transcriptSegments || !this.transcriptSegments.length) return;
+    const unlocked = getUnlockedTranscriptSegments(this.transcriptSegments, this.checkpoints, this.completedIds);
+
+    this.transcriptContainer.innerHTML = `
+      <div class="space-y-2 p-3 text-xs" role="region" aria-label="Interactive video transcript">
+        <div class="flex items-center justify-between pb-1.5 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[10px]">
+          <span>Synchronized Transcript</span>
+          <span>Checkpoint-Gated</span>
+        </div>
+        <div class="space-y-1.5 max-h-64 overflow-y-auto pr-1" id="transcript-scroll-area">
+          ${unlocked.map(s => `
+            <div class="p-2 rounded-lg transition-colors ${s.isLocked ? 'bg-slate-100 text-slate-400 border border-dashed border-slate-200' : 'hover:bg-slate-50 text-slate-700 bg-white border border-slate-100 shadow-2xs'} flex items-start gap-2">
+              <span class="font-mono text-[10px] text-slate-400 flex-shrink-0 mt-0.5">
+                ${Math.floor(s.start_sec / 60)}:${String(s.start_sec % 60).padStart(2, '0')}
+              </span>
+              <div class="flex-1 min-w-0">${s.displayHtml}</div>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
   }
 
   stop() {
@@ -289,6 +330,128 @@ export class VideoGatekeeper {
       });
     }
   }
+}
+
+/**
+ * Parse raw transcript (string, SRT, VTT, [mm:ss] format, or object array) into structured segments.
+ * @param {string|Array<{start_sec: number, end_sec?: number, text: string}>} raw
+ * @returns {Array<{start_sec: number, end_sec: number, text: string}>}
+ */
+export function parseTranscriptSegments(raw) {
+  if (!raw) return [];
+  if (Array.isArray(raw)) {
+    return raw.map(item => ({
+      start_sec: typeof item.start_sec === 'number' ? item.start_sec : (item.start || 0),
+      end_sec: typeof item.end_sec === 'number' ? item.end_sec : (item.end || item.start_sec || 0),
+      text: item.text || item.content || ''
+    })).sort((a, b) => a.start_sec - b.start_sec);
+  }
+
+  if (typeof raw !== 'string') return [];
+
+  const text = raw.trim();
+  if (!text) return [];
+
+  const segments = [];
+  const timecodeRegex = /(?:(\d{1,2}):)?(\d{2}):(\d{2})(?:[.,](\d{1,3}))?\s*-->\s*(?:(\d{1,2}):)?(\d{2}):(\d{2})(?:[.,](\d{1,3}))?/;
+  const lines = text.split(/\r?\n/);
+  let currentStart = null;
+  let currentEnd = null;
+  let currentTextLines = [];
+
+  const parseTime = (h, m, s, ms) => {
+    const hours = h ? parseInt(h, 10) : 0;
+    const minutes = parseInt(m, 10);
+    const seconds = parseInt(s, 10);
+    const millis = ms ? parseInt(ms.padEnd(3, '0'), 10) : 0;
+    return hours * 3600 + minutes * 60 + seconds + millis / 1000;
+  };
+
+  let hasTimecodes = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    const match = line.match(timecodeRegex);
+    if (match) {
+      hasTimecodes = true;
+      if (currentStart !== null && currentTextLines.length) {
+        segments.push({
+          start_sec: Math.round(currentStart),
+          end_sec: Math.round(currentEnd || currentStart),
+          text: currentTextLines.join(' ')
+        });
+        currentTextLines = [];
+      }
+      currentStart = parseTime(match[1], match[2], match[3], match[4]);
+      currentEnd = parseTime(match[5], match[6], match[7], match[8]);
+    } else if (line.match(/^\[?(\d{1,2}):(\d{2})\]?\s*(.*)$/)) {
+      hasTimecodes = true;
+      if (currentStart !== null && currentTextLines.length) {
+        segments.push({
+          start_sec: Math.round(currentStart),
+          end_sec: Math.round(currentEnd || currentStart),
+          text: currentTextLines.join(' ')
+        });
+        currentTextLines = [];
+      }
+      const m = line.match(/^\[?(\d{1,2}):(\d{2})\]?\s*(.*)$/);
+      currentStart = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+      currentEnd = currentStart;
+      if (m[3]) currentTextLines.push(m[3]);
+    } else if (currentStart !== null && line && !line.match(/^\d+$/) && line !== 'WEBVTT') {
+      currentTextLines.push(line);
+    }
+  }
+
+  if (currentStart !== null && currentTextLines.length) {
+    segments.push({
+      start_sec: Math.round(currentStart),
+      end_sec: Math.round(currentEnd || currentStart),
+      text: currentTextLines.join(' ')
+    });
+  }
+
+  if (hasTimecodes && segments.length) {
+    return segments.sort((a, b) => a.start_sec - b.start_sec);
+  }
+
+  // Fallback: split into paragraphs
+  const paragraphs = text.split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  return paragraphs.map((para, idx) => ({
+    start_sec: idx * 30,
+    end_sec: (idx + 1) * 30,
+    text: para
+  }));
+}
+
+/**
+ * Returns segments with anti-lookahead lock status applied.
+ * Segments past the earliest incomplete checkpoint are locked and text is redacted.
+ * @param {Array<{start_sec: number, end_sec: number, text: string}>} segments
+ * @param {any[]} checkpoints
+ * @param {Set<string>} completedIds
+ */
+export function getUnlockedTranscriptSegments(segments, checkpoints, completedIds) {
+  if (!segments || !segments.length) return [];
+  const sortedCps = [...(checkpoints || [])].sort((a, b) => a.timestamp_sec - b.timestamp_sec);
+  const nextIncomplete = sortedCps.find(cp => !completedIds.has(cp.id));
+
+  return segments.map(seg => {
+    const isLocked = nextIncomplete ? (seg.start_sec > nextIncomplete.timestamp_sec) : false;
+    let displayHtml = '';
+    if (isLocked) {
+      const lockMin = Math.floor(nextIncomplete.timestamp_sec / 60);
+      const lockSec = String(nextIncomplete.timestamp_sec % 60).padStart(2, '0');
+      displayHtml = `<span class="italic text-slate-400 select-none">🔒 [Transcript slice locked until checkpoint at ${lockMin}:${lockSec} is answered]</span>`;
+    } else {
+      displayHtml = Sanitizer.escapeHtml(seg.text);
+    }
+
+    return {
+      ...seg,
+      isLocked,
+      displayHtml
+    };
+  });
 }
 
 export default VideoGatekeeper;

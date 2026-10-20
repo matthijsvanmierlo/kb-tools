@@ -18,7 +18,8 @@ import { bytesToB64, b64ToBytes } from '../submission-crypto.js';
 
 export const SYNC_TABLES = [
   'flashcards', 'timelines', 'video_assessments', 'gradebook_courses', 'gradebook_students',
-  'gradebook_assignments', 'gradebook_grades', 'gradebook_rubrics', 'assignments', 'assignment_submissions'
+  'gradebook_assignments', 'gradebook_grades', 'gradebook_rubrics', 'assignments', 'assignment_submissions',
+  'course_units', 'course_items'
 ];
 const SYNCED = new Set(SYNC_TABLES);
 

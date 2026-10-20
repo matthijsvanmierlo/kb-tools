@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "test": "NODE_OPTIONS='-r ./tests/setup-fs-patch.cjs' vitest run",
+    "test:watch": "NODE_OPTIONS='-r ./tests/setup-fs-patch.cjs' vitest",
     "build:css": "tailwindcss -c tailwind.config.js -i css/tailwind.src.css -o css/tailwind.output.css --minify",
     "watch:css": "tailwindcss -c tailwind.config.js -i css/tailwind.src.css -o css/tailwind.output.css --watch",
     "relay": "node server/relay/index.js",

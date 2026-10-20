@@ -44,7 +44,7 @@ export class GradebookBridge {
       category_id: categoryId || existing?.category_id || course.categories?.[0]?.id || null,
       title: title || existing?.title || 'Assignment',
       max_score: resolvedMaxScore,
-      due_date: dueDate || existing?.due_date || new Date().toISOString().slice(0, 10),
+      due_date: dueDate !== undefined ? dueDate : (existing?.due_date || new Date().toISOString().slice(0, 10)),
       standard_ids: standardIds || existing?.standard_ids || [],
       source: actualSource
     };

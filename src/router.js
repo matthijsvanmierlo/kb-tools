@@ -22,6 +22,42 @@ export function extractShareParams(params = {}) {
   };
 }
 
+export const ROUTE_TITLES = {
+  '#/': 'Home',
+  '#/home': 'Home',
+  '#/course': 'Courses',
+  '#/course/join': 'Join Course',
+  '#/calendar': 'Calendar',
+  '#/classes': 'Classes & Rosters',
+  '#/flashcards': 'Flashcards',
+  '#/flashcards/study': 'Study Flashcards',
+  '#/flashcards/edit': 'Flashcard Editor',
+  '#/timeline': 'Timeline',
+  '#/timeline/view': 'View Timeline',
+  '#/video': 'Interactive Video',
+  '#/gradebook': 'Gradebook',
+  '#/assignments': 'Assignments',
+  '#/assignments/edit': 'Assignment Editor',
+  '#/assignments/take': 'Take Assignment',
+  '#/inbox': 'Submission Inbox',
+  '#/share': 'Share',
+  '#/student': 'Student Hub',
+  '#/student/courses': 'My Courses',
+  '#/student/course': 'Course Details',
+  '#/student/gradebook': 'My Grades',
+  '#/guide': 'Teacher Guide',
+  '#/about': 'About',
+  '#/philosophy': 'Local-First Philosophy'
+};
+
+export function routeTitle(path) {
+  if (!path) return 'KennisBoost Tools';
+  const clean = path.split('?')[0].toLowerCase();
+  const title = ROUTE_TITLES[clean];
+  if (title) return `${title} · KennisBoost Tools`;
+  return 'KennisBoost Tools';
+}
+
 /**
  * Hash-based Single Page App Router
  * Supports routes: #/flashcards, #/timeline, #/video, #/gradebook, #/share
@@ -89,35 +125,55 @@ export class Router {
     }
 
     const { path, params } = this.parseHash();
+
+    // Legacy redirect for roster view inside gradebook
+    if (path === '#/gradebook' && params?.view === 'roster') {
+      const courseId = params?.courseId ? `&courseId=${encodeURIComponent(params.courseId)}` : '';
+      this.navigate(`#/classes?tab=roster${courseId}`);
+      return;
+    }
+
     this.currentPath = path;
     this.currentParams = params;
 
     store.setState('currentRoute', path);
+
+    if (typeof document !== 'undefined') {
+      document.title = routeTitle(path);
+    }
 
     // Update screen reader announcement
     this._announceRouteChange(path);
 
     // Update navigation bar active states
     this._updateNavUI(path);
+    try {
+      const { updateActiveNav } = await import('./components/app-nav.js');
+      updateActiveNav(window.location.hash || path);
+    } catch (_) {}
 
-    // Update student mode chrome
-    const eph = store.getState('ephemeralData');
-    const isStudentFacing = (eph && (eph.type === 'assignment' || (eph.type === 'video' && eph.payload?.secure) || eph.type === 'student_grade_report' || eph.type === 'assignment_feedback'))
-      || (path === '#/assignments/take' && !params?.preview)
-      || (path === '#/report')
-      || (path === '#/feedback')
-      || (path === '#/student')
-      || (path === '#/student/gradebook')
-      || (RoleMode.get() === 'student');
+    // Minimal Chrome (Exam / Kiosk) vs Standard Chrome
+    const isMinimalChrome = (path === '#/assignments/take' && !params?.preview)
+      || path === '#/share'
+      || path.endsWith('/kiosk')
+      || Boolean(params?.kiosk);
 
     if (typeof document !== 'undefined' && document.body) {
-      const brand = document.querySelector('.kb-brand');
-      if (isStudentFacing) {
+      if (isMinimalChrome) {
+        document.body.dataset.chrome = 'minimal';
+      } else {
+        delete document.body.dataset.chrome;
+      }
+
+      if (RoleMode.get() === 'student') {
         document.body.dataset.mode = 'student';
-        if (brand) brand.setAttribute('href', RoleMode.get() === 'student' ? '#/student' : '#/');
       } else {
         delete document.body.dataset.mode;
-        if (brand) brand.setAttribute('href', '#/');
+      }
+
+      const brand = document.querySelector('.kb-brand');
+      if (brand) {
+        brand.setAttribute('href', RoleMode.get() === 'student' ? '#/student' : '#/');
       }
     }
 
@@ -193,6 +249,22 @@ export class Router {
         if (typeof window.scrollTo === 'function') {
           try { window.scrollTo({ top: 0, behavior: 'instant' }); } catch (e) { window.scrollTo(0, 0); }
         }
+
+        if (!this._initialLoad && typeof document !== 'undefined') {
+          const openDialog = document.querySelector('sl-dialog[open], sl-drawer[open]');
+          if (!openDialog && container) {
+            requestAnimationFrame(() => {
+              const h1 = container.querySelector('h1');
+              if (h1) {
+                h1.setAttribute('tabindex', '-1');
+                h1.focus({ preventScroll: true });
+              } else {
+                container.focus({ preventScroll: true });
+              }
+            });
+          }
+        }
+        this._initialLoad = false;
       }
     }
   }
@@ -414,6 +486,22 @@ export class Router {
     }
     store.setState('ephemeralData', { type, payload });
 
+    try {
+      const itemId = payload?.assignment_id || payload?.id || (typeof crypto !== 'undefined' ? crypto.randomUUID() : 'shared-item');
+      const courseId = payload?.course_id || payload?.course_meta?.course_id || null;
+      const dueDate = payload?.due_date || payload?.settings?.due_date || null;
+      storage.table('student_items').put({
+        id: `${courseId || 'general'}_${itemId}`,
+        course_id: courseId,
+        item_id: itemId,
+        kind: type,
+        title: payload?.title || payload?.name || 'Shared Item',
+        payload,
+        due_date: dueDate,
+        updated_at: new Date().toISOString()
+      }).catch(() => {});
+    } catch (_) {}
+
     const isStudent = type === 'assignment' || (type === 'video' && payload?.secure) || type === 'student_grade_report' || type === 'assignment_feedback';
     if (typeof document !== 'undefined' && document.body) {
       if (isStudent) {
@@ -542,6 +630,11 @@ export class Router {
         '#/assignments/take': 'Assignment',
         '#/assignments/submissions': 'Assignment Submissions',
         '#/report': 'Student Grade Report',
+        '#/classes': 'Classes & Rosters',
+        '#/calendar': 'Interactive Calendar',
+        '#/course': 'Course Syllabus & Units',
+        '#/student/courses': 'My Enrolled Courses',
+        '#/student/course': 'Course Details',
         '#/guide': 'Teacher Guide and Recommended Workflows',
         '#/share': 'Shared Lesson Decryption'
       };

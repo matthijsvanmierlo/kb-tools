@@ -176,7 +176,7 @@ export function createRelayServer(opts = {}) {
 
       // 1. GET /health
       if (req.method === 'GET' && (pathname === '/health' || pathname === '/')) {
-        sendJson(200, { ok: true, version: VERSION, features: ['payloads', 'drops', 'drafts', 'sync'] });
+        sendJson(200, { ok: true, version: VERSION, features: ['payloads', 'drops', 'drafts', 'sync', 'feeds'] });
         return;
       }
 
@@ -537,6 +537,74 @@ export function createRelayServer(opts = {}) {
 
         res.writeHead(204);
         res.end();
+        return;
+      }
+
+      // 8. PUT /api/feed/:courseId or /feed/:courseId
+      const feedMatch = pathname.match(/^(?:\/api)?\/feed\/([A-Za-z0-9_\-]+)$/);
+      if (req.method === 'PUT' && feedMatch) {
+        const teacher = authenticateTeacher();
+        if (!teacher) {
+          sendError(401, 'Unauthorized: valid teacher token required');
+          return;
+        }
+
+        const courseId = feedMatch[1];
+        const rawBody = await readBody(req, MAX_PAYLOAD_SIZE);
+        let parsed;
+        try {
+          parsed = JSON.parse(rawBody);
+        } catch {
+          sendError(400, 'Invalid JSON body');
+          return;
+        }
+
+        const ciphertext = typeof parsed === 'string' ? parsed : parsed.ciphertext;
+        if (!ciphertext) {
+          sendError(400, 'Missing ciphertext in feed payload');
+          return;
+        }
+
+        const etag = parsed.etag || createHash('sha256').update(ciphertext).digest('hex').slice(0, 16);
+        db.feeds.put({
+          courseId,
+          teacherId: teacher.id,
+          ciphertext,
+          etag,
+          updatedAt: new Date().toISOString()
+        });
+
+        res.setHeader('ETag', `"${etag}"`);
+        sendJson(200, { ok: true, etag });
+        return;
+      }
+
+      // 9. GET /api/feed/:courseId or /feed/:courseId
+      if (req.method === 'GET' && feedMatch) {
+        const courseId = feedMatch[1];
+        const feed = db.feeds.get(courseId);
+        if (!feed) {
+          sendError(404, 'Course feed not found');
+          return;
+        }
+
+        const ifNoneMatch = req.headers['if-none-match'];
+        if (ifNoneMatch && (ifNoneMatch === feed.etag || ifNoneMatch === `"${feed.etag}"`)) {
+          res.writeHead(304, {
+            'ETag': `"${feed.etag}"`,
+            'Access-Control-Allow-Origin': '*'
+          });
+          res.end();
+          return;
+        }
+
+        res.setHeader('ETag', `"${feed.etag}"`);
+        sendJson(200, {
+          course_id: feed.courseId,
+          ciphertext: feed.ciphertext,
+          etag: feed.etag,
+          updated_at: feed.updatedAt
+        });
         return;
       }
 

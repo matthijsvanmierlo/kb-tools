@@ -472,7 +472,7 @@ export async function buildStudentPayload(assignment, { teacherKeys, rosterCheck
     due_date: settings.due_date || null,
     settings: {
       feedback_mode: settings.feedback_mode || 'after_submit',
-      show_correct_answers: !!settings.show_correct_answers,
+      show_correct_answers: settings.feedback_mode === 'none' ? false : !!settings.show_correct_answers,
       require_access_code: !!settings.require_access_code,
       release_grade_immediately: settings.release_grade_immediately !== false
     },
@@ -489,7 +489,7 @@ export async function buildStudentPayload(assignment, { teacherKeys, rosterCheck
     payload.course_meta = courseMeta;
   }
 
-  if (settings.show_correct_answers) {
+  if (settings.show_correct_answers && settings.feedback_mode !== 'none') {
     // Revealed after submission. This is display text, not a secret.
     payload.reveal = Object.fromEntries((assignment.questions || []).map(q => [q.id, {
       answer: describeCorrectAnswer(q),

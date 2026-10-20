@@ -65,6 +65,9 @@ export class ShareModal {
             <sl-button size="small" id="btn-copy-share-url" variant="primary">
               <sl-icon slot="prefix" name="clipboard-check"></sl-icon> Copy Link
             </sl-button>
+            <sl-button size="small" id="btn-show-qr-stream" variant="default">
+              <sl-icon slot="prefix" name="qr-code"></sl-icon> Project QR Stream
+            </sl-button>
             <sl-button size="small" id="btn-download-html-file" variant="default">
               <sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Clickable File (.html)
             </sl-button>
@@ -134,6 +137,18 @@ export class ShareModal {
         toast.success('Share link copied to clipboard!');
       } catch (e) {
         toast.danger('Could not copy automatically. Please copy the URL manually.');
+      }
+    });
+
+    const qrStreamBtn = dialog.querySelector('#btn-show-qr-stream');
+    qrStreamBtn?.addEventListener('click', async () => {
+      if (currentPayload) {
+        const { showQrSequence } = await import('./qr-handoff.js');
+        await showQrSequence(currentPayload.url || currentPayload.rawFileContent, {
+          label: `Project QR: ${title}`,
+          intro: 'Students can scan this animated QR code with their device camera to open this lesson.',
+          ariaLabel: 'Projectable QR code sequence'
+        });
       }
     });
 

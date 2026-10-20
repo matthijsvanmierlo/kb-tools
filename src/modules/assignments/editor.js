@@ -12,6 +12,7 @@ import { downloadCSVTemplate, ASSIGNMENT_CSV_TEMPLATE } from '../../core/csv-tem
 import { AssignmentQuestionRowSchema, Exporter } from '../../core/validator.js';
 import { ContentImporter } from '../../core/content-importer.js';
 import { downloadCSV } from '../../core/csv.js';
+import { setDue } from '../../core/due-dates.js';
 
 export function resolveAssignmentCourseId(assignment) {
   if (!assignment) return null;
@@ -136,11 +137,21 @@ export async function renderEditor(assignment, router, container) {
           </div>
           <sl-input id="asg-title" label="Title" value="${esc(a.title)}"></sl-input>
           <sl-textarea id="asg-instructions" label="Instructions for students" rows="3" resize="auto" placeholder="Markdown and $math$ supported" value="${esc(a.instructions)}"></sl-textarea>
+          <div class="space-y-1">
+            <span class="text-xs font-medium text-slate-700 block">Assessment Mode Preset</span>
+            <div class="grid grid-cols-2 gap-2">
+              <sl-button size="small" id="asg-preset-formative" variant="${a.settings.feedback_mode === 'immediate' ? 'primary' : 'default'}">Formative Practice</sl-button>
+              <sl-button size="small" id="asg-preset-summative" variant="${a.settings.feedback_mode === 'none' ? 'primary' : 'default'}">Summative (Blind)</sl-button>
+            </div>
+          </div>
           <sl-select id="asg-course" label="Class & gradebook" value="${esc(a.gradebook.course_id || '')}" placeholder="Not linked" clearable>
             ${courses.map(c => `<sl-option value="${esc(c.id)}">${esc(c.name)}${c.section ? ` · ${esc(c.section)}` : ''}</sl-option>`).join('')}
           </sl-select>
           <div id="asg-category-wrap"></div>
-          <sl-input id="asg-due" type="date" label="Due date" value="${esc(a.settings.due_date || '')}" help-text="Later submissions are marked late in the gradebook."></sl-input>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <sl-input id="asg-due" type="date" label="Due date" value="${esc(a.settings.due_date || '')}"></sl-input>
+            <sl-input id="asg-due-time" type="time" label="Due time" value="${esc(a.settings.due_time || '')}"></sl-input>
+          </div>
           <sl-select id="asg-feedback" label="Feedback for students" value="${esc(a.settings.feedback_mode)}">
             <sl-option value="immediate">Instant, after each question</sl-option>
             <sl-option value="after_submit">Score after submitting</sl-option>
@@ -626,7 +637,40 @@ export async function renderEditor(assignment, router, container) {
   on('#asg-republish-stale-btn', 'click', () => {
     container.querySelector('#asg-publish')?.click();
   });
-  on('#asg-due', 'sl-change', (e) => { a.settings.due_date = e.target.value || ''; save(); });
+  on('#asg-preset-formative', 'click', () => {
+    a.settings.feedback_mode = 'immediate';
+    a.settings.release_grade_immediately = true;
+    a.settings.show_correct_answers = true;
+    a.settings.require_access_code = false;
+    const fb = container.querySelector('#asg-feedback'); if (fb) fb.value = 'immediate';
+    const rel = container.querySelector('#asg-release-grade'); if (rel) rel.checked = true;
+    const sha = container.querySelector('#asg-show-answers'); if (sha) sha.checked = true;
+    const req = container.querySelector('#asg-require-code'); if (req) req.checked = false;
+    save();
+    toast.success('Applied Formative Practice preset: instant feedback & score release enabled.');
+  });
+  on('#asg-preset-summative', 'click', () => {
+    a.settings.feedback_mode = 'none';
+    a.settings.release_grade_immediately = false;
+    a.settings.show_correct_answers = false;
+    a.settings.require_access_code = true;
+    const fb = container.querySelector('#asg-feedback'); if (fb) fb.value = 'none';
+    const rel = container.querySelector('#asg-release-grade'); if (rel) rel.checked = false;
+    const sha = container.querySelector('#asg-show-answers'); if (sha) sha.checked = false;
+    const req = container.querySelector('#asg-require-code'); if (req) req.checked = true;
+    save();
+    toast.success('Applied Summative (Blind) preset: feedback, auto-release, and answers disabled.');
+  });
+  on('#asg-due', 'sl-change', (e) => {
+    a.settings.due_date = e.target.value || '';
+    setDue('assignment', a.id, { date: a.settings.due_date, time: a.settings.due_time }).catch(() => {});
+    save();
+  });
+  on('#asg-due-time', 'sl-change', (e) => {
+    a.settings.due_time = e.target.value || '';
+    setDue('assignment', a.id, { date: a.settings.due_date, time: a.settings.due_time }).catch(() => {});
+    save();
+  });
   on('#asg-feedback', 'sl-change', (e) => { a.settings.feedback_mode = e.target.value; save(); });
   const sw = (sel, key) => on(sel, 'sl-change', (e) => { a.settings[key] = e.target.checked; save(); });
   sw('#asg-release-grade', 'release_grade_immediately');

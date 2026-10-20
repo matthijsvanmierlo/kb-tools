@@ -383,3 +383,66 @@ export async function setTransportConfig(config) {
   }
   return await getTransport({ forceReload: true });
 }
+
+/**
+ * Public Feed Transport for publishing and fetching course feeds
+ */
+export class PublicFeedTransport {
+  constructor(config = {}) {
+    this.baseUrl = (config.baseUrl || '').replace(/\/+$/, '');
+    this.token = config.token || '';
+  }
+
+  get apiBase() {
+    const base = (this.baseUrl || '').replace(/\/+$/, '');
+    if (base.endsWith('/api/v1')) return base;
+    return `${base}/api/v1`;
+  }
+
+  async publishCourseFeed(courseId, encryptedFeedBlob, eTag) {
+    const res = await fetch(`${this.apiBase}/feed/${encodeURIComponent(courseId)}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${this.token}`
+      },
+      body: JSON.stringify({
+        ciphertext: typeof encryptedFeedBlob === 'string' ? encryptedFeedBlob : JSON.stringify(encryptedFeedBlob),
+        etag: eTag
+      })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `Failed to publish course feed: ${res.status}`);
+    }
+    const data = await res.json();
+    return { ok: true, etag: data.etag || eTag };
+  }
+
+  async fetchCourseFeed(courseId, ifNoneMatch) {
+    const headers = {};
+    if (ifNoneMatch) {
+      headers['If-None-Match'] = ifNoneMatch;
+    }
+    const res = await fetch(`${this.apiBase}/feed/${encodeURIComponent(courseId)}`, {
+      headers
+    });
+    if (res.status === 304) {
+      return { notModified: true, etag: ifNoneMatch };
+    }
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ error: res.statusText }));
+      throw new Error(err.error || `Failed to fetch course feed: ${res.status}`);
+    }
+    const data = await res.json();
+    const etag = res.headers.get('ETag')?.replace(/^"|"$/g, '') || data.etag;
+    return {
+      notModified: false,
+      courseId: data.course_id,
+      ciphertext: data.ciphertext,
+      etag,
+      updatedAt: data.updated_at
+    };
+  }
+}
+

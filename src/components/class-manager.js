@@ -344,6 +344,9 @@ export class ClassManager {
               <p class="text-xs text-slate-500">Classes organize Flashcards, Timelines, Video Assessments, and Gradebooks.</p>
             </div>
             <div class="flex items-center gap-2">
+              <sl-button variant="default" size="small" id="btn-modal-open-classes-hub">
+                <sl-icon slot="prefix" name="collection"></sl-icon> Manage in Classes Tab
+              </sl-button>
               <sl-button variant="primary" size="small" id="btn-modal-add-class">
                 <sl-icon slot="prefix" name="plus-lg"></sl-icon> New Class
               </sl-button>
@@ -458,6 +461,11 @@ export class ClassManager {
         });
       });
 
+      dialog.querySelector('#btn-modal-open-classes-hub')?.addEventListener('click', () => {
+        dialog.hide();
+        window.location.hash = '#/classes';
+      });
+
       dialog.querySelectorAll('[data-action="gradebook"]').forEach(btn => {
         btn.addEventListener('click', () => {
           const id = btn.dataset.id;
@@ -471,7 +479,7 @@ export class ClassManager {
         btn.addEventListener('click', () => {
           const id = btn.dataset.id;
           this.setActiveFilter(id);
-          window.location.hash = `#/gradebook?view=roster&courseId=${id}`;
+          window.location.hash = `#/classes?courseId=${id}&tab=roster`;
           dialog.hide();
         });
       });

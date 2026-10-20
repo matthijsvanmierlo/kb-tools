@@ -11,6 +11,7 @@ import { StudentProfile } from '../../core/student-profile.js';
 import { StudentLedger } from './ledger.js';
 import { RoleMode } from '../../state/role-mode.js';
 import { openIncomingFiles } from '../../core/pwa.js';
+import { exportStudentSession, importStudentSession } from './session-portability.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -37,9 +38,19 @@ export async function renderStudentHubView(params, router, container) {
             Your personal, zero-trust educational hub. Grades, feedback, and study materials stay private in your browser.
           </p>
           <div class="pt-2 flex flex-wrap items-center gap-3">
-            <sl-button variant="default" href="#/student/gradebook" size="medium">
-              <sl-icon slot="prefix" name="journal-check"></sl-icon> My Gradebook &amp; Feedback
+            <sl-button variant="default" href="#/student/courses" size="medium">
+              <sl-icon slot="prefix" name="collection"></sl-icon> My Enrolled Courses
             </sl-button>
+            <sl-button variant="default" href="#/student/gradebook" size="medium">
+              <sl-icon slot="prefix" name="journal-check"></sl-icon> My Grades
+            </sl-button>
+            <sl-button variant="text" class="text-white hover:text-blue-200" id="btn-export-hub-session">
+              <sl-icon slot="prefix" name="download"></sl-icon> Save Session (.kbsession)
+            </sl-button>
+            <sl-button variant="text" class="text-white hover:text-blue-200" id="btn-import-hub-session">
+              <sl-icon slot="prefix" name="upload"></sl-icon> Resume Session
+            </sl-button>
+            <input type="file" id="input-hub-session-file" accept=".kbsession,.json" class="hidden" />
             <sl-button variant="text" class="text-white hover:text-blue-200" id="btn-edit-student-profile">
               <sl-icon slot="prefix" name="person-gear"></sl-icon> Edit Identity
             </sl-button>
@@ -49,13 +60,22 @@ export async function renderStudentHubView(params, router, container) {
 
       <!-- Quick Action Cards -->
       <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
-        <!-- Gradebook Card -->
-        <a href="#/student/gradebook" class="group block p-6 bg-white rounded-2xl border border-slate-200 shadow-xs hover:shadow-md hover:border-blue-300 transition-all">
+        <!-- Courses Card -->
+        <a href="#/student/courses" class="group block p-6 bg-white rounded-2xl border border-slate-200 shadow-xs hover:shadow-md hover:border-blue-300 transition-all">
           <div class="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-2xl group-hover:scale-105 transition-transform mb-4">
+            <sl-icon name="collection"></sl-icon>
+          </div>
+          <h3 class="font-bold text-slate-900 group-hover:text-blue-600 transition-colors">My Enrolled Courses</h3>
+          <p class="text-xs text-slate-500 mt-1">${courses.length} enrolled class${courses.length === 1 ? '' : 'es'}</p>
+        </a>
+
+        <!-- Gradebook Card -->
+        <a href="#/student/gradebook" class="group block p-6 bg-white rounded-2xl border border-slate-200 shadow-xs hover:shadow-md hover:border-emerald-300 transition-all">
+          <div class="w-12 h-12 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center text-2xl group-hover:scale-105 transition-transform mb-4">
             <sl-icon name="journal-check"></sl-icon>
           </div>
-          <h3 class="font-bold text-slate-900 group-hover:text-blue-600 transition-colors">My Gradebook</h3>
-          <p class="text-xs text-slate-500 mt-1">${entries.length} recorded grade${entries.length === 1 ? '' : 's'} across ${courses.length} class${courses.length === 1 ? '' : 'es'}</p>
+          <h3 class="font-bold text-slate-900 group-hover:text-emerald-600 transition-colors">My Gradebook</h3>
+          <p class="text-xs text-slate-500 mt-1">${entries.length} recorded grade${entries.length === 1 ? '' : 's'}</p>
         </a>
 
         <!-- Study Flashcards -->
@@ -100,6 +120,9 @@ export async function renderStudentHubView(params, router, container) {
           <input type="file" id="input-student-file-picker" accept=".kbshare,.kbfeedback,.kbsub,.kbr,.html,.htm,.json,.txt" class="hidden">
           <sl-button type="button" id="btn-student-pick-file" variant="default">
             <sl-icon slot="prefix" name="folder2-open"></sl-icon> Choose File
+          </sl-button>
+          <sl-button type="button" id="btn-student-scan-qr" variant="default">
+            <sl-icon slot="prefix" name="camera"></sl-icon> Scan QR
           </sl-button>
           <sl-button type="submit" variant="primary">Open Lesson</sl-button>
         </form>
@@ -160,6 +183,27 @@ export async function renderStudentHubView(params, router, container) {
     filePicker?.click();
   });
 
+  const scanQrBtn = container.querySelector('#btn-student-scan-qr');
+  scanQrBtn?.addEventListener('click', async () => {
+    const { openQrScanner } = await import('../../components/qr-handoff.js');
+    openQrScanner({
+      label: 'Scan Lesson or Class QR Code',
+      readyText: 'Point camera at the QR code on your teacher\'s screen...',
+      once: true,
+      onResult: async (decodedText) => {
+        if (decodedText.startsWith('http://') || decodedText.startsWith('https://')) {
+          const hashIndex = decodedText.indexOf('#/');
+          if (hashIndex !== -1) {
+            router.navigate(decodedText.slice(hashIndex));
+            return;
+          }
+        }
+        const fakeFile = new File([decodedText], 'scanned-qr-code.txt', { type: 'text/plain' });
+        await openIncomingFiles([fakeFile], router);
+      }
+    });
+  });
+
   filePicker?.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length) {
@@ -218,6 +262,25 @@ export async function renderStudentHubView(params, router, container) {
   // Edit profile dialog
   container.querySelector('#btn-edit-student-profile')?.addEventListener('click', () => {
     openIdentityDialog(profile, () => renderStudentHubView(params, router, container));
+  });
+
+  // Export / Import session
+  container.querySelector('#btn-export-hub-session')?.addEventListener('click', () => {
+    exportStudentSession(studentId);
+  });
+
+  const hubFileInput = container.querySelector('#input-hub-session-file');
+  container.querySelector('#btn-import-hub-session')?.addEventListener('click', () => {
+    hubFileInput?.click();
+  });
+
+  hubFileInput?.addEventListener('change', async (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      await importStudentSession(file);
+      renderStudentHubView(params, router, container);
+    }
+    hubFileInput.value = '';
   });
 
   // Add class code dialog

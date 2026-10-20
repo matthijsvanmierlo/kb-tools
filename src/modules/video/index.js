@@ -73,6 +73,11 @@ async function ensureSampleVideoAssessment() {
       class_id: null,
       provider: DEFAULT_SAMPLE_VIDEO.provider,
       video_source: DEFAULT_SAMPLE_VIDEO.source,
+      transcript: `[00:00] Where is the edge of the solar system? That depends on how you define it.
+[00:10] One way is where the planets end. By that measure, the edge is marked by Neptune, the outermost planet, and the icy bodies of the Kuiper Belt just beyond.
+[00:22] Another way is by the Sun's magnetic field and solar wind, which carve out a giant bubble known as the heliosphere. Voyager 1 crossed this boundary into interstellar space.
+[00:32] A third way is where the Sun's gravity no longer dominates. That boundary lies at the outer edge of the Oort Cloud, a vast sphere of icy debris reaching nearly two light-years away.
+[00:45] So depending on whether you count planets, magnetic influence, or gravitational dominance, the edge of our solar system is very different!`,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       // Timestamps follow the narration of the NASA video (see sample-videos.js)
@@ -417,6 +422,14 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
               </sl-button>
             </div>
           </div>
+
+          <!-- Transcript for Checkpoint-Gated Offline Mode -->
+          <sl-details summary="Video Transcript & Checkpoint-Gated Offline Mode" class="text-xs">
+            <div class="space-y-2 pt-2">
+              <p class="text-slate-500">Provide timestamped narration lines (e.g. <code>[01:23] Segment text</code> or WebVTT/SRT). In both normal playback and zero-network offline mode, transcript slices after unanswered checkpoints remain locked until answered.</p>
+              <sl-textarea id="textarea-video-transcript" rows="5" placeholder="[00:00] First segment...&#10;[00:30] Second segment..." value="${Sanitizer.escapeHTML(activeVideo.transcript || '')}"></sl-textarea>
+            </div>
+          </sl-details>
         </div>
 
         <!-- Checkpoints List Column (5 cols) -->
@@ -717,6 +730,12 @@ async function renderTeacherEditorMode(activeVideo, container, router) {
   // Reload the preview once a pasted link is committed
   sourceInput?.addEventListener('sl-change', async () => {
     await initDriver();
+  });
+
+  const transcriptInput = container.querySelector('#textarea-video-transcript');
+  transcriptInput?.addEventListener('sl-input', () => {
+    activeVideo.transcript = transcriptInput.value;
+    saveAssessment();
   });
 
   container.querySelector('#menu-sample-videos')?.addEventListener('sl-select', async (e) => {
@@ -1125,19 +1144,44 @@ async function renderStudentKioskMode(assessment, container, router) {
           <sl-icon name="mortarboard" class="text-blue-600 text-xl"></sl-icon>
           <span class="font-bold text-slate-800">${safeTitle}</span>
         </div>
-        <div class="text-xs text-slate-500 font-mono">
-          Student: <strong id="kiosk-header-student-name">Student</strong>
+        <div class="flex items-center gap-3">
+          <sl-button size="small" variant="default" id="btn-toggle-offline-mode">
+            <sl-icon slot="prefix" name="file-text"></sl-icon> Transcript View
+          </sl-button>
+          <div class="text-xs text-slate-500 font-mono">
+            Student: <strong id="kiosk-header-student-name">Student</strong>
+          </div>
         </div>
       </div>
 
       <!-- Player Dock -->
-      <div class="relative bg-black rounded-2xl overflow-hidden shadow-xl aspect-video flex items-center justify-center">
+      <div class="relative bg-black rounded-2xl overflow-hidden shadow-xl aspect-video flex items-center justify-center" id="kiosk-player-dock">
         <div id="kiosk-video-container" class="w-full h-full"></div>
         <div class="kb-video-shield" id="kiosk-shield"></div>
       </div>
 
+      <!-- Offline Fallback Banner (when video is unavailable or zero-network offline mode) -->
+      <div id="kiosk-offline-fallback-banner" class="hidden bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-4 text-xs space-y-2">
+        <div class="flex items-center justify-between">
+          <div class="flex items-center gap-2 font-semibold">
+            <sl-icon name="wifi-off" class="text-amber-600 text-base"></sl-icon>
+            <span>Offline / Fallback Transcript Mode</span>
+          </div>
+          <span class="text-[11px] bg-amber-200 text-amber-800 px-2 py-0.5 rounded-full font-mono">Zero-Network Mode</span>
+        </div>
+        <p class="text-slate-600">Video streaming is disconnected or disabled. Review the transcript below; text slices unlock sequentially as each checkpoint is answered.</p>
+        <div class="flex items-center gap-2 pt-1" id="offline-checkpoint-actions">
+          <sl-button size="small" variant="primary" id="btn-offline-next-cp">
+            <sl-icon slot="prefix" name="question-circle"></sl-icon> Answer Next Checkpoint
+          </sl-button>
+          <sl-button size="small" variant="success" id="btn-offline-finish" class="hidden">
+            <sl-icon slot="prefix" name="check2-circle"></sl-icon> Complete & Submit
+          </sl-button>
+        </div>
+      </div>
+
       <!-- Custom Accessible Scrubber Bar with Visual Checkpoint Markers -->
-      <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-sm space-y-2">
+      <div class="bg-white p-3 rounded-xl border border-slate-200 shadow-sm space-y-2" id="kiosk-scrubber-dock">
         <div class="relative flex items-center h-8 px-1">
           <input type="range" id="kiosk-scrubber" min="0" max="100" value="0" class="w-full cursor-pointer z-10" />
           <div id="kiosk-scrubber-markers" class="absolute inset-x-2 top-1/2 -translate-y-1/2 pointer-events-none h-3"></div>
@@ -1153,6 +1197,9 @@ async function renderStudentKioskMode(assessment, container, router) {
           <span class="text-slate-400 font-mono" id="kiosk-progress-text">0 / ${checkpoints.length} answered</span>
         </div>
       </div>
+
+      <!-- Interactive Checkpoint-Gated Transcript Panel -->
+      <div id="kiosk-transcript-panel" class="bg-white rounded-xl border border-slate-200 shadow-xs mt-3 hidden"></div>
     </div>
   `;
 
@@ -1273,8 +1320,23 @@ async function startKioskSession(assessment, student, container, router) {
   const timeDisplay = container.querySelector('#kiosk-time-display');
   const progressText = container.querySelector('#kiosk-progress-text');
 
+  const offlineBanner = container.querySelector('#kiosk-offline-fallback-banner');
+  const offlineNextCpBtn = container.querySelector('#btn-offline-next-cp');
+  const offlineFinishBtn = container.querySelector('#btn-offline-finish');
+  const toggleOfflineBtn = container.querySelector('#btn-toggle-offline-mode');
+  const transcriptPanel = container.querySelector('#kiosk-transcript-panel');
+  const playerDock = container.querySelector('#kiosk-player-dock');
+  const scrubberDock = container.querySelector('#kiosk-scrubber-dock');
+
   const driver = createVideoDriver(assessment.provider || 'html5');
-  await driver.mount(videoContainer, assessment.video_source);
+  let isOfflineMode = false;
+
+  try {
+    await driver.mount(videoContainer, assessment.video_source);
+  } catch (err) {
+    console.warn('Video driver mount failed (activating offline fallback mode):', err);
+    isOfflineMode = true;
+  }
 
   const responseLogs = [];
   let isPlaying = false;
@@ -1304,6 +1366,18 @@ async function startKioskSession(assessment, student, container, router) {
     }).join('');
   }
 
+  function updateOfflineButtons() {
+    const answeredIds = new Set(responseLogs.map(r => r.checkpointId));
+    const allDone = checkpoints.every(cp => answeredIds.has(cp.id));
+    if (allDone) {
+      if (offlineNextCpBtn) offlineNextCpBtn.classList.add('hidden');
+      if (offlineFinishBtn) offlineFinishBtn.classList.remove('hidden');
+    } else {
+      if (offlineNextCpBtn) offlineNextCpBtn.classList.remove('hidden');
+      if (offlineFinishBtn) offlineFinishBtn.classList.add('hidden');
+    }
+  }
+
   let gatekeeper = null;
   gatekeeper = new VideoGatekeeper(driver, checkpoints, (cp) => {
     isPlaying = false;
@@ -1314,23 +1388,85 @@ async function startKioskSession(assessment, student, container, router) {
         progressText.textContent = `${responseLogs.length} / ${checkpoints.length} answered`;
       }
       renderKioskMarkers();
+      updateOfflineButtons();
       // Auto-resume after answering
-      driver.play().then(() => {
-        isPlaying = true;
-        updatePlayButton();
-      }).catch(() => {});
+      if (!isOfflineMode) {
+        driver.play().then(() => {
+          isPlaying = true;
+          updatePlayButton();
+        }).catch(() => {});
+      }
     });
   });
 
   // Checkpoints are answer-key free; correctness comes from salted hashes (if feedback is on)
   gatekeeper.secure = assessment.secure || null;
-  gatekeeper.startLoop();
 
-  // Auto-play initial video
-  driver.play().then(() => {
-    isPlaying = true;
-    updatePlayButton();
-  }).catch(() => {});
+  // Mount transcript if provided
+  const rawTranscript = assessment.transcript_segments || assessment.transcript || '';
+  if (transcriptPanel) {
+    if (rawTranscript) {
+      transcriptPanel.classList.remove('hidden');
+      gatekeeper.setTranscript(transcriptPanel, rawTranscript);
+    } else if (isOfflineMode) {
+      // Synthesize checkpoints transcript fallback if none provided
+      const synth = checkpoints.map((cp, idx) => ({
+        start_sec: cp.timestamp_sec,
+        end_sec: cp.timestamp_sec + 30,
+        text: `Section ${idx + 1} (${formatSeconds(cp.timestamp_sec)}): Please review material and answer checkpoint question.`
+      }));
+      transcriptPanel.classList.remove('hidden');
+      gatekeeper.setTranscript(transcriptPanel, synth);
+    }
+  }
+
+  const applyOfflineUI = () => {
+    if (isOfflineMode) {
+      offlineBanner?.classList.remove('hidden');
+      playerDock?.classList.add('hidden');
+      scrubberDock?.classList.add('hidden');
+      transcriptPanel?.classList.remove('hidden');
+      updateOfflineButtons();
+    } else {
+      offlineBanner?.classList.add('hidden');
+      playerDock?.classList.remove('hidden');
+      scrubberDock?.classList.remove('hidden');
+      if (!rawTranscript) transcriptPanel?.classList.add('hidden');
+    }
+  };
+
+  if (isOfflineMode) {
+    applyOfflineUI();
+  } else {
+    gatekeeper.startLoop();
+    // Auto-play initial video
+    driver.play().then(() => {
+      isPlaying = true;
+      updatePlayButton();
+    }).catch(() => {});
+  }
+
+  toggleOfflineBtn?.addEventListener('click', () => {
+    isOfflineMode = !isOfflineMode;
+    if (isOfflineMode) {
+      driver.pause().catch(() => {});
+      isPlaying = false;
+      updatePlayButton();
+    }
+    applyOfflineUI();
+  });
+
+  offlineNextCpBtn?.addEventListener('click', () => {
+    gatekeeper.triggerNextCheckpoint();
+  });
+
+  offlineFinishBtn?.addEventListener('click', () => {
+    if (!isFinished) {
+      isFinished = true;
+      gatekeeper.stop();
+      renderKioskCompletion(assessment, student, responseLogs, container, router);
+    }
+  });
 
   playBtn?.addEventListener('click', async () => {
     if (isPlaying) {
@@ -1344,6 +1480,7 @@ async function startKioskSession(assessment, student, container, router) {
   });
 
   const timeUpdateInterval = setInterval(async () => {
+    if (isOfflineMode) return;
     try {
       const cur = await driver.getCurrentTime();
       const dur = await driver.getDuration();

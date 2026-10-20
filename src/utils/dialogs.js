@@ -63,11 +63,8 @@ export class ConfirmDialog {
 
       confirmBtn?.addEventListener('click', () => cleanup(true));
       cancelBtn?.addEventListener('click', () => cleanup(false));
-      dialog.addEventListener('sl-request-close', (e) => {
-        if (e.detail.source === 'keyboard' || e.detail.source === 'overlay') {
-          cleanup(false);
-        }
-      });
+      dialog.addEventListener('sl-request-close', () => cleanup(false));
+      dialog.addEventListener('sl-after-hide', () => cleanup(false));
 
       dialog.show();
       setTimeout(() => confirmBtn?.focus(), 50);
@@ -147,9 +144,8 @@ export class PromptDialog {
           cleanup(input.value);
         }
       });
-      dialog.addEventListener('sl-request-close', (e) => {
-        cleanup(null);
-      });
+      dialog.addEventListener('sl-request-close', () => cleanup(null));
+      dialog.addEventListener('sl-after-hide', () => cleanup(null));
 
       dialog.show();
       setTimeout(() => {

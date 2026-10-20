@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-XxvYv1UFBXLuc/8++TLCQOYKSkKceK21waLdpzF9Lrk='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' data:; media-src 'self' blob: data: https:; frame-src https://www.youtube-nocookie.com https://player.vimeo.com; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <meta name="referrer" content="no-referrer">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>KennisBoost Tools | 100% Client-Side Educational Suite</title>
   <meta name="description" content="Local-first, zero-backend educational technology suite with Flashcards, Timeline Maker, Interactive Video, and Gradebook.">
   <link rel="manifest" href="manifest.json">
@@ -67,46 +67,8 @@
         <span class="kb-brand-name hidden sm:inline">KennisBoost <span>Tools</span></span>
       </a>
 
-      <!-- Primary Navigation (bottom tab bar on small screens) -->
-      <nav class="kb-nav" aria-label="Main navigation">
-        <!-- Teacher View Links -->
-        <a href="#/" data-route-link="#/" class="kb-nav-link kb-nav-teacher" title="Home">
-          <sl-icon name="house-door" aria-hidden="true"></sl-icon>
-          <span>Home</span>
-        </a>
-        <a href="#/assignments" data-route-link="#/assignments" class="kb-nav-link kb-nav-teacher" title="Assignments">
-          <sl-icon name="ui-checks" aria-hidden="true"></sl-icon>
-          <span>Assignments</span>
-        </a>
-        <a href="#/gradebook" data-route-link="#/gradebook" class="kb-nav-link kb-nav-teacher" title="Gradebook">
-          <sl-icon name="journal-check" aria-hidden="true"></sl-icon>
-          <span>Gradebook</span>
-        </a>
-
-        <!-- Student View Links -->
-        <a href="#/student" data-route-link="#/student" class="kb-nav-link kb-nav-student" title="Student Hub">
-          <sl-icon name="house-door" aria-hidden="true"></sl-icon>
-          <span>Student Hub</span>
-        </a>
-        <a href="#/student/gradebook" data-route-link="#/student/gradebook" class="kb-nav-link kb-nav-student" title="My Gradebook">
-          <sl-icon name="journal-check" aria-hidden="true"></sl-icon>
-          <span>My Grades</span>
-        </a>
-
-        <!-- Common Study Tools -->
-        <a href="#/flashcards" data-route-link="#/flashcards" class="kb-nav-link" title="Flashcards">
-          <sl-icon name="stack" aria-hidden="true"></sl-icon>
-          <span>Flashcards</span>
-        </a>
-        <a href="#/timeline" data-route-link="#/timeline" class="kb-nav-link" title="Timeline">
-          <sl-icon name="bar-chart-steps" aria-hidden="true"></sl-icon>
-          <span>Timeline</span>
-        </a>
-        <a href="#/video" data-route-link="#/video" class="kb-nav-link" title="Video">
-          <sl-icon name="play-circle" aria-hidden="true"></sl-icon>
-          <span>Video</span>
-        </a>
-      </nav>
+      <!-- Primary Navigation (rendered dynamically by app-nav.js) -->
+      <nav class="kb-nav" id="kb-app-nav" aria-label="Main navigation"></nav>
 
       <!-- Global Class Selector & Action Dock -->
       <div class="kb-header-actions">
@@ -254,6 +216,35 @@
 
         <!-- Sync / Relay status indicator -->
         <span id="sync-status-indicator" class="inline-flex items-center text-xs text-slate-500"></span>
+
+        <!-- More options dropdown (<1024px) -->
+        <sl-dropdown placement="bottom-end" distance="6" id="kb-header-more">
+          <button slot="trigger" type="button" class="kb-icon-btn" aria-label="More options" title="More options">
+            <sl-icon name="three-dots-vertical"></sl-icon>
+          </button>
+          <sl-menu id="kb-header-more-menu">
+            <sl-menu-item value="import">
+              <sl-icon slot="prefix" name="cloud-download"></sl-icon>
+              Import content&hellip;
+            </sl-menu-item>
+            <sl-menu-item value="backup">
+              <sl-icon slot="prefix" name="hdd-stack"></sl-icon>
+              Backup &amp; storage&hellip;
+            </sl-menu-item>
+            <sl-menu-item value="safety">
+              <sl-icon slot="prefix" name="shield"></sl-icon>
+              Data safety status
+            </sl-menu-item>
+            <sl-menu-item value="theme">
+              <sl-icon slot="prefix" name="circle-half"></sl-icon>
+              Change theme
+            </sl-menu-item>
+            <sl-menu-item value="help">
+              <sl-icon slot="prefix" name="question-circle"></sl-icon>
+              Help &amp; resources
+            </sl-menu-item>
+          </sl-menu>
+        </sl-dropdown>
 
         <input type="file" id="input-backup-file" accept=".json" class="hidden" aria-hidden="true" />
       </div>

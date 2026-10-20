@@ -293,7 +293,7 @@ ${serialized}
           } else if (payloadType === 'feedback') {
             targetUrl = targetUrl.replace(/#.*$/, '') + '#/student/gradebook';
           } else if (payloadType === 'submission') {
-            targetUrl = targetUrl.replace(/#.*$/, '') + '#/inbox';
+            targetUrl = targetUrl.replace(/#.*$/, '') + '#/inbox?import=1';
           }
         }
 

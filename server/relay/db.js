@@ -94,12 +94,22 @@ export function createDatabase(filePath = ':memory:') {
       FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS course_feeds (
+      course_id TEXT PRIMARY KEY,
+      teacher_id TEXT NOT NULL,
+      ciphertext TEXT NOT NULL,
+      etag TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
+    );
+
     CREATE INDEX IF NOT EXISTS idx_sync_chunks_ws ON sync_chunks(workspace_id, seq);
     CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at);
     CREATE INDEX IF NOT EXISTS idx_sync_chunks_created ON sync_chunks(created_at);
     CREATE INDEX IF NOT EXISTS idx_payloads_expires ON payloads(expires_at);
     CREATE INDEX IF NOT EXISTS idx_drops_expires ON drops(expires_at);
     CREATE INDEX IF NOT EXISTS idx_submissions_drop ON submissions(drop_id, received_at);
+    CREATE INDEX IF NOT EXISTS idx_course_feeds_updated ON course_feeds(updated_at);
   `);
 
   // Databases created before drop secrets existed get the column (old drops keep working without)
@@ -271,6 +281,31 @@ export function createDatabase(filePath = ':memory:') {
           stmt = db.prepare('SELECT id, received_at, text FROM submissions WHERE drop_id = ? ORDER BY received_at ASC');
           return stmt.all(dropId);
         }
+      }
+    },
+
+    feeds: {
+      put({ courseId, teacherId, ciphertext, etag, updatedAt = new Date().toISOString() }) {
+        const stmt = db.prepare(`
+          INSERT INTO course_feeds (course_id, teacher_id, ciphertext, etag, updated_at)
+          VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT(course_id) DO UPDATE SET
+            teacher_id = excluded.teacher_id,
+            ciphertext = excluded.ciphertext,
+            etag = excluded.etag,
+            updated_at = excluded.updated_at
+        `);
+        stmt.run(courseId, teacherId, ciphertext, etag, updatedAt);
+      },
+      get(courseId) {
+        const row = db.prepare('SELECT course_id, teacher_id, ciphertext, etag, updated_at FROM course_feeds WHERE course_id = ?').get(courseId);
+        return row ? {
+          courseId: row.course_id,
+          teacherId: row.teacher_id,
+          ciphertext: row.ciphertext,
+          etag: row.etag,
+          updatedAt: row.updated_at
+        } : null;
       }
     }
   };

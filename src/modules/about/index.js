@@ -284,9 +284,69 @@ export async function renderAboutView(params, router, container) {
       <section class="space-y-4">
         <div class="flex items-center gap-2 border-b border-slate-200 pb-2">
           <sl-icon name="tools" class="text-xl text-blue-600"></sl-icon>
-          <h2 class="text-xl font-bold text-slate-900">The Five Core Tools</h2>
+          <h2 class="text-xl font-bold text-slate-900">Core Teaching &amp; Learning Tools</h2>
         </div>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-emerald-300 transition-colors space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-slate-900 flex items-center gap-2">
+                <sl-icon name="people" class="text-emerald-600"></sl-icon> Classes &amp; Student Rosters
+              </span>
+              <sl-button size="small" variant="default" href="#/classes">Open</sl-button>
+            </div>
+            <p class="text-xs text-slate-600">Roster management, individual access codes, QR enrollment cards, and peer device synchronization.</p>
+          </div>
+
+          <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-blue-300 transition-colors space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-slate-900 flex items-center gap-2">
+                <sl-icon name="journal-bookmark" class="text-blue-600"></sl-icon> Course Hub &amp; Feeds
+              </span>
+              <sl-button size="small" variant="default" href="#/course">Open</sl-button>
+            </div>
+            <p class="text-xs text-slate-600">Curriculum units and item organization with zero-server PBKDF2 encrypted course feeds.</p>
+          </div>
+
+          <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-violet-300 transition-colors space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-slate-900 flex items-center gap-2">
+                <sl-icon name="calendar3" class="text-violet-600"></sl-icon> Interactive Calendar
+              </span>
+              <sl-button size="small" variant="default" href="#/calendar">Open</sl-button>
+            </div>
+            <p class="text-xs text-slate-600">Month, week, and agenda timeline aggregating all due dates with drag rescheduling and standard .ics export.</p>
+          </div>
+
+          <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-amber-300 transition-colors space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-slate-900 flex items-center gap-2">
+                <sl-icon name="inbox" class="text-amber-600"></sl-icon> Submission Inbox &amp; Watch Folder
+              </span>
+              <sl-button size="small" variant="default" href="#/inbox">Open</sl-button>
+            </div>
+            <p class="text-xs text-slate-600">Automated directory polling and staging for student hand-ins, .kbr receipts, and .zip archives.</p>
+          </div>
+
+          <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-amber-300 transition-colors space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-slate-900 flex items-center gap-2">
+                <sl-icon name="ui-checks" class="text-amber-600"></sl-icon> Assignments &amp; Hand-in
+              </span>
+              <sl-button size="small" variant="default" href="#/assignments">Open</sl-button>
+            </div>
+            <p class="text-xs text-slate-600">Auto-graded practice and blind summative assessments with tamper-evident commitment chains.</p>
+          </div>
+
+          <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-rose-300 transition-colors space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="font-bold text-slate-900 flex items-center gap-2">
+                <sl-icon name="play-circle" class="text-rose-600"></sl-icon> Video Assessments
+              </span>
+              <sl-button size="small" variant="default" href="#/video">Open</sl-button>
+            </div>
+            <p class="text-xs text-slate-600">Time-gated synchronized transcripts and offline fallback mode with cryptographic receipts.</p>
+          </div>
+
           <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-blue-300 transition-colors space-y-2">
             <div class="flex items-center justify-between">
               <span class="font-bold text-slate-900 flex items-center gap-2">
@@ -304,27 +364,7 @@ export async function renderAboutView(params, router, container) {
               </span>
               <sl-button size="small" variant="default" href="#/timeline">Open</sl-button>
             </div>
-            <p class="text-xs text-slate-600">Infinite logarithmic timeline zooming from cosmological eras down to nanoseconds, with SVG export.</p>
-          </div>
-
-          <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-rose-300 transition-colors space-y-2">
-            <div class="flex items-center justify-between">
-              <span class="font-bold text-slate-900 flex items-center gap-2">
-                <sl-icon name="play-circle" class="text-rose-600"></sl-icon> Video Assessments
-              </span>
-              <sl-button size="small" variant="default" href="#/video">Open</sl-button>
-            </div>
-            <p class="text-xs text-slate-600">Interactive video check-ins for YouTube and HTML5 videos with tamper-evident cryptographic receipts.</p>
-          </div>
-
-          <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-amber-300 transition-colors space-y-2">
-            <div class="flex items-center justify-between">
-              <span class="font-bold text-slate-900 flex items-center gap-2">
-                <sl-icon name="ui-checks" class="text-amber-600"></sl-icon> Assignments &amp; Hand-in
-              </span>
-              <sl-button size="small" variant="default" href="#/assignments">Open</sl-button>
-            </div>
-            <p class="text-xs text-slate-600">Auto-graded practice assignments covering 6 STEM question types with keyless student sharing.</p>
+            <p class="text-xs text-slate-600">Accessible logarithmic timeline zooming from cosmological eras down to nanoseconds with SVG export.</p>
           </div>
 
           <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-emerald-300 transition-colors space-y-2 md:col-span-2">

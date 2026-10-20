@@ -68,14 +68,24 @@ export class HTML5VideoDriver extends VideoProviderDriver {
     this.container = containerEl;
     this.source = videoSource;
 
+    let resolvedSource = videoSource;
+    if (String(videoSource || '').startsWith('opfs://') || String(videoSource || '').startsWith('idb-blob://') || String(videoSource || '').startsWith('sha256-')) {
+      try {
+        const { storage } = await import('../../core/storage.js');
+        resolvedSource = await storage.loadBinaryAsset(videoSource);
+      } catch (err) {
+        console.warn('Failed to resolve local video asset:', err);
+      }
+    }
+
     this.videoEl = document.createElement('video');
     // Only web, blob and inline media URLs; never javascript: or file:
-    if (!/^(https?:|blob:|data:video\/)/i.test(String(videoSource || '').trim())) {
+    if (!/^(https?:|blob:|data:video\/)/i.test(String(resolvedSource || '').trim())) {
       this.failed = true;
-      renderVideoError(containerEl, 'This video link is not supported', 'Use a direct https:// link to an .mp4 or .webm file.');
+      renderVideoError(containerEl, 'This video link is not supported', 'Use a direct https:// link or local asset to an .mp4 or .webm file.');
       return;
     }
-    this.videoEl.src = videoSource;
+    this.videoEl.src = resolvedSource;
     this.videoEl.playsInline = true;
     this.videoEl.preload = 'metadata';
     this.videoEl.className = 'w-full h-full object-contain bg-black';

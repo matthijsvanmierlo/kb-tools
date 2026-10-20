@@ -680,7 +680,7 @@ export async function renderSubmissions(assignment, router, container) {
         downloadClickableHtmlFile({
           title: `Feedback: ${a.title || 'Assignment'}`,
           payloadType: 'feedback',
-          payload: link.payload,
+          payload: JSON.parse(link.rawFileContent),
           studentName,
           studentId: sub.student_id,
           shareUrl: link.url

@@ -16,7 +16,10 @@ const DATA_TABLES = new Set([
   'assignments',
   'assignment_submissions',
   'student_courses',
-  'student_ledger'
+  'student_ledger',
+  'course_units',
+  'course_items',
+  'student_items'
 ]);
 
 const WRITE_OPS = new Set(['put', 'bulkPut', 'delete', 'bulkDelete', 'clear']);
@@ -39,7 +42,10 @@ export function scopeOf(tableName, record) {
     case 'video_assessments': return { course_id: record.class_id || null };
     case 'assignment_submissions': return { assignment_id: record.assignment_id || null };
     case 'student_courses': return { course_id: record.course_id || record.id };
-    case 'student_ledger': return { course_id: record.course_id || null };
+    case 'student_ledger':
+    case 'course_units':
+    case 'course_items':
+    case 'student_items': return { course_id: record.course_id || null };
     default: return null;
   }
 }
@@ -342,12 +348,38 @@ export class StorageManager {
       student_ledger:  'id, course_id, assignment_id, item_type, student_id, submitted_at, received_at, [course_id+assignment_id]'
     });
 
+    // v6: Course Units, Course Items, and Student Items
+    this.db.version(6).stores({
+      course_units:  'id, course_id, position, updated_at',
+      course_items:  'id, course_id, unit_id, kind, ref_id, due_date, updated_at',
+      student_items: 'id, course_id, item_id, kind, due_date, updated_at, [course_id+item_id]'
+    }).upgrade(async (tx) => {
+      try {
+        const assignments = await tx.table('assignments').toArray();
+        for (const a of assignments) {
+          if (a.settings?.due_date) {
+            const linked = await tx.table('gradebook_assignments')
+              .filter(ga => ga.source?.type === 'assignment' && ga.source?.id === a.id)
+              .toArray();
+            for (const ga of linked) {
+              if (ga.due_date !== a.settings.due_date) {
+                ga.due_date = a.settings.due_date;
+                await tx.table('gradebook_assignments').put(ga);
+              }
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('v6 migration reconciliation warning:', err);
+      }
+    });
+
     // Initialize in-memory tables for ephemeral mode
     const tables = [
       'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
       'gradebook_students', 'gradebook_assignments', 'gradebook_grades',
       'gradebook_rubrics', 'assignments', 'assignment_submissions',
-      'student_courses', 'student_ledger',
+      'student_courses', 'student_ledger', 'course_units', 'course_items', 'student_items',
       'app_metadata', 'binary_blobs', 'outbox'
     ];
     for (const t of tables) {
@@ -405,7 +437,7 @@ export class StorageManager {
       await this.setMetadata('device_id', devId);
     }
     this.deviceId = devId;
-    await this.setMetadata('schema_version', 4);
+    await this.setMetadata('schema_version', 6);
 
     if (typeof window !== 'undefined' && typeof navigator !== 'undefined') {
       let persisted = false;
@@ -618,10 +650,40 @@ export class StorageManager {
     return `idb-blob://${id}`;
   }
 
+  /**
+   * Save a blob content-addressed by its SHA-256 hash (Rec 5a)
+   * Deduplicates identical media assets across cards, assignments, and course items.
+   * @param {Blob} blob
+   * @param {object} [opts]
+   * @returns {Promise<{ id: string, uri: string, sha256: string, size_bytes: number, mime_type: string }>}
+   */
+  async saveContentAddressedBlob(blob, opts = {}) {
+    if (!blob) throw new Error('BLOB_REQUIRED');
+    const buffer = await blob.arrayBuffer();
+    const digest = await crypto.subtle.digest('SHA-256', buffer);
+    const hashHex = Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('');
+    const id = `sha256-${hashHex}`;
+
+    // Return existing record if already stored
+    const existing = await this.getBinaryBlob(`idb-blob://${id}`).catch(() => null);
+    if (existing) {
+      return { id, uri: `idb-blob://${id}`, sha256: hashHex, size_bytes: blob.size, mime_type: blob.type || 'application/octet-stream' };
+    }
+
+    const uri = await this.saveBinaryAsset(id, blob, opts);
+    return { id, uri, sha256: hashHex, size_bytes: blob.size, mime_type: blob.type || 'application/octet-stream' };
+  }
+
   async loadBinaryAsset(uri) {
     if (!uri) return '';
     if (uri.startsWith('blob:') || uri.startsWith('data:') || uri.startsWith('http://') || uri.startsWith('https://')) {
       return uri;
+    }
+
+    if (uri.startsWith('sha256-')) {
+      const idb = await this.loadBinaryAsset(`idb-blob://${uri}`);
+      if (idb && idb !== `idb-blob://${uri}`) return idb;
+      return await this.loadBinaryAsset(`opfs://assets/${uri}`);
     }
 
     if (uri.startsWith('opfs://assets/')) {

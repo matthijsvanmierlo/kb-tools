@@ -70,6 +70,31 @@ async function loadGradebookModule(...args) {
   return mod.renderGradebookView(...args);
 }
 
+async function loadClassesModule(...args) {
+  const mod = await import('./modules/classes/index.js');
+  return mod.renderClassesView(...args);
+}
+
+async function loadCourseModule(...args) {
+  const mod = await import('./modules/course/index.js');
+  return mod.renderCourseView(...args);
+}
+
+async function loadStudentCoursesModule(...args) {
+  const mod = await import('./modules/student/courses.js');
+  return mod.renderStudentCoursesView(...args);
+}
+
+async function loadStudentCourseDetailModule(...args) {
+  const mod = await import('./modules/student/course-detail.js');
+  return mod.renderStudentCourseDetailView(...args);
+}
+
+async function loadCalendarModule(...args) {
+  const mod = await import('./modules/calendar/index.js');
+  return mod.renderCalendarView(...args);
+}
+
 async function loadFeedbackModule(...args) {
   const mod = await import('./modules/assignments/feedback-view.js');
   return mod.renderFeedbackView(...args);
@@ -117,6 +142,9 @@ async function bootstrapApp() {
     router.register('#/video/edit', loadVideoModule);
     router.register('#/video/kiosk', loadVideoModule);
     router.register('#/gradebook', loadGradebookModule);
+    router.register('#/classes', loadClassesModule);
+    router.register('#/course', loadCourseModule);
+    router.register('#/calendar', loadCalendarModule);
     router.register('#/assignments', loadAssignmentsModule);
     router.register('#/assignments/edit', loadAssignmentsModule);
     router.register('#/assignments/take', loadAssignmentsModule);
@@ -126,6 +154,8 @@ async function bootstrapApp() {
     router.register('#/feedback', loadFeedbackModule);
     router.register('#/guide', loadGuideModule);
     router.register('#/student', loadStudentHubModule);
+    router.register('#/student/courses', loadStudentCoursesModule);
+    router.register('#/student/course', loadStudentCourseDetailModule);
     router.register('#/student/gradebook', loadStudentGradebookModule);
 
     // Global drag-and-drop listener for home, assignments, and student hub (§6.4)
@@ -189,8 +219,41 @@ async function bootstrapApp() {
       if (roleToggleBtn) roleToggleBtn.title = `Currently in ${mode === 'student' ? 'Student' : 'Teacher'} View. Click to switch.`;
     };
     syncRoleUI();
+
+    // Render dynamic data-driven navigation
+    const { renderAppNav } = await import('./components/app-nav.js');
+    const navContainer = document.getElementById('kb-app-nav');
+    renderAppNav(navContainer, RoleMode.get());
+
+    // Skip link keyboard/click accessibility
+    document.querySelector('a[href="#app-view-container"]')?.addEventListener('click', (e) => {
+      e.preventDefault();
+      const main = document.getElementById('app-view-container');
+      if (main) {
+        main.focus();
+        main.scrollIntoView();
+      }
+    });
+
+    // Header More options proxy clicks (<1024px)
+    document.getElementById('kb-header-more-menu')?.addEventListener('sl-select', (e) => {
+      const val = e.detail.item.value;
+      if (val === 'import') {
+        document.getElementById('btn-header-import-content')?.click();
+      } else if (val === 'backup') {
+        document.querySelector('.kb-storage-menu button[slot="trigger"]')?.click();
+      } else if (val === 'safety') {
+        document.getElementById('kb-data-safety-chip')?.click();
+      } else if (val === 'theme') {
+        document.querySelector('#icon-active-theme')?.closest('button')?.click();
+      } else if (val === 'help') {
+        document.querySelector('.kb-guide-link button[slot="trigger"]')?.click();
+      }
+    });
+
     window.addEventListener('kb-role-mode-changed', () => {
       syncRoleUI();
+      renderAppNav(navContainer, RoleMode.get());
       router.handleRoute();
     });
     roleToggleBtn?.addEventListener('click', () => {

@@ -42,6 +42,10 @@ const TONES = {
 };
 
 const TOOLS = [
+  { goal: 'Classes, student roster & access codes', tool: 'Classes', icon: 'people', tone: 'emerald', graded: 'Roster & sync management', handin: 'Access codes & QR cards', href: '#/classes' },
+  { goal: 'Course units, syllabus & live feed', tool: 'Courses', icon: 'journal-bookmark', tone: 'blue', graded: 'Curriculum structure', handin: 'Zero-server public feeds', href: '#/course' },
+  { goal: 'Unified schedule & calendar sync', tool: 'Calendar', icon: 'calendar3', tone: 'violet', graded: 'Due dates across all tools', handin: 'RFC 5545 iCalendar (.ics)', href: '#/calendar' },
+  { goal: 'Automated file & zip submission intake', tool: 'Inbox', icon: 'inbox', tone: 'amber', graded: 'Staging & auto-import', handin: 'Watch folder & drag-and-drop', href: '#/inbox' },
   { goal: 'Quizzes, homework, exit tickets', tool: 'Assignments', icon: 'ui-checks', tone: 'amber', graded: 'Auto + manual for written answers', handin: 'Encrypted .kbsub file or pasted code', href: '#/assignments' },
   { goal: 'Watch a video and check understanding', tool: 'Video', icon: 'play-circle', tone: 'rose', graded: 'Auto (choice + keyword answers)', handin: 'Encrypted .kbr receipt', href: '#/video' },
   { goal: 'Labs, essays, projects, presentations', tool: 'Gradebook + rubric', icon: 'journal-check', tone: 'emerald', graded: 'By you, with rubric and comments', handin: 'However you collect work today', href: '#/gradebook' },

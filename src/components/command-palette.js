@@ -3,6 +3,7 @@ import { router } from '../router.js';
 import { Sanitizer } from '../core/sanitizer.js';
 import { ClassManager } from './class-manager.js';
 import { sync } from '../core/sync.js';
+import { RoleMode } from '../state/role-mode.js';
 
 /**
  * Universal Command Palette (Ctrl/Cmd + K) and Keyboard Shortcuts Help Modal (?)
@@ -18,8 +19,13 @@ export class CommandPalette {
         this.open();
       }
 
-      // '?' key (when not focused in an input/textarea)
-      if (e.key === '?' && !['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) {
+      // '?' key (when not focused in any text input, textarea, select, or editable element)
+      const target = e.target;
+      const tag = target?.tagName;
+      const isInput = ['INPUT', 'TEXTAREA', 'SL-INPUT', 'SL-TEXTAREA', 'SL-SELECT'].includes(tag) ||
+        target?.isContentEditable || document.activeElement?.isContentEditable;
+
+      if (e.key === '?' && !isInput) {
         e.preventDefault();
         this.openShortcutsModal();
       }
@@ -81,30 +87,49 @@ export class CommandPalette {
     const searchInput = dialog.querySelector('#input-cmd-search');
     const resultsContainer = dialog.querySelector('#kb-cmd-results');
 
-    // Build searchable catalog
-    const staticActions = [
+    const role = RoleMode.get();
+
+    // Build searchable catalog filtered by active role
+    const staticActions = role === 'student' ? [
+      { category: 'Navigation', title: 'Go to Student Hub', icon: 'house-door', run: () => router.navigate('#/student') },
+      { category: 'Navigation', title: 'My Courses', icon: 'journal-bookmark', run: () => router.navigate('#/student/courses') },
+      { category: 'Navigation', title: 'Calendar', icon: 'calendar3', run: () => router.navigate('#/calendar') },
+      { category: 'Navigation', title: 'My Grades & Feedback', icon: 'journal-check', run: () => router.navigate('#/student/gradebook') },
+      { category: 'Study', title: 'Study Flashcards', icon: 'stack', run: () => router.navigate('#/flashcards') },
+      { category: 'Study', title: 'Timeline Maker', icon: 'bar-chart-steps', run: () => router.navigate('#/timeline') },
+      { category: 'Study', title: 'Interactive Video', icon: 'play-circle', run: () => router.navigate('#/video') },
+      { category: 'Info', title: 'About KennisBoost Tools', icon: 'info-circle', run: () => router.navigate('#/about') },
+      { category: 'Info', title: 'Local-First Philosophy', icon: 'shield-check', run: () => router.navigate('#/philosophy') },
+      { category: 'Help', title: 'Keyboard Shortcuts Cheat Sheet', icon: 'question-circle', run: () => this.openShortcutsModal() }
+    ] : [
       { category: 'Navigation', title: 'Go to Home Hub', icon: 'house-door', run: () => router.navigate('#/') },
-      { category: 'Navigation', title: 'About KennisBoost Tools', icon: 'info-circle', run: () => router.navigate('#/about') },
-      { category: 'Navigation', title: 'Local-First Philosophy & Privacy Architecture', icon: 'shield-check', run: () => router.navigate('#/philosophy') },
+      { category: 'Navigation', title: 'Courses', icon: 'journal-bookmark', run: () => router.navigate('#/course') },
+      { category: 'Navigation', title: 'Interactive Calendar', icon: 'calendar3', run: () => router.navigate('#/calendar') },
+      { category: 'Navigation', title: 'Classes & Rosters', icon: 'people', run: () => router.navigate('#/classes') },
+      { category: 'Navigation', title: 'Open Gradebook Spreadsheet', icon: 'journal-check', run: () => router.navigate('#/gradebook') },
       { category: 'Navigation', title: 'Open Inbox (Collect Student Work)', icon: 'inbox', run: () => router.navigate('#/inbox') },
       { category: 'Navigation', title: 'Open Flashcards Library', icon: 'stack', run: () => router.navigate('#/flashcards') },
       { category: 'Navigation', title: 'Open Timeline Maker', icon: 'bar-chart-steps', run: () => router.navigate('#/timeline') },
       { category: 'Navigation', title: 'Open Video Assessments', icon: 'play-circle', run: () => router.navigate('#/video') },
       { category: 'Navigation', title: 'Open Assignments', icon: 'ui-checks', run: () => router.navigate('#/assignments') },
-      { category: 'Navigation', title: 'Teacher Guide: Recommended Workflows', icon: 'signpost-split', run: () => router.navigate('#/guide') },
       { category: 'Navigation', title: 'New Auto-graded Assignment', icon: 'plus-lg', run: () => router.navigate('#/assignments/edit') },
-      { category: 'Navigation', title: 'Open Gradebook Spreadsheet', icon: 'journal-check', run: () => router.navigate('#/gradebook') },
+      { category: 'Navigation', title: 'Teacher Guide: Recommended Workflows', icon: 'signpost-split', run: () => router.navigate('#/guide') },
+      { category: 'Navigation', title: 'About KennisBoost Tools', icon: 'info-circle', run: () => router.navigate('#/about') },
+      { category: 'Navigation', title: 'Local-First Philosophy & Privacy Architecture', icon: 'shield-check', run: () => router.navigate('#/philosophy') },
       { category: 'Actions', title: 'Import Content (.kbshare, CSV, JSON)', icon: 'cloud-download', run: async () => { const { UniversalImportDialog } = await import('./universal-import-dialog.js'); UniversalImportDialog.open(); } },
       { category: 'Actions', title: 'Create New Flashcard Deck', icon: 'plus-circle', run: () => router.navigate('#/flashcards/edit') },
-      { category: 'Actions', title: 'Manage Classes & Rosters', icon: 'mortarboard', run: () => ClassManager.openClassManagerModal() },
       { category: 'Actions', title: 'Load sample workspace', icon: 'box-arrow-in-down', run: async () => { const { loadDemoWorkspace } = await import('../core/demo.js'); await loadDemoWorkspace(); router.handleRoute(); } },
       { category: 'Actions', title: 'Remove sample data', icon: 'trash', run: async () => { const { removeDemoData } = await import('../core/demo.js'); await removeDemoData(); router.handleRoute(); } },
       { category: 'Actions', title: 'Export Encrypted Backup File', icon: 'download', run: () => sync.exportManualBackup() },
       { category: 'Actions', title: 'Keyboard Shortcuts Cheat Sheet', icon: 'question-circle', run: () => this.openShortcutsModal() }
     ];
 
-    const projectItems = [
-      ...courses.map(c => ({ category: 'Classes', title: c.name, subtitle: c.section || 'Class Roster', icon: 'mortarboard', color: c.color || '#2563eb', run: () => { ClassManager.setActiveFilter(c.id); router.navigate('#/gradebook'); } })),
+    const projectItems = role === 'student' ? [
+      ...decks.map(d => ({ category: 'Flashcards', title: d.title, subtitle: `${d.cards?.length || 0} cards`, icon: 'stack', run: () => router.navigate(`#/flashcards/study?id=${d.id}`) })),
+      ...timelines.map(t => ({ category: 'Timelines', title: t.title, subtitle: `${t.events?.length || 0} events`, icon: 'bar-chart-steps', run: () => router.navigate(`#/timeline/view?id=${t.id}`) })),
+      ...videos.map(v => ({ category: 'Videos', title: v.title, subtitle: `${v.checkpoints?.length || 0} checkpoints`, icon: 'play-circle', run: () => router.navigate(`#/video/kiosk?id=${v.id}`) }))
+    ] : [
+      ...courses.map(c => ({ category: 'Classes', title: c.name, subtitle: c.section || 'Class Roster', icon: 'mortarboard', color: c.color || '#2563eb', run: () => router.navigate(`#/classes?courseId=${c.id}`) })),
       ...decks.map(d => ({ category: 'Flashcards', title: d.title, subtitle: `${d.cards?.length || 0} cards`, icon: 'stack', run: () => router.navigate(`#/flashcards/study?id=${d.id}`) })),
       ...timelines.map(t => ({ category: 'Timelines', title: t.title, subtitle: `${t.events?.length || 0} events`, icon: 'bar-chart-steps', run: () => router.navigate(`#/timeline/view?id=${t.id}`) })),
       ...videos.map(v => ({ category: 'Videos', title: v.title, subtitle: `${v.checkpoints?.length || 0} checkpoints`, icon: 'play-circle', run: () => router.navigate(`#/video/kiosk?id=${v.id}`) })),
@@ -112,6 +137,12 @@ export class CommandPalette {
     ];
 
     const allCommands = [...staticActions, ...projectItems];
+
+    resultsContainer.setAttribute('role', 'listbox');
+    resultsContainer.setAttribute('id', 'kb-cmd-results');
+    searchInput.setAttribute('role', 'combobox');
+    searchInput.setAttribute('aria-expanded', 'true');
+    searchInput.setAttribute('aria-controls', 'kb-cmd-results');
 
     const renderList = (filterText = '') => {
       const q = filterText.toLowerCase().trim();
@@ -125,6 +156,7 @@ export class CommandPalette {
             <p>No matching commands or projects found.</p>
           </div>
         `;
+        searchInput.removeAttribute('aria-activedescendant');
         return;
       }
 
@@ -133,7 +165,7 @@ export class CommandPalette {
         const safeSubtitle = item.subtitle ? Sanitizer.escapeHTML(item.subtitle) : '';
         const safeCategory = Sanitizer.escapeHTML(item.category);
         return `
-          <div class="kb-cmd-item flex items-center justify-between p-2 rounded-lg hover:bg-blue-50 cursor-pointer transition-colors ${idx === 0 ? 'bg-blue-50/70' : ''}" data-index="${idx}">
+          <div class="kb-cmd-item flex items-center justify-between p-2 rounded-lg hover:bg-blue-50 cursor-pointer transition-colors ${idx === 0 ? 'bg-blue-50/70' : ''}" data-index="${idx}" id="kb-cmd-item-${idx}" role="option" aria-selected="${idx === 0}">
             <div class="flex items-center gap-2.5">
               <span class="w-6 h-6 rounded flex items-center justify-center bg-slate-100 text-slate-600 text-xs">
                 <sl-icon name="${item.icon}"></sl-icon>
@@ -148,7 +180,7 @@ export class CommandPalette {
         `;
       }).join('');
 
-      let selectedIndex = 0;
+      searchInput.setAttribute('aria-activedescendant', 'kb-cmd-item-0');
 
       const items = resultsContainer.querySelectorAll('.kb-cmd-item');
       items.forEach((elem, i) => {
@@ -174,15 +206,21 @@ export class CommandPalette {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         items[currentActiveIdx]?.classList.remove('bg-blue-50/70', 'bg-blue-100');
+        items[currentActiveIdx]?.setAttribute('aria-selected', 'false');
         currentActiveIdx = (currentActiveIdx + 1) % items.length;
         items[currentActiveIdx]?.classList.add('bg-blue-100');
+        items[currentActiveIdx]?.setAttribute('aria-selected', 'true');
         items[currentActiveIdx]?.scrollIntoView({ block: 'nearest' });
+        searchInput.setAttribute('aria-activedescendant', `kb-cmd-item-${currentActiveIdx}`);
       } else if (e.key === 'ArrowUp') {
         e.preventDefault();
         items[currentActiveIdx]?.classList.remove('bg-blue-50/70', 'bg-blue-100');
+        items[currentActiveIdx]?.setAttribute('aria-selected', 'false');
         currentActiveIdx = (currentActiveIdx - 1 + items.length) % items.length;
         items[currentActiveIdx]?.classList.add('bg-blue-100');
+        items[currentActiveIdx]?.setAttribute('aria-selected', 'true');
         items[currentActiveIdx]?.scrollIntoView({ block: 'nearest' });
+        searchInput.setAttribute('aria-activedescendant', `kb-cmd-item-${currentActiveIdx}`);
       } else if (e.key === 'Enter') {
         e.preventDefault();
         items[currentActiveIdx]?.click();

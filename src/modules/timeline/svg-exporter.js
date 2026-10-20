@@ -55,8 +55,13 @@ export class TimelineSVGExporter {
     const laneHeight = 44;
     const dynamicHeight = Math.max(height, lanesStartY + totalLanes * laneHeight + 60);
 
+    const safeTitle = this.escapeXml(dataset.title || 'Interactive Timeline');
+    const safeDesc = this.escapeXml(`Chronological timeline containing ${events.length} event(s) from ${dataset.title || 'history'}`);
+
     let svg = `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${dynamicHeight}" width="${width}" height="${dynamicHeight}">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${dynamicHeight}" width="${width}" height="${dynamicHeight}" role="graphics-document" aria-label="${safeTitle}">
+  <title>${safeTitle}</title>
+  <desc>${safeDesc}</desc>
   <defs>
     <style>
       .title { font-family: system-ui, -apple-system, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; font-size: 20px; font-weight: bold; fill: #0f172a; }

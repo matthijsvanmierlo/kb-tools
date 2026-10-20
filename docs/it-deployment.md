@@ -93,14 +93,18 @@ settings wipe it:
 
 - **ChromeOS ephemeral mode** (`DeviceEphemeralUsersEnabled`, "erase all local user data on
   sign-out") and **Managed Guest Sessions** delete everything at sign-out. Don't use them for
-  teachers. On shared student Chromebooks they are fine: students' work is handed in, and drafts
-  can roam through the relay.
+  teachers. On shared student Chromebooks, students can click **"Save Session (.kbsession)"** on the
+  Student Hub to download their enrolled courses, progress ledger, and drafts to a USB drive or Google
+  Drive, then resume instantly on any shared device via **"Resume Session"**.
 - **Clearing site data on exit** (`ClearBrowsingDataOnExitList` with site data, or
   `DefaultCookiesSetting` = "session only") also removes KennisBoost data. Exempt your KennisBoost
   origin, typically via `CookiesAllowedForUrls`, which also covers site storage. Check the result
   under **Data safety → Protected from automatic clean-up**.
 - **Installed apps keep their data.** Browsers usually grant persistent storage to installed apps,
   so force-installing (above) also helps here.
+- **Inbox Watch Folder (`#/inbox`):** Teachers can select a folder on a local file share or synced drive
+  to poll every 4 seconds. Submissions dropped by students or LMS integrations (`.kbsub`, `.kbsub.html`,
+  `.kbr`, `.zip`) are staged or auto-imported without requiring internet connectivity.
 
 The app warns teachers when it detects a temporary profile (very small storage quota or private
 window). That warning links here.
@@ -130,11 +134,30 @@ A small Node.js service that stores only ciphertext. It enables:
 - short links;
 - multi-device sync without a shared folder;
 - co-teaching;
-- student draft roaming.
+- student draft roaming;
+- public course feeds (`GET /api/feed/:courseId`) with ETag caching.
 
-It also keeps working without internet when hosted on the school network. Setup is one command
-(`npm run relay:init`) plus a systemd unit; see `server/relay/README.md`. It keeps no IP addresses
-and deletes student data after `KB_RELAY_RETENTION_DAYS` (default 180).
+### Zero-Config Local LAN Relay & mDNS (`teacher-box.local`)
+
+In network-restricted or internet-free school environments, the relay can run directly on a teacher machine, Raspberry Pi, or local lab workstation:
+
+```bash
+# Serve both the static web app and the encrypted API on local port 8000
+KB_RELAY_SERVE_APP=1 PORT=8000 npm run relay
+```
+
+For zero-configuration student discovery across the local subnet:
+1. Publish an mDNS hostname (such as `teacher-box.local` or `school-relay.local` via Avahi/Bonjour).
+2. Students navigate to `http://teacher-box.local:8000/` or install it as a PWA.
+3. If running behind a local TLS reverse proxy (e.g., Caddy):
+   ```caddyfile
+   teacher-box.local {
+       reverse_proxy localhost:8000
+   }
+   ```
+4. WebRTC (`direct-transfer.js`) and Optical QR streams (`KBQ1`) operate completely peer-to-peer even if the relay is disconnected.
+
+It keeps no IP addresses, logs no student identities, and purges expired temporary payloads after `KB_RELAY_RETENTION_DAYS` (default 180).
 
 ## School-assisted recovery
 

@@ -314,8 +314,10 @@ export async function renderTimelineView(params, router, container) {
         <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-2 relative overflow-hidden" style="min-height: 520px;">
           <canvas id="timeline-canvas" tabindex="0" class="w-full h-full block focus:outline-none" style="height: 520px;" aria-label="Interactive timeline canvas"></canvas>
         </div>
+        ${renderAccessibleEventListHTML()}
       `;
       setupCanvas();
+      bindAccessibleListActions();
     } else if (viewMode === 'split') {
       workspaceView.innerHTML = `
         <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
@@ -350,6 +352,54 @@ export async function renderTimelineView(params, router, container) {
       }
     });
     if (scaleLabel) scaleLabel.textContent = `Scale: ${renderer.getScaleLabel()}`;
+  };
+
+  const renderAccessibleEventListHTML = () => {
+    if (filteredEvents.length === 0) {
+      return '<div class="mt-4 p-4 bg-white rounded-2xl border border-slate-200 text-xs text-slate-400">No events match current filter.</div>';
+    }
+    const sorted = [...filteredEvents].sort((a, b) => parseHistoricalDateToDays(a.start_date) - parseHistoricalDateToDays(b.start_date));
+    return `
+      <div class="mt-4 bg-white rounded-2xl border border-slate-200 shadow-xs p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-xs font-bold uppercase tracking-wider text-slate-500">Accessible Chronological Event List</h3>
+          <span class="text-[11px] text-slate-400">Screen-reader &amp; keyboard accessible</span>
+        </div>
+        <ul role="list" class="divide-y divide-slate-100 max-h-64 overflow-y-auto space-y-0.5" aria-label="Chronological events in timeline">
+          ${sorted.map(ev => `
+            <li role="listitem" class="p-2.5 rounded-xl hover:bg-slate-50 flex items-center justify-between gap-3 cursor-pointer accessible-event-item transition-colors" data-id="${Sanitizer.escapeHTML(ev.id)}" tabindex="0">
+              <div class="flex items-center gap-3 min-w-0">
+                <div class="w-2.5 h-2.5 rounded-full flex-shrink-0" style="background-color: ${Sanitizer.safeColor(ev.color, '#2563eb')};"></div>
+                <div class="min-w-0">
+                  <div class="text-xs font-bold text-slate-900 truncate">${Sanitizer.escapeHTML(ev.title)}</div>
+                  ${ev.description ? `<p class="text-[11px] text-slate-500 truncate max-w-lg mt-0.5">${Sanitizer.escapeHTML(ev.description)}</p>` : ''}
+                </div>
+              </div>
+              <div class="text-right flex-shrink-0">
+                <span class="font-mono text-xs text-slate-600 font-medium">${Sanitizer.escapeHTML(ev.start_date || '')}</span>
+              </div>
+            </li>
+          `).join('')}
+        </ul>
+      </div>
+    `;
+  };
+
+  const bindAccessibleListActions = () => {
+    container.querySelectorAll('.accessible-event-item').forEach(item => {
+      const open = () => {
+        const evId = item.dataset.id;
+        const ev = activeTimeline.events.find(e => e.id === evId);
+        if (ev) openEventDrawer(ev);
+      };
+      item.addEventListener('click', open);
+      item.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          open();
+        }
+      });
+    });
   };
 
   const renderTableHTML = () => {
