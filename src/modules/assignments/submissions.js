@@ -428,6 +428,7 @@ export async function renderSubmissions(assignment, router, container) {
             </div>
           </div>
           <div class="flex items-center gap-2 flex-wrap">
+            <sl-button size="small" id="sub-scan-qr" variant="primary"><sl-icon slot="prefix" name="camera"></sl-icon> Scan QR</sl-button>
             <sl-button size="small" href="#/inbox"><sl-icon slot="prefix" name="inbox"></sl-icon> Open Inbox</sl-button>
             <sl-button size="small" id="sub-paste"><sl-icon slot="prefix" name="clipboard-plus"></sl-icon> Paste codes</sl-button>
             <sl-button size="small" id="sub-import"><sl-icon slot="prefix" name="upload"></sl-icon> Import .kbsub files</sl-button>
@@ -635,8 +636,9 @@ export async function renderSubmissions(assignment, router, container) {
       </div>
       <div slot="footer" class="flex flex-wrap items-center justify-between gap-2 w-full">
         <div class="flex items-center gap-2 flex-wrap">
-          <sl-button size="small" id="review-copy-feedback-link"><sl-icon slot="prefix" name="link-45deg"></sl-icon> Copy feedback link</sl-button>
-          <sl-button size="small" id="review-download-feedback-html"><sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Download feedback (.html)</sl-button>
+          <sl-button size="small" id="review-show-feedback-qr" variant="primary"><sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Show QR</sl-button>
+          <sl-button size="small" id="review-copy-feedback-link"><sl-icon slot="prefix" name="link-45deg"></sl-icon> Copy link</sl-button>
+          <sl-button size="small" id="review-download-feedback-html"><sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Download (.html)</sl-button>
         </div>
         <div class="flex items-center gap-2">
           <sl-button id="review-cancel">Cancel</sl-button>
@@ -657,6 +659,22 @@ export async function renderSubmissions(assignment, router, container) {
           setTimeout(() => openReview(target), 120);
         }
       });
+    });
+
+    drawer.querySelector('#review-show-feedback-qr')?.addEventListener('click', async () => {
+      try {
+        const student = roster.find(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase());
+        const link = await createFeedbackLink({ assignment: a, submission: { ...sub, manual: draft.manual, feedback: draft.feedback }, student, course });
+        const { showQrSequence } = await import('../../components/qr-handoff.js');
+        const sName = sub.student_name || sub.claimed_name || sub.student_id || 'Student';
+        showQrSequence(link.url, {
+          title: `Feedback · ${sName}`,
+          intro: `Encrypted feedback for ${sName}. The student can scan this from their camera or Student Hub to see their grade.`,
+          preferDirectUrl: true
+        });
+      } catch (err) {
+        toast.danger('Could not create feedback QR: ' + err.message);
+      }
     });
 
     drawer.querySelector('#review-copy-feedback-link')?.addEventListener('click', async () => {
@@ -1070,6 +1088,18 @@ export async function renderSubmissions(assignment, router, container) {
       const text = toCSV(rows, cols);
       downloadCSV(`${(a.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_')}_not_submitted.csv`, text);
       toast.success(`Exported ${rows.length} not-submitted students.`);
+    });
+
+    container.querySelector('#sub-scan-qr')?.addEventListener('click', async () => {
+      const { openQrScanner } = await import('../../components/qr-handoff.js');
+      openQrScanner({
+        label: `Scan Student Submissions · ${a.title || 'Assignment'}`,
+        readyText: 'Point camera at student\'s submission QR code...',
+        continuous: true,
+        onSubmission: async (text) => {
+          await importTexts([{ text, source: 'Camera Scan' }]);
+        }
+      });
     });
 
     const fileInput = container.querySelector('#sub-file');

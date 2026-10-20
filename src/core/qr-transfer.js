@@ -18,6 +18,8 @@ export const QR_FRAME_PREFIX = 'KBQ1';
 // ~600 characters per frame keeps each code around QR version 20 at error-correction level M:
 // dense enough to need few frames, sparse enough for a phone or laptop camera to read off a screen.
 export const QR_FRAME_CHARS = 600;
+// ~350 characters per frame produces lower-density codes (QR version ~14) ideal for projector screens and webcams.
+export const QR_FRAME_CHARS_EASY = 350;
 const MAX_FRAMES = 64;
 
 const enc = new TextEncoder();
@@ -79,18 +81,62 @@ async function decodeData(data) {
 
 /**
  * Collects frames from any number of students in any order, tolerating repeats.
+ * Supports both multi-frame KBQ1 sequences and single-frame raw URLs/codes when allowSingleRaw is enabled.
  * Usage: `const r = await assembler.add(rawQrText)` → r.status is 'ignored' | 'duplicate' | 'progress' | 'complete'.
  */
 export class QrAssembler {
-  constructor() {
+  /**
+   * @param {{ allowSingleRaw?: boolean }} [options]
+   */
+  constructor({ allowSingleRaw = false } = {}) {
+    this.allowSingleRaw = Boolean(allowSingleRaw);
     this.messages = new Map(); // msgId → { total, parts: Map<index, data> }
     this.completed = new Set();
   }
 
-  /** @returns {Promise<{ status: string, msgId?: string, received?: number, total?: number, text?: string }>} */
-  async add(raw) {
-    const frame = parseQrFrame(raw);
-    if (!frame) return { status: 'ignored' };
+  /**
+   * Reset all assembled state
+   */
+  reset() {
+    this.messages.clear();
+    this.completed.clear();
+  }
+
+  /**
+   * @param {string} raw
+   * @param {{ allowSingleRaw?: boolean }} [opts]
+   * @returns {Promise<{ status: string, msgId?: string, received?: number, total?: number, text?: string, singleRaw?: boolean, receivedIndices?: number[], missingIndices?: number[] }>}
+   */
+  async add(raw, { allowSingleRaw } = {}) {
+    const rawTrimmed = String(raw || '').trim();
+    if (!rawTrimmed) return { status: 'ignored' };
+
+    const frame = parseQrFrame(rawTrimmed);
+    const singleRawAllowed = allowSingleRaw ?? this.allowSingleRaw;
+
+    if (!frame) {
+      // If it looks like a damaged or malformed KBQ1 frame, ignore it rather than treating as raw payload
+      if (rawTrimmed.startsWith('KBQ1:')) {
+        return { status: 'ignored' };
+      }
+      if (!singleRawAllowed) {
+        return { status: 'ignored' };
+      }
+      if (this.completed.has(rawTrimmed)) {
+        return { status: 'duplicate', text: rawTrimmed, singleRaw: true };
+      }
+      this.completed.add(rawTrimmed);
+      return {
+        status: 'complete',
+        text: rawTrimmed,
+        received: 1,
+        total: 1,
+        singleRaw: true,
+        receivedIndices: [1],
+        missingIndices: []
+      };
+    }
+
     if (this.completed.has(frame.msgId)) return { status: 'duplicate', msgId: frame.msgId };
 
     let msg = this.messages.get(frame.msgId);
@@ -102,15 +148,36 @@ export class QrAssembler {
     const isNew = !msg.parts.has(frame.index);
     msg.parts.set(frame.index, frame.data);
 
+    const receivedIndices = Array.from(msg.parts.keys()).sort((a, b) => a - b);
+    const missingIndices = [];
+    for (let i = 1; i <= msg.total; i++) {
+      if (!msg.parts.has(i)) missingIndices.push(i);
+    }
+
     if (msg.parts.size < msg.total) {
-      return { status: isNew ? 'progress' : 'duplicate', msgId: frame.msgId, received: msg.parts.size, total: msg.total };
+      return {
+        status: isNew ? 'progress' : 'duplicate',
+        msgId: frame.msgId,
+        received: msg.parts.size,
+        total: msg.total,
+        receivedIndices,
+        missingIndices
+      };
     }
 
     const data = Array.from({ length: msg.total }, (_, i) => msg.parts.get(i + 1)).join('');
     this.messages.delete(frame.msgId);
     this.completed.add(frame.msgId);
     try {
-      return { status: 'complete', msgId: frame.msgId, received: msg.total, total: msg.total, text: await decodeData(data) };
+      return {
+        status: 'complete',
+        msgId: frame.msgId,
+        received: msg.total,
+        total: msg.total,
+        text: await decodeData(data),
+        receivedIndices: Array.from({ length: msg.total }, (_, i) => i + 1),
+        missingIndices: []
+      };
     } catch (_) {
       return { status: 'error', msgId: frame.msgId };
     }
@@ -118,6 +185,19 @@ export class QrAssembler {
 
   /** Progress of submissions that are still incomplete */
   pending() {
-    return [...this.messages.entries()].map(([msgId, m]) => ({ msgId, received: m.parts.size, total: m.total }));
+    return [...this.messages.entries()].map(([msgId, m]) => {
+      const receivedIndices = Array.from(m.parts.keys()).sort((a, b) => a - b);
+      const missingIndices = [];
+      for (let i = 1; i <= m.total; i++) {
+        if (!m.parts.has(i)) missingIndices.push(i);
+      }
+      return {
+        msgId,
+        received: m.parts.size,
+        total: m.total,
+        receivedIndices,
+        missingIndices
+      };
+    });
   }
 }

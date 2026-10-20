@@ -1295,12 +1295,22 @@ function showEncryptedLinkDialog(student, linkData, onOpenAccess) {
     </div>
     <div slot="footer" class="flex flex-wrap justify-end gap-2">
       ${newCode && onOpenAccess ? '<sl-button id="btn-link-codes" variant="text">Manage access codes</sl-button>' : ''}
+      <sl-button variant="default" id="btn-show-link-qr"><sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Show QR</sl-button>
       <sl-button id="btn-close-link">Close</sl-button>
       <sl-button variant="primary" id="btn-copy-link"><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy link</sl-button>
     </div>
   `;
   document.body.appendChild(dialog);
   dialog.show();
+
+  dialog.querySelector('#btn-show-link-qr')?.addEventListener('click', async () => {
+    const { showQrSequence } = await import('../../components/qr-handoff.js');
+    showQrSequence(url, {
+      title: `Grade Report · ${student.full_name}`,
+      intro: `Encrypted report for ${student.full_name}. Student can scan this from their device camera or Student Hub.`,
+      preferDirectUrl: true
+    });
+  });
 
   dialog.querySelector('#btn-copy-link')?.addEventListener('click', async () => {
     try {

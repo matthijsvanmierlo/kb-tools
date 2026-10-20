@@ -28,9 +28,10 @@ export class UniversalImportDialog {
    * @param {object} [options]
    * @param {string|null} [options.defaultClassId=null]
    * @param {(result: object) => void} [options.onComplete]
+   * @param {'file'|'paste'|'qr'} [options.initialTab='file']
    * @returns {Promise<HTMLElement>}
    */
-  static async open({ defaultClassId = null, onComplete = null } = {}) {
+  static async open({ defaultClassId = null, onComplete = null, initialTab = 'file' } = {}) {
     const dialog = document.createElement('sl-dialog');
     dialog.setAttribute('label', 'Import Educational Content');
     dialog.className = 'kb-universal-import-dialog';
@@ -39,7 +40,7 @@ export class UniversalImportDialog {
     const classes = await ClassManager.getClasses().catch(() => []);
     const initialClassId = defaultClassId || ClassManager.getActiveFilter() || null;
 
-    let activeTab = 'file';
+    let activeTab = initialTab || 'file';
     let currentFile = null;
     let isProcessing = false;
     let inspectionResult = null;
@@ -48,15 +49,18 @@ export class UniversalImportDialog {
     dialog.innerHTML = `
       <div class="space-y-4 py-1 text-sm">
         <div class="text-xs text-slate-500">
-          Upload any <strong>.kbshare</strong> lesson package, assignment, flashcard deck, or spreadsheet file. Content is saved directly to your local library with zero server uploads.
+          Upload or scan any <strong>.kbshare</strong> lesson package, assignment, flashcard deck, or spreadsheet file. Content is saved directly to your local library with zero server uploads.
         </div>
 
         <sl-tab-group id="univ-import-tabs">
-          <sl-tab slot="nav" panel="tab-file" active>
+          <sl-tab slot="nav" panel="tab-file" ${activeTab === 'file' ? 'active' : ''}>
             <sl-icon slot="prefix" name="file-earmark-arrow-up"></sl-icon> Upload File
           </sl-tab>
-          <sl-tab slot="nav" panel="tab-paste">
+          <sl-tab slot="nav" panel="tab-paste" ${activeTab === 'paste' ? 'active' : ''}>
             <sl-icon slot="prefix" name="clipboard"></sl-icon> Paste Content
+          </sl-tab>
+          <sl-tab slot="nav" panel="tab-qr" ${activeTab === 'qr' ? 'active' : ''}>
+            <sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Scan QR
           </sl-tab>
 
           <!-- Tab 1: File Upload -->
@@ -85,6 +89,26 @@ export class UniversalImportDialog {
                 Paste spreadsheet rows (from Excel or Google Sheets), raw .kbshare contents, or student submission codes:
               </p>
               <sl-textarea id="univ-paste-textarea" rows="6" placeholder="Paste .kbshare data, spreadsheet cells, or KBSUB1. submission code here..."></sl-textarea>
+            </div>
+          </sl-tab-panel>
+
+          <!-- Tab 3: Scan QR Code -->
+          <sl-tab-panel name="tab-qr">
+            <div class="mt-3 p-6 border-2 border-dashed border-blue-200 hover:border-blue-500 rounded-xl text-center bg-blue-50/40 transition-colors">
+              <sl-icon name="qr-code-scan" class="text-4xl text-blue-600 mb-2"></sl-icon>
+              <p class="font-medium text-slate-800 text-sm">Scan Projected or Printed QR Code</p>
+              <p class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                Point your camera at an animated QR stream (.kbshare package) or single QR code (course/assignment link).
+              </p>
+              <div class="flex items-center justify-center gap-2 mt-4 flex-wrap">
+                <sl-button variant="primary" id="btn-univ-open-camera" size="small">
+                  <sl-icon slot="prefix" name="camera"></sl-icon> Open Camera Scanner
+                </sl-button>
+                <sl-button variant="default" id="btn-univ-scan-image" size="small">
+                  <sl-icon slot="prefix" name="image"></sl-icon> Scan Image / Screenshot
+                </sl-button>
+                <input type="file" id="input-univ-qr-file" accept="image/*" class="hidden" />
+              </div>
             </div>
           </sl-tab-panel>
         </sl-tab-group>
@@ -446,13 +470,84 @@ export class UniversalImportDialog {
 
     // Tab change
     tabs?.addEventListener('sl-tab-show', (e) => {
-      activeTab = e.detail.name === 'tab-paste' ? 'paste' : 'file';
+      const tabName = e.detail.name;
+      activeTab = tabName === 'tab-paste' ? 'paste' : (tabName === 'tab-qr' ? 'qr' : 'file');
       if (activeTab === 'paste') {
         inspectAndPreview(pasteTextarea?.value || '', 'pasted_data.txt');
-      } else if (currentFile) {
+      } else if (activeTab === 'file' && currentFile) {
         currentFile.text().then(t => inspectAndPreview(t, currentFile.name));
-      } else {
+      } else if (activeTab === 'file') {
         inspectAndPreview('', '');
+      }
+    });
+
+    // QR Tab button bindings
+    const qrCameraBtn = dialog.querySelector('#btn-univ-open-camera');
+    const qrScanImgBtn = dialog.querySelector('#btn-univ-scan-image');
+    const qrFileInput = dialog.querySelector('#input-univ-qr-file');
+
+    qrCameraBtn?.addEventListener('click', async () => {
+      const { openQrScanner } = await import('./qr-handoff.js');
+      openQrScanner({
+        label: 'Scan Content QR Stream or Code',
+        once: true,
+        onResult: async (decodedText) => {
+          await UniversalImportDialog.handleScannedPayload(decodedText, {
+            dialog,
+            onScannedContent: (text) => {
+              tabs.show('tab-paste');
+              if (pasteTextarea) {
+                pasteTextarea.value = text;
+                inspectAndPreview(text, 'scanned_qr_payload.txt');
+              }
+            }
+          });
+        }
+      });
+    });
+
+    qrScanImgBtn?.addEventListener('click', () => qrFileInput?.click());
+    qrFileInput?.addEventListener('change', async () => {
+      const file = qrFileInput.files?.[0];
+      if (!file) return;
+      qrFileInput.value = '';
+      try {
+        const { openQrScanner } = await import('./qr-handoff.js');
+        const bitmap = await createImageBitmap(file);
+        let decoded = null;
+        if ('BarcodeDetector' in window) {
+          try {
+            const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+            const res = await detector.detect(bitmap);
+            if (res?.[0]?.rawValue) decoded = res[0].rawValue;
+          } catch (_) {}
+        }
+        if (!decoded && window.jsQR) {
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(bitmap, 0, 0);
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = window.jsQR(img.data, img.width, img.height);
+          if (code?.data) decoded = code.data;
+        }
+        if (!decoded) {
+          toast.warning('No QR code detected in that image. Try taking a clearer screenshot.');
+          return;
+        }
+        await UniversalImportDialog.handleScannedPayload(decoded, {
+          dialog,
+          onScannedContent: (text) => {
+            tabs.show('tab-paste');
+            if (pasteTextarea) {
+              pasteTextarea.value = text;
+              inspectAndPreview(text, 'scanned_qr_payload.txt');
+            }
+          }
+        });
+      } catch (err) {
+        toast.danger('Failed to read image: ' + err.message);
       }
     });
 
@@ -536,5 +631,118 @@ export class UniversalImportDialog {
 
     await dialog.show();
     return dialog;
+  }
+
+  /**
+   * Universal router for any decoded QR text across the platform
+   * @param {string} rawText
+   * @param {{
+   *   dialog?: HTMLElement,
+   *   router?: any,
+   *   role?: string,
+   *   onScannedContent?: (text: string) => void
+   * }} [options]
+   */
+  static async handleScannedPayload(rawText, { dialog = null, router = null, role = null, onScannedContent = null } = {}) {
+    const trimmed = String(rawText || '').trim();
+    if (!trimmed) {
+      toast.warning('Empty QR code.');
+      return false;
+    }
+
+    const { router: globalRouter } = await import('../router.js');
+    const r = router || globalRouter;
+
+    // 1. Direct URL or Hash Route (#/... or https://domain/#/...)
+    if (trimmed.startsWith('#/') || trimmed.includes('#/')) {
+      const hashIndex = trimmed.indexOf('#/');
+      const hash = trimmed.slice(hashIndex);
+
+      // 1a. Student enrollment with class code (#/student?code=...)
+      if (hash.startsWith('#/student') || hash.includes('code=')) {
+        try {
+          const qIndex = hash.indexOf('?');
+          if (qIndex >= 0) {
+            const params = new URLSearchParams(hash.slice(qIndex));
+            const code = params.get('code');
+            if (code) {
+              const { storage } = await import('../core/storage.js');
+              const saved = (await storage.getMetadata('student_saved_class_codes')) || [];
+              const upper = code.trim().toUpperCase();
+              if (!saved.includes(upper)) {
+                saved.push(upper);
+                await storage.setMetadata('student_saved_class_codes', saved);
+              }
+              toast.success(`Saved class code "${upper}"!`);
+            }
+          }
+        } catch (_) {}
+        dialog?.hide();
+        r.navigate(hash);
+        return true;
+      }
+
+      // 1b. Check if user is in Teacher mode and wants to import a shared payload from a link with ?data=
+      const isStudent = role === 'student';
+      if (!isStudent && hash.includes('data=') && onScannedContent) {
+        try {
+          const { CryptoShareEngine } = await import('../core/crypto-share.js');
+          const unpacked = await CryptoShareEngine.unpackUrlHash(hash);
+          if (unpacked) {
+            onScannedContent(JSON.stringify(unpacked));
+            return true;
+          }
+        } catch (_) {
+          // If unpack fails, just navigate to the hash
+        }
+      }
+
+      // Default: navigate straight to the shared activity
+      dialog?.hide();
+      r.navigate(hash);
+      return true;
+    }
+
+    // 2. Student Submission envelope (KBSUB1.)
+    if (trimmed.startsWith('KBSUB1.')) {
+      const { openIncomingFiles } = await import('../core/pwa.js');
+      const fakeFile = new File([trimmed], 'submission.kbsub', { type: 'text/plain' });
+      await openIncomingFiles([fakeFile], r);
+      dialog?.hide();
+      return true;
+    }
+
+    // 3. Raw class access code (short alphanumeric 3-10 chars like MATH101 or 4A7B)
+    if (/^[A-Z0-9_-]{3,10}$/i.test(trimmed) && !trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+      const { storage } = await import('../core/storage.js');
+      const saved = (await storage.getMetadata('student_saved_class_codes')) || [];
+      const upper = trimmed.toUpperCase();
+      if (!saved.includes(upper)) {
+        saved.push(upper);
+        await storage.setMetadata('student_saved_class_codes', saved);
+      }
+      toast.success(`Added class code: ${upper}`);
+      dialog?.hide();
+      r.navigate('#/student');
+      return true;
+    }
+
+    // 4. Content payload (.kbshare, JSON, or CSV)
+    if (onScannedContent) {
+      onScannedContent(trimmed);
+      return true;
+    }
+
+    // Fallback: Open UniversalImportDialog with the payload pre-loaded
+    UniversalImportDialog.open().then(d => {
+      const tGroup = d.querySelector('#univ-import-tabs');
+      const pText = d.querySelector('#univ-paste-textarea');
+      tGroup?.show('tab-paste');
+      if (pText) {
+        pText.value = trimmed;
+        pText.dispatchEvent(new CustomEvent('sl-input'));
+      }
+    });
+    return true;
   }
 }

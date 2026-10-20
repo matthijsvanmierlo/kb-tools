@@ -373,10 +373,13 @@ export async function renderStudentGradebookView(params, router, container) {
       <div class="space-y-4">
         <p class="text-sm text-slate-600">Paste the feedback link or contents from your teacher to add it to your personal gradebook:</p>
         <sl-textarea id="student-import-input" rows="5" placeholder="Paste link (https://...#/share?...) or feedback JSON..."></sl-textarea>
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-2 flex-wrap">
+          <sl-button size="small" variant="default" id="btn-scan-feedback-qr">
+            <sl-icon slot="prefix" name="camera"></sl-icon> Scan Feedback QR
+          </sl-button>
           <input type="file" id="student-import-file" class="hidden" accept=".html,.htm,.kbfeedback,.json">
           <sl-button size="small" id="btn-choose-file">
-            <sl-icon slot="prefix" name="file-earmark-arrow-up"></sl-icon> Or choose a feedback file
+            <sl-icon slot="prefix" name="file-earmark-arrow-up"></sl-icon> Choose feedback file
           </sl-button>
         </div>
       </div>
@@ -393,6 +396,20 @@ export async function renderStudentGradebookView(params, router, container) {
     dialog.querySelector('#student-import-cancel').addEventListener('click', () => dialog.hide());
     const fileInput = dialog.querySelector('#student-import-file');
     dialog.querySelector('#btn-choose-file').addEventListener('click', () => fileInput.click());
+
+    dialog.querySelector('#btn-scan-feedback-qr')?.addEventListener('click', async () => {
+      const { openQrScanner } = await import('../../components/qr-handoff.js');
+      openQrScanner({
+        label: 'Scan Teacher Feedback QR Code',
+        readyText: 'Point camera at the feedback QR code on your teacher\'s screen...',
+        once: true,
+        onResult: (text) => {
+          const textarea = dialog.querySelector('#student-import-input');
+          if (textarea) textarea.value = text.trim();
+          dialog.querySelector('#student-import-submit')?.click();
+        }
+      });
+    });
 
     fileInput.addEventListener('change', async () => {
       const file = fileInput.files?.[0];

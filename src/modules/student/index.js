@@ -16,6 +16,24 @@ import { exportStudentSession, importStudentSession } from './session-portabilit
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
 export async function renderStudentHubView(params, router, container) {
+  // Auto-save class access code if navigated via QR code link (#/student?code=...)
+  if (params?.code) {
+    const rawCode = String(params.code).trim().toUpperCase();
+    if (rawCode) {
+      try {
+        const { storage } = await import('../../core/storage.js');
+        const saved = (await storage.getMetadata('student_saved_class_codes')) || [];
+        if (!saved.includes(rawCode)) {
+          saved.push(rawCode);
+          await storage.setMetadata('student_saved_class_codes', saved);
+          toast.success(`Saved class access code: ${rawCode}`);
+        }
+      } catch (err) {
+        console.warn('Error saving class code from params:', err);
+      }
+    }
+  }
+
   const profile = StudentProfile.get();
   const courses = await StudentLedger.getStudentCourses();
   const entries = await StudentLedger.getAllLedgerEntries();
@@ -186,20 +204,16 @@ export async function renderStudentHubView(params, router, container) {
   const scanQrBtn = container.querySelector('#btn-student-scan-qr');
   scanQrBtn?.addEventListener('click', async () => {
     const { openQrScanner } = await import('../../components/qr-handoff.js');
+    const { UniversalImportDialog } = await import('../../components/universal-import-dialog.js');
     openQrScanner({
-      label: 'Scan Lesson or Class QR Code',
-      readyText: 'Point camera at the QR code on your teacher\'s screen...',
+      label: 'Scan Lesson, Course, or Activity QR Code',
+      readyText: 'Point camera at the QR code on your teacher\'s screen or projector...',
       once: true,
       onResult: async (decodedText) => {
-        if (decodedText.startsWith('http://') || decodedText.startsWith('https://')) {
-          const hashIndex = decodedText.indexOf('#/');
-          if (hashIndex !== -1) {
-            router.navigate(decodedText.slice(hashIndex));
-            return;
-          }
-        }
-        const fakeFile = new File([decodedText], 'scanned-qr-code.txt', { type: 'text/plain' });
-        await openIncomingFiles([fakeFile], router);
+        await UniversalImportDialog.handleScannedPayload(decodedText, {
+          router,
+          role: 'student'
+        });
       }
     });
   });
@@ -340,6 +354,12 @@ function openAddCodeDialog(onSaved) {
   dialog.label = 'Add Class Access Code';
   dialog.innerHTML = `
     <form id="add-code-form" class="space-y-4">
+      <div class="flex items-center justify-between">
+        <span class="text-xs text-slate-500">Have a card or code from your teacher?</span>
+        <sl-button size="small" variant="text" id="btn-scan-class-code-qr">
+          <sl-icon slot="prefix" name="camera"></sl-icon> Scan Card / QR
+        </sl-button>
+      </div>
       <sl-input id="input-course-name" label="Class or Course Name" placeholder="e.g. Period 2 Chemistry" required></sl-input>
       <sl-input id="input-access-code" label="Access Code" placeholder="e.g. K7M2-QX9P" required></sl-input>
       <div slot="footer" class="flex justify-end gap-2">
@@ -352,6 +372,23 @@ function openAddCodeDialog(onSaved) {
   document.body.appendChild(dialog);
   dialog.addEventListener('sl-after-hide', (e) => { if (e.target === dialog) dialog.remove(); });
   dialog.show();
+
+  dialog.querySelector('#btn-scan-class-code-qr')?.addEventListener('click', async () => {
+    const { openQrScanner } = await import('../../components/qr-handoff.js');
+    openQrScanner({
+      label: 'Scan Class Card or QR Code',
+      once: true,
+      onResult: (text) => {
+        let code = String(text || '').trim();
+        if (code.includes('code=')) {
+          const match = code.match(/code=([^&]+)/);
+          if (match) code = decodeURIComponent(match[1]);
+        }
+        const codeInput = dialog.querySelector('#input-access-code');
+        if (codeInput) codeInput.value = code;
+      }
+    });
+  });
 
   dialog.querySelector('#btn-add-code-cancel').addEventListener('click', () => dialog.hide());
   dialog.querySelector('#add-code-form').addEventListener('submit', async (e) => {

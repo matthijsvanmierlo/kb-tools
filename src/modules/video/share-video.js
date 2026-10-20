@@ -78,7 +78,10 @@ export async function openVideoShareDialog(assessment) {
 
         <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-emerald-200/60">
           <div class="flex gap-2 flex-wrap">
-            <sl-button size="small" id="vs-download-html" variant="primary">
+            <sl-button size="small" id="vs-project-qr" variant="primary">
+              <sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Project QR Code
+            </sl-button>
+            <sl-button size="small" id="vs-download-html" variant="default">
               <sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Clickable File (.html)
             </sl-button>
             <sl-button size="small" id="vs-download" variant="default">
@@ -280,6 +283,20 @@ export async function openVideoShareDialog(assessment) {
     } catch (_) {
       toast.warning('Copy failed — select the link and copy it manually.');
     }
+  });
+
+  dialog.querySelector('#vs-project-qr')?.addEventListener('click', async () => {
+    const targetPayload = activeUrl || result?.url || result?.rawFileContent;
+    if (!targetPayload) {
+      toast.warning('Generate a link or save assessment first.');
+      return;
+    }
+    const { showQrSequence } = await import('../../components/qr-handoff.js');
+    showQrSequence(targetPayload, {
+      title: `Video Assessment: ${assessment.title || 'Untitled'}`,
+      intro: 'Have students scan this code to open the interactive video lesson.',
+      preferDirectUrl: true
+    });
   });
 
   dialog.querySelector('#vs-download')?.addEventListener('click', () => {

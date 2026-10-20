@@ -32,6 +32,9 @@ export async function renderStudentCoursesView(params, router, container) {
             <sl-button size="small" variant="default" id="btn-import-session">
               <sl-icon slot="prefix" name="upload"></sl-icon> Resume Session
             </sl-button>
+            <sl-button size="small" variant="default" id="btn-scan-course-qr">
+              <sl-icon slot="prefix" name="camera"></sl-icon> Scan Course QR
+            </sl-button>
             <sl-button size="small" variant="primary" id="btn-enroll-course">
               <sl-icon slot="prefix" name="plus-lg"></sl-icon> Join Course
             </sl-button>
@@ -45,10 +48,15 @@ export async function renderStudentCoursesView(params, router, container) {
             <div class="col-span-full bg-white rounded-2xl border border-dashed border-slate-300 p-12 text-center text-slate-400">
               <sl-icon name="mortarboard" class="text-5xl text-slate-300 mb-3"></sl-icon>
               <h3 class="text-base font-semibold text-slate-700">No courses joined yet</h3>
-              <p class="text-xs text-slate-500 max-w-sm mx-auto mt-1">Enter a 6-character access code from your teacher to join your class and access lessons offline.</p>
-              <sl-button size="small" variant="primary" class="mt-4" id="btn-enroll-first">
-                <sl-icon slot="prefix" name="plus-lg"></sl-icon> Join a Course
-              </sl-button>
+              <p class="text-xs text-slate-500 max-w-sm mx-auto mt-1">Scan a course QR code or enter an access code from your teacher to join your class.</p>
+              <div class="flex items-center justify-center gap-2 mt-4 flex-wrap">
+                <sl-button size="small" variant="primary" id="btn-scan-course-first">
+                  <sl-icon slot="prefix" name="camera"></sl-icon> Scan Course QR
+                </sl-button>
+                <sl-button size="small" variant="default" id="btn-enroll-first">
+                  <sl-icon slot="prefix" name="plus-lg"></sl-icon> Enter Access Code
+                </sl-button>
+              </div>
             </div>
           ` : courses.map(c => {
             const courseItems = items.filter(it => it.course_id === c.id);
@@ -105,15 +113,8 @@ export async function renderStudentCoursesView(params, router, container) {
       fileInput.value = '';
     });
 
-    const enrollCourse = async () => {
-      const code = await PromptDialog.show({
-        title: 'Join Class',
-        message: 'Enter the 6-character access code provided by your teacher (e.g. K7M2QX)',
-        placeholder: 'Access code'
-      });
-      if (!code) return;
-
-      const normalizedCode = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    const doEnrollWithCode = async (code) => {
+      const normalizedCode = String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
       if (normalizedCode.length < 4) {
         toast.warning('Please enter a valid access code.');
         return;
@@ -151,6 +152,42 @@ export async function renderStudentCoursesView(params, router, container) {
       }
     };
 
+    const enrollCourse = async () => {
+      const code = await PromptDialog.show({
+        title: 'Join Class',
+        message: 'Enter the 6-character access code provided by your teacher (e.g. K7M2QX)',
+        placeholder: 'Access code'
+      });
+      if (code) await doEnrollWithCode(code);
+    };
+
+    const scanCourseQr = async () => {
+      const { openQrScanner } = await import('../../components/qr-handoff.js');
+      const { UniversalImportDialog } = await import('../../components/universal-import-dialog.js');
+      openQrScanner({
+        label: 'Scan Course QR Code or Card',
+        readyText: 'Point camera at the course enrollment QR code on screen or paper...',
+        once: true,
+        onResult: async (decodedText) => {
+          let code = String(decodedText || '').trim();
+          if (code.includes('code=')) {
+            const match = code.match(/code=([^&]+)/);
+            if (match) code = decodeURIComponent(match[1]);
+          }
+          if (code.length <= 12 && /^[A-Z0-9_-]+$/i.test(code)) {
+            await doEnrollWithCode(code);
+          } else {
+            await UniversalImportDialog.handleScannedPayload(decodedText, {
+              role: 'student'
+            });
+            render();
+          }
+        }
+      });
+    };
+
+    container.querySelector('#btn-scan-course-qr')?.addEventListener('click', scanCourseQr);
+    container.querySelector('#btn-scan-course-first')?.addEventListener('click', scanCourseQr);
     container.querySelector('#btn-enroll-course')?.addEventListener('click', enrollCourse);
     container.querySelector('#btn-enroll-first')?.addEventListener('click', enrollCourse);
   };

@@ -254,6 +254,13 @@ async function renderVideoLibrary(container, router) {
       await storage.table('video_assessments').put(cloned);
       toast.success('Assessment duplicated!');
       return cloned;
+    },
+    onImport: async () => {
+      const { UniversalImportDialog } = await import('../../components/universal-import-dialog.js');
+      UniversalImportDialog.open({
+        defaultClassId: ClassManager.getActiveFilter() || null,
+        onComplete: () => renderVideoLibrary(container, router)
+      });
     }
   });
 
@@ -1608,8 +1615,9 @@ async function renderKioskCompletion(assessment, student, responseLogs, containe
           <p class="text-sm font-semibold text-slate-900 flex items-center gap-2"><sl-icon name="box-arrow-up" class="text-amber-600"></sl-icon> Last step: hand in your receipt</p>
           <p class="text-xs text-slate-700 leading-relaxed">Nothing is sent automatically. Upload the receipt file where your teacher asked, or paste the receipt code.</p>
           <div class="flex flex-col sm:flex-row gap-2">
-            <sl-button variant="primary" id="btn-download-kbr" class="flex-1" ${receiptText ? '' : 'disabled'}><sl-icon slot="prefix" name="download"></sl-icon> Download receipt</sl-button>
-            <sl-button id="btn-copy-kbr" class="flex-1" ${receiptText ? '' : 'disabled'}><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy receipt code</sl-button>
+            <sl-button variant="primary" id="btn-show-kbr-qr" class="flex-1" ${receiptText ? '' : 'disabled'}><sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Show QR to Teacher</sl-button>
+            <sl-button variant="default" id="btn-download-kbr" class="flex-1" ${receiptText ? '' : 'disabled'}><sl-icon slot="prefix" name="download"></sl-icon> Download receipt</sl-button>
+            <sl-button variant="default" id="btn-copy-kbr" class="flex-1" ${receiptText ? '' : 'disabled'}><sl-icon slot="prefix" name="clipboard"></sl-icon> Copy receipt code</sl-button>
           </div>
           ${fingerprint ? `<p class="text-[11px] text-slate-500">Encrypted for your teacher's key <strong class="font-mono">${Sanitizer.escapeHTML(fingerprint)}</strong>. Classmates can't read or change it.</p>` : ''}
         </div>
@@ -1626,6 +1634,17 @@ async function renderKioskCompletion(assessment, student, responseLogs, containe
   `;
 
   document.body.appendChild(modal);
+
+  modal.querySelector('#btn-show-kbr-qr')?.addEventListener('click', async () => {
+    if (!receiptText) return;
+    const { showQrSequence } = await import('../../components/qr-handoff.js');
+    showQrSequence(receiptText, {
+      title: 'Hand In Video Receipt',
+      intro: `${student.studentName || 'Student'} · ${assessment.title || 'Video Assessment'}`,
+      hint: 'Hold this screen steady in front of your teacher\'s camera to hand in your receipt.',
+      preferDirectUrl: false
+    });
+  });
 
   modal.querySelector('#btn-practice-again')?.addEventListener('click', async () => {
     modal.remove();

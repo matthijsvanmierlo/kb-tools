@@ -201,8 +201,11 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
 
         <div class="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-emerald-200/60">
           <div class="flex gap-2 flex-wrap">
-            <sl-button size="small" id="btn-publish-download-html" variant="primary">
-              <sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Download Clickable File (.html)
+            <sl-button size="small" id="btn-publish-qr" variant="primary">
+              <sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Project QR Code
+            </sl-button>
+            <sl-button size="small" id="btn-publish-download-html" variant="default">
+              <sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Clickable File (.html)
             </sl-button>
             <sl-button size="small" id="btn-publish-download" variant="default">
               <sl-icon slot="prefix" name="file-earmark-arrow-down"></sl-icon> Download .kbshare
@@ -424,6 +427,20 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
     } catch (_) {
       toast.warning('Copy failed — select the link and copy it manually.');
     }
+  });
+
+  dialog.querySelector('#btn-publish-qr')?.addEventListener('click', async () => {
+    const targetPayload = activeUrl || share?.url || share?.rawFileContent;
+    if (!targetPayload) {
+      toast.warning('Generate a link or save questions first.');
+      return;
+    }
+    const { showQrSequence } = await import('../../components/qr-handoff.js');
+    showQrSequence(targetPayload, {
+      title: `Assignment: ${assignment.title || 'Untitled'}`,
+      intro: 'Have students scan this code from their Student Hub or camera to open and take the assignment.',
+      preferDirectUrl: true
+    });
   });
 
   dialog.querySelector('#btn-publish-download')?.addEventListener('click', () => {

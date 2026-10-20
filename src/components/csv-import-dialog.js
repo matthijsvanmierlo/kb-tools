@@ -64,6 +64,9 @@ export class CSVImportDialog {
           <sl-tab slot="nav" panel="tab-paste">
             <sl-icon slot="prefix" name="clipboard"></sl-icon> Paste from Spreadsheet
           </sl-tab>
+          <sl-tab slot="nav" panel="tab-qr">
+            <sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Scan QR
+          </sl-tab>
 
           <!-- Tab 1: File Upload -->
           <sl-tab-panel name="tab-file">
@@ -93,6 +96,26 @@ export class CSVImportDialog {
               <div class="flex items-center justify-between text-xs text-slate-500">
                 <span id="paste-row-count">0 rows detected</span>
                 <span class="text-[11px] text-slate-400">Headers auto-detected (or plain 2-column data)</span>
+              </div>
+            </div>
+          </sl-tab-panel>
+
+          <!-- Tab 3: Scan QR -->
+          <sl-tab-panel name="tab-qr">
+            <div class="mt-3 p-6 border-2 border-dashed border-blue-200 hover:border-blue-500 rounded-xl text-center bg-blue-50/40 transition-colors">
+              <sl-icon name="qr-code-scan" class="text-4xl text-blue-600 mb-2"></sl-icon>
+              <p class="font-medium text-slate-800 text-sm">Scan QR Code Stream or Card</p>
+              <p class="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
+                Scan an animated QR stream or single code to import directly into this module.
+              </p>
+              <div class="flex items-center justify-center gap-2 mt-4 flex-wrap">
+                <sl-button variant="primary" id="btn-csv-open-camera" size="small">
+                  <sl-icon slot="prefix" name="camera"></sl-icon> Open Camera Scanner
+                </sl-button>
+                <sl-button variant="default" id="btn-csv-scan-image" size="small">
+                  <sl-icon slot="prefix" name="image"></sl-icon> Scan Image / Screenshot
+                </sl-button>
+                <input type="file" id="input-csv-qr-file" accept="image/*" class="hidden" />
               </div>
             </div>
           </sl-tab-panel>
@@ -347,13 +370,75 @@ export class CSVImportDialog {
 
     // Tab change
     tabs?.addEventListener('sl-tab-show', (e) => {
-      activeTab = e.detail.name === 'tab-paste' ? 'paste' : 'file';
+      const tabName = e.detail.name;
+      activeTab = tabName === 'tab-paste' ? 'paste' : (tabName === 'tab-qr' ? 'qr' : 'file');
       if (activeTab === 'paste') {
         updatePreview(pasteTextarea?.value || '', false, 'pasted_data.csv');
-      } else if (currentFile) {
+      } else if (activeTab === 'file' && currentFile) {
         currentFile.text().then(t => updatePreview(t, currentFile.name.endsWith('.json'), currentFile.name));
-      } else {
+      } else if (activeTab === 'file') {
         updatePreview('', false, '');
+      }
+    });
+
+    // QR Tab handlers
+    const csvQrCamBtn = dialog.querySelector('#btn-csv-open-camera');
+    const csvQrImgBtn = dialog.querySelector('#btn-csv-scan-image');
+    const csvQrFileInput = dialog.querySelector('#input-csv-qr-file');
+
+    const handleScannedData = (text) => {
+      tabs?.show('tab-paste');
+      if (pasteTextarea) {
+        pasteTextarea.value = text;
+        const lines = text.trim().split(/\r?\n/).filter(Boolean);
+        const rows = lines.length > 1 ? lines.length - 1 : lines.length;
+        if (pasteRowCount) pasteRowCount.textContent = `${rows} ${rows === 1 ? 'row' : 'rows'} detected`;
+      }
+      updatePreview(text, acceptJson && (text.startsWith('{') || text.startsWith('[')), 'scanned_qr_payload.txt');
+    };
+
+    csvQrCamBtn?.addEventListener('click', async () => {
+      const { openQrScanner } = await import('./qr-handoff.js');
+      openQrScanner({
+        label: `Scan QR for ${title}`,
+        once: true,
+        onResult: (decodedText) => handleScannedData(decodedText)
+      });
+    });
+
+    csvQrImgBtn?.addEventListener('click', () => csvQrFileInput?.click());
+    csvQrFileInput?.addEventListener('change', async () => {
+      const file = csvQrFileInput.files?.[0];
+      if (!file) return;
+      csvQrFileInput.value = '';
+      try {
+        const { openQrScanner } = await import('./qr-handoff.js');
+        const bitmap = await createImageBitmap(file);
+        let decoded = null;
+        if ('BarcodeDetector' in window) {
+          try {
+            const detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+            const res = await detector.detect(bitmap);
+            if (res?.[0]?.rawValue) decoded = res[0].rawValue;
+          } catch (_) {}
+        }
+        if (!decoded && window.jsQR) {
+          const canvas = document.createElement('canvas');
+          canvas.width = bitmap.width;
+          canvas.height = bitmap.height;
+          const ctx = canvas.getContext('2d');
+          ctx.drawImage(bitmap, 0, 0);
+          const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const code = window.jsQR(img.data, img.width, img.height);
+          if (code?.data) decoded = code.data;
+        }
+        if (!decoded) {
+          toast.warning('No QR code detected in that image.');
+          return;
+        }
+        handleScannedData(decoded);
+      } catch (err) {
+        toast.danger('Failed to read image: ' + err.message);
       }
     });
 
