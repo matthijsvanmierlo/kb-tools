@@ -41,6 +41,7 @@ export const ROUTE_TITLES = {
   '#/assignments/take': 'Take Assignment',
   '#/inbox': 'Submission Inbox',
   '#/share': 'Share',
+  '#/connect': 'Connect to School Server',
   '#/student': 'Student Hub',
   '#/student/courses': 'My Courses',
   '#/student/course': 'Course Details',
@@ -180,6 +181,12 @@ export class Router {
     // Handle share route specially
     if (path === '#/share') {
       await this._handleShareRoute(params);
+      return;
+    }
+
+    // Handle connect route for one-click teacher onboarding
+    if (path === '#/connect') {
+      await this._handleConnectRoute(params);
       return;
     }
 
@@ -662,6 +669,41 @@ export class Router {
         link.removeAttribute('aria-current');
       }
     });
+  }
+
+  async _handleConnectRoute(params = {}) {
+    const relay = params.relay || params.baseUrl || '';
+    const token = params.token || '';
+    const teacherId = params.id || params.teacherId || '';
+
+    // Immediately scrub the fragment from the address bar & browser history to prevent token leakage
+    if (typeof window !== 'undefined' && window.history?.replaceState) {
+      window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/`);
+    }
+
+    if (!relay || !token) {
+      toast.danger('Invalid connection link: missing server URL or teacher token.');
+      this.navigate('#/');
+      return;
+    }
+
+    try {
+      const { setTransportConfig } = await import('./core/transport.js');
+      await setTransportConfig({ baseUrl: relay, token, teacherId });
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent('kb-relay-connected', { detail: { baseUrl: relay, teacherId } }));
+        try {
+          const { updateRelayStatusIndicator } = await import('./main.js');
+          updateRelayStatusIndicator();
+        } catch (_) {}
+      }
+      toast.success('Successfully connected to school server!');
+    } catch (err) {
+      console.error('[Connect Route Error]', err);
+      toast.danger(`Failed to configure school server: ${err.message}`);
+    }
+
+    this.navigate('#/');
   }
 }
 

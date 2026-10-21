@@ -91,11 +91,27 @@ export function initRelay({ dir, teachers, port = 3000, publicUrl = '', origins 
 
   // Tokens are shown once: append new ones to a private sheet for handing out
   const tokensPath = path.join(root, 'teacher-tokens.csv');
-  if (!fs.existsSync(tokensPath)) fs.writeFileSync(tokensPath, 'id,name,server_url,token\n', { mode: 0o600 });
-  fs.appendFileSync(tokensPath, created.map(t => [t.id, t.name, url, t.token].map(csvCell).join(',') + '\n').join(''));
+  if (!fs.existsSync(tokensPath)) fs.writeFileSync(tokensPath, 'id,name,server_url,token,connect_url\n', { mode: 0o600 });
+  fs.appendFileSync(tokensPath, created.map(t => {
+    const connectUrl = `${url.replace(/\/+$/, '')}/#/connect?relay=${encodeURIComponent(url)}&token=${encodeURIComponent(t.token)}&id=${encodeURIComponent(t.id)}`;
+    return [t.id, t.name, url, t.token, connectUrl].map(csvCell).join(',') + '\n';
+  }).join(''));
   fs.chmodSync(tokensPath, 0o600);
 
-  return { created, skipped, files: { dbPath, envPath, tokensPath }, url };
+  // Generate Cloudflare D1 seed SQL file for easy batch import
+  const d1SqlPath = path.join(root, 'd1-seed-teachers.sql');
+  if (created.length > 0) {
+    const d1SqlStatements = created.map(t => {
+      const escapedId = t.id.replace(/'/g, "''");
+      const escapedName = t.name.replace(/'/g, "''");
+      const th = hashToken(t.token);
+      const createdAt = new Date().toISOString();
+      return `INSERT OR IGNORE INTO teachers (id, name, token_hash, created_at) VALUES ('${escapedId}', '${escapedName}', '${th}', '${createdAt}');`;
+    }).join('\n') + '\n';
+    fs.appendFileSync(d1SqlPath, d1SqlStatements, { mode: 0o600 });
+  }
+
+  return { created, skipped, files: { dbPath, envPath, tokensPath, d1SqlPath }, url };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
@@ -146,6 +162,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
     console.log(`  database        ${result.files.dbPath}`);
     console.log(`  settings        ${result.files.envPath}`);
     console.log(`  teacher tokens  ${result.files.tokensPath}  (private: hand each teacher their own line)`);
+    if (result.files.d1SqlPath && fs.existsSync(result.files.d1SqlPath)) {
+      console.log(`  Cloudflare D1   ${result.files.d1SqlPath}  (run: npx wrangler d1 execute kb-relay-db --remote --file=${result.files.d1SqlPath})`);
+    }
     console.log(`  teachers added  ${result.created.length}${result.skipped.length ? `, already present: ${result.skipped.join(', ')}` : ''}`);
     console.log('');
     console.log('Next steps:');

@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /**
  * Hash a plain bearer token using SHA-256 for secure storage.
@@ -19,12 +19,33 @@ export function generateToken() {
 
 /**
  * Extract bearer token string from request Authorization header.
- * @param {import('node:http').IncomingMessage} req
+ * Works with Node.js IncomingMessage (req.headers), Web Standard Request, or Headers.
+ * @param {any} req
  * @returns {string|null}
  */
 export function extractBearerToken(req) {
-  const auth = req.headers['authorization'] || req.headers['Authorization'] || '';
+  if (!req) return null;
+  let auth = '';
+  if (typeof req.headers?.get === 'function') {
+    auth = req.headers.get('authorization') || '';
+  } else if (req.headers && typeof req.headers === 'object') {
+    auth = req.headers['authorization'] || req.headers['Authorization'] || '';
+  } else if (typeof req === 'string') {
+    auth = req;
+  }
   if (!auth) return null;
   const match = String(auth).match(/^Bearer\s+([A-Za-z0-9_\-\.]+)/i);
   return match ? match[1] : null;
+}
+
+/**
+ * Constant-time comparison of two hex-encoded hashes to prevent timing attacks.
+ * @param {string} a
+ * @param {string} b
+ * @returns {boolean}
+ */
+export function sameHash(a, b) {
+  const x = Buffer.from(String(a || ''), 'hex');
+  const y = Buffer.from(String(b || ''), 'hex');
+  return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
 }

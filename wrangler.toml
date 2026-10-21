@@ -1,0 +1,30 @@
+name = "kennisboost-relay"
+main = "server/relay/worker.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# Automated daily cleanup for expired drops, payloads, and stale submissions
+[triggers]
+crons = ["0 3 * * *"]
+
+# -------------------------------------------------------------
+# Cloudflare D1 (Serverless SQLite)
+# Run: npx wrangler d1 create kb-relay-db
+# Paste your database_id below:
+# -------------------------------------------------------------
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "kb-relay-db"
+# database_id = "<YOUR_D1_DATABASE_ID>"
+
+# -------------------------------------------------------------
+# Cloudflare R2 (Encrypted Media Storage, $0 Egress)
+# Run: npx wrangler r2 bucket create kb-relay-media
+# -------------------------------------------------------------
+# [[r2_buckets]]
+# binding = "MEDIA_BUCKET"
+# bucket_name = "kb-relay-media"
+
+[vars]
+KB_RELAY_ORIGINS = "*"
+KB_RELAY_RETENTION_DAYS = "180"

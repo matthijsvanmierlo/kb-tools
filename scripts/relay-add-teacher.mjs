@@ -25,11 +25,20 @@ try {
   console.log(` Database   : ${dbPath}`);
   console.log(` Token      : ${token}`);
   console.log('---------------------------------------------------------');
+  const publicUrl = (process.env.KB_RELAY_PUBLIC_URL || 'http://localhost:3000').replace(/\/+$/, '');
+  const connectUrl = `${publicUrl}/#/connect?relay=${encodeURIComponent(publicUrl)}&token=${encodeURIComponent(token)}&id=${encodeURIComponent(teacherId)}`;
+
   console.log(' IMPORTANT: Store this token securely. It will not be shown again.');
-  console.log(' To connect your browser client, copy this to config.js:');
   console.log('');
+  console.log(' One-click connection link for teacher (scrubs token on open):');
+  console.log(` ${connectUrl}`);
+  console.log('');
+  console.log(' Cloudflare D1 SQL command (if using Cloudflare):');
+  console.log(` npx wrangler d1 execute kb-relay-db --remote --command="INSERT OR IGNORE INTO teachers (id, name, token_hash, created_at) VALUES ('${teacherId}', '${teacherName.replace(/'/g, "''")}', '${tokenHash}', '${new Date().toISOString()}');"`);
+  console.log('');
+  console.log(' Or copy to config.js / settings:');
   console.log(' window.KB_CONFIG = {');
-  console.log(`   baseUrl: 'http://localhost:3000',`);
+  console.log(`   baseUrl: '${publicUrl}',`);
   console.log(`   token: '${token}',`);
   console.log(`   teacherId: '${teacherId}'`);
   console.log(' };');

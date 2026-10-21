@@ -1,184 +1,98 @@
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
-import { randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { createDatabase } from './db.js';
-import { extractBearerToken, hashToken } from './auth.js';
+import {
+  createRelayFetchHandler,
+  RateLimiter,
+  generateS3PresignedPutUrl,
+  VERSION,
+  DEFAULT_PORT,
+  MAX_PAYLOAD_SIZE,
+  MAX_SUBMISSION_SIZE,
+  MAX_DRAFT_SIZE,
+  MAX_SYNC_CHUNK_SIZE,
+  MAX_SYNC_SNAPSHOT_SIZE,
+  DEFAULT_RETENTION_DAYS,
+  DRAFT_RATE_LIMIT_MAX
+} from './handler.js';
+import { createFsMediaStore, createMemoryMediaStore } from './media-store.js';
 
-const VERSION = '1.0.0';
-const DEFAULT_PORT = 3000;
-const MAX_PAYLOAD_SIZE = 512 * 1024; // 512 KB
-const MAX_SUBMISSION_SIZE = 256 * 1024; // 256 KB
-const RATE_LIMIT_MAX = 30; // 30 requests per window
-const RATE_LIMIT_WINDOW_MS = 60 * 1000; // 1 minute
-// A whole class behind one school IP autosaves drafts, so this limit is per IP but generous
-const DRAFT_RATE_LIMIT_MAX = 600;
-const MAX_DRAFT_SIZE = 64 * 1024; // 64 KB
-const MAX_SYNC_CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
-const MAX_SYNC_SNAPSHOT_SIZE = 32 * 1024 * 1024; // 32 MB
-const DEVICE_ID_RE = /^[0-9A-Za-z-]{8,64}$/;
-const DRAFT_ID_RE = /^[0-9a-f]{64}$/;
-
-const sha256 = (text) => createHash('sha256').update(String(text)).digest('hex');
-
-function sameHash(a, b) {
-  const x = Buffer.from(String(a), 'hex');
-  const y = Buffer.from(String(b), 'hex');
-  return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
-}
-
-function generateS3PresignedPutUrl({ endpoint, bucket, key, accessKeyId, secretAccessKey, region = 'auto', contentType, expiresIn = 3600 }) {
-  const dateObj = new Date();
-  const amzDate = dateObj.toISOString().replace(/[:-]|\.\d{3}/g, '');
-  const dateStamp = amzDate.slice(0, 8);
-  const service = 's3';
-  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
-
-  const url = new URL(endpoint);
-  let host = url.host;
-  let path = `/${key}`;
-  if (bucket) {
-    path = `/${bucket}/${key}`;
-  }
-
-  const queryParams = {
-    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
-    'X-Amz-Credential': `${accessKeyId}/${credentialScope}`,
-    'X-Amz-Date': amzDate,
-    'X-Amz-Expires': String(expiresIn),
-    'X-Amz-SignedHeaders': 'content-type;host'
-  };
-
-  const canonicalQuery = Object.keys(queryParams)
-    .sort()
-    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
-    .join('&');
-
-  const canonicalHeaders = `content-type:${contentType || 'application/octet-stream'}\nhost:${host}\n`;
-  const signedHeaders = 'content-type;host';
-  const payloadHash = 'UNSIGNED-PAYLOAD';
-
-  const canonicalRequest = [
-    'PUT',
-    path,
-    canonicalQuery,
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash
-  ].join('\n');
-
-  const hashedCanonicalRequest = createHash('sha256').update(canonicalRequest, 'utf8').digest('hex');
-
-  const stringToSign = [
-    'AWS4-HMAC-SHA256',
-    amzDate,
-    credentialScope,
-    hashedCanonicalRequest
-  ].join('\n');
-
-  const kDate = createHmac('sha256', `AWS4${secretAccessKey}`).update(dateStamp).digest();
-  const kRegion = createHmac('sha256', kDate).update(region).digest();
-  const kService = createHmac('sha256', kRegion).update(service).digest();
-  const kSigning = createHmac('sha256', kService).update('aws4_request').digest();
-  const signature = createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex');
-
-  return `${url.origin}${path}?${canonicalQuery}&X-Amz-Signature=${signature}`;
-}
-
-const DEFAULT_RETENTION_DAYS = 180;
+export {
+  createDatabase,
+  createRelayFetchHandler,
+  RateLimiter,
+  generateS3PresignedPutUrl,
+  VERSION,
+  DEFAULT_PORT,
+  MAX_PAYLOAD_SIZE,
+  MAX_SUBMISSION_SIZE,
+  MAX_DRAFT_SIZE,
+  MAX_SYNC_CHUNK_SIZE,
+  MAX_SYNC_SNAPSHOT_SIZE,
+  DEFAULT_RETENTION_DAYS,
+  DRAFT_RATE_LIMIT_MAX
+};
 
 /**
- * In-memory rate limiter for public endpoints. Clients are keyed by a salted hash of their IP
- * (the salt is random per process), and entries are dropped when their window ends, so the relay
- * never keeps students' IP addresses, not even in memory.
- */
-export class RateLimiter {
-  constructor(limit = RATE_LIMIT_MAX, windowMs = RATE_LIMIT_WINDOW_MS) {
-    this.limit = limit;
-    this.windowMs = windowMs;
-    this.clients = new Map();
-    this.salt = randomBytes(16).toString('hex');
-  }
-
-  _key(ip) {
-    return createHash('sha256').update(`${this.salt}|${ip}`).digest('hex').slice(0, 24);
-  }
-
-  sweep(now = Date.now()) {
-    for (const [k, e] of this.clients) if (now > e.resetAt) this.clients.delete(k);
-  }
-
-  isAllowed(ip) {
-    const now = Date.now();
-    if (this.clients.size > 5000) this.sweep(now);
-    const key = this._key(ip);
-    const entry = this.clients.get(key);
-    if (!entry || now > entry.resetAt) {
-      this.clients.set(key, { count: 1, resetAt: now + this.windowMs });
-      return true;
-    }
-    if (entry.count >= this.limit) {
-      return false;
-    }
-    entry.count += 1;
-    return true;
-  }
-}
-
-/**
- * Read request body with size enforcement.
+ * Convert a Node.js IncomingMessage to a Web Standard Request.
  * @param {http.IncomingMessage} req
- * @param {number} maxBytes
- * @returns {Promise<string>}
+ * @param {string} host
+ * @param {boolean} isEncrypted
+ * @returns {Promise<Request>}
  */
-function readBody(req, maxBytes) {
-  return new Promise((resolve, reject) => {
-    let bytes = 0;
+async function nodeReqToWebRequest(req, host, isEncrypted) {
+  const proto = isEncrypted ? 'https' : (req.headers['x-forwarded-proto'] || 'http');
+  const fullUrl = `${proto}://${host}${req.url}`;
+
+  const headers = new Headers();
+  for (const [key, value] of Object.entries(req.headers)) {
+    if (Array.isArray(value)) {
+      for (const v of value) headers.append(key, v);
+    } else if (value !== undefined) {
+      headers.set(key, value);
+    }
+  }
+
+  const method = req.method ? req.method.toUpperCase() : 'GET';
+  let body = null;
+  if (method !== 'GET' && method !== 'HEAD') {
     const chunks = [];
-
-    req.on('data', chunk => {
-      bytes += chunk.length;
-      if (bytes > maxBytes) {
-        req.destroy();
-        const err = new Error('PAYLOAD_TOO_LARGE');
-        err.code = 413;
-        reject(err);
-        return;
-      }
+    for await (const chunk of req) {
       chunks.push(chunk);
-    });
+    }
+    body = Buffer.concat(chunks);
+  }
 
-    req.on('end', () => {
-      resolve(Buffer.concat(chunks).toString('utf-8'));
-    });
-
-    req.on('error', reject);
+  return new Request(fullUrl, {
+    method,
+    headers,
+    body
   });
 }
 
-function readRawBody(req, maxBytes) {
-  return new Promise((resolve, reject) => {
-    let bytes = 0;
-    const chunks = [];
-
-    req.on('data', chunk => {
-      bytes += chunk.length;
-      if (bytes > maxBytes) {
-        req.destroy();
-        const err = new Error('PAYLOAD_TOO_LARGE');
-        err.code = 413;
-        reject(err);
-        return;
-      }
-      chunks.push(chunk);
-    });
-
-    req.on('end', () => {
-      resolve(Buffer.concat(chunks));
-    });
-
-    req.on('error', reject);
+/**
+ * Send a Web Standard Response back to a Node.js ServerResponse.
+ * @param {Response} webRes
+ * @param {http.ServerResponse} nodeRes
+ */
+async function sendWebResponse(webRes, nodeRes) {
+  const headersObj = {};
+  webRes.headers.forEach((val, key) => {
+    headersObj[key] = val;
   });
+
+  nodeRes.writeHead(webRes.status, headersObj);
+
+  if (webRes.body) {
+    const reader = webRes.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      nodeRes.write(value);
+    }
+  }
+  nodeRes.end();
 }
 
 /**
@@ -188,8 +102,8 @@ function readRawBody(req, maxBytes) {
  * @param {string} [opts.origins] - comma-separated CORS origins (default *)
  * @param {number} [opts.retentionDays] - delete submissions, drafts and sync chunks older than this (0 = keep)
  * @param {{ cert: string|Buffer, key: string|Buffer }} [opts.tls] - serve HTTPS (needed on a LAN for PWAs)
- * @param {(req, res) => void} [opts.appHandler] - also serve the KennisBoost app for non-/api/ paths,
- *   so app and relay share one origin and the CSP needs no extra entries
+ * @param {(req, res) => void} [opts.appHandler] - also serve the KennisBoost app for non-/api/ paths
+ * @param {object} [opts.cdn]
  * @returns {{ server: http.Server|https.Server, db: any, limiters: RateLimiter[], close: () => Promise<void> }}
  */
 export function createRelayServer(opts = {}) {
@@ -217,14 +131,42 @@ export function createRelayServer(opts = {}) {
   const pruneInterval = setInterval(prune, 3600 * 1000);
   if (pruneInterval.unref) pruneInterval.unref();
 
-  const cdnEnabled = Boolean(
-    opts.cdn ||
-    process.env.KB_CDN_ENDPOINT ||
-    process.env.KB_CDN_BUCKET ||
-    process.env.KB_CDN_PUBLIC_URL ||
-    process.env.KB_CDN_LOCAL_DIR
-  );
-  const mediaStore = opts.cdn?.mediaStore || (opts.cdn?.localDir ? new Map() : (opts.cdn ? new Map() : (process.env.KB_CDN_LOCAL_DIR ? new Map() : null)));
+  // Configure Media Store
+  let mediaStore = null;
+  if (opts.cdn?.mediaStore) {
+    mediaStore = createMemoryMediaStore(opts.cdn.mediaStore);
+  } else if (opts.cdn?.localDir || process.env.KB_CDN_LOCAL_DIR) {
+    const dir = opts.cdn?.localDir || process.env.KB_CDN_LOCAL_DIR;
+    mediaStore = createFsMediaStore(dir);
+  } else if (opts.cdn) {
+    mediaStore = createMemoryMediaStore();
+  }
+
+  const cdnConfig = {
+    enabled: Boolean(
+      opts.cdn ||
+      process.env.KB_CDN_ENDPOINT ||
+      process.env.KB_CDN_BUCKET ||
+      process.env.KB_CDN_PUBLIC_URL ||
+      process.env.KB_CDN_LOCAL_DIR
+    ),
+    endpoint: process.env.KB_CDN_ENDPOINT || opts.cdn?.endpoint,
+    bucket: process.env.KB_CDN_BUCKET || opts.cdn?.bucket,
+    accessKeyId: process.env.KB_CDN_ACCESS_KEY_ID || opts.cdn?.accessKeyId,
+    secretAccessKey: process.env.KB_CDN_SECRET_ACCESS_KEY || opts.cdn?.secretAccessKey,
+    region: process.env.KB_CDN_REGION || opts.cdn?.region || 'auto',
+    publicUrl: process.env.KB_CDN_PUBLIC_URL || opts.cdn?.publicUrl
+  };
+
+  const fetchHandler = createRelayFetchHandler({
+    db,
+    limiter,
+    draftLimiter,
+    allowedOrigins,
+    cdnConfig,
+    mediaStore,
+    presignHook: opts.cdn?.presign
+  });
 
   const handler = async (req, res) => {
     if (opts.appHandler && !String(req.url || '').startsWith('/api/')) {
@@ -232,596 +174,19 @@ export function createRelayServer(opts = {}) {
       return;
     }
 
-    const origin = req.headers['origin'] || '*';
-    const isOriginAllowed = allowedOrigins.includes('*') || allowedOrigins.includes(origin);
-
-    if (isOriginAllowed) {
-      res.setHeader('Access-Control-Allow-Origin', origin);
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-KB-Workspace-Key, X-KB-Drop-Secret');
-    }
-
-    if (req.method === 'OPTIONS') {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
-    const sendJson = (status, data) => {
-      res.writeHead(status, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify(data));
-    };
-
-    const sendError = (status, message) => {
-      sendJson(status, { error: message });
-    };
-
     try {
-      const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
-      let pathname = parsedUrl.pathname.replace(/\/+$/, '') || '/';
-      // Normalize /api/v1 prefix so endpoints can be reached with or without it
-      if (pathname.startsWith('/api/v1/')) {
-        pathname = pathname.slice('/api/v1'.length);
-      } else if (pathname === '/api/v1') {
-        pathname = '/';
-      }
+      const host = req.headers.host || `localhost:${DEFAULT_PORT}`;
+      const isEncrypted = Boolean(req.socket?.encrypted || opts.tls);
+      const webReq = await nodeReqToWebRequest(req, host, isEncrypted);
+      const clientIp = req.socket.remoteAddress || '127.0.0.1';
 
-      // 1. GET /health
-      if (req.method === 'GET' && (pathname === '/health' || pathname === '/')) {
-        const features = ['payloads', 'drops', 'drafts', 'sync', 'feeds'];
-        if (cdnEnabled) features.push('media');
-        sendJson(200, { ok: true, version: VERSION, features });
-        return;
-      }
-
-      // Teacher authentication helper
-      const authenticateTeacher = () => {
-        const token = extractBearerToken(req);
-        if (!token) return null;
-        const hash = hashToken(token);
-        return db.teachers.getByTokenHash(hash);
-      };
-
-      // Media endpoints (CDN broker & local fallback)
-      if (req.method === 'POST' && pathname === '/media/presign') {
-        const teacher = authenticateTeacher();
-        if (!teacher) {
-          sendError(401, 'Unauthorized: valid teacher token required');
-          return;
-        }
-
-        if (!cdnEnabled) {
-          sendError(501, 'Media CDN offloading is not configured on this relay server');
-          return;
-        }
-
-        const rawBody = await readBody(req, 16384);
-        let parsed;
-        try {
-          parsed = JSON.parse(rawBody);
-        } catch {
-          sendError(400, 'Invalid JSON body');
-          return;
-        }
-
-        const { sha256: fileHash, mime, ext } = parsed || {};
-        if (!fileHash || !/^[a-f0-9]{64}$/i.test(fileHash)) {
-          sendError(400, 'Valid 64-hex sha256 required');
-          return;
-        }
-
-        if (typeof opts.cdn?.presign === 'function') {
-          const custom = await opts.cdn.presign({ sha256: fileHash, mime, ext, teacherId: teacher.id });
-          sendJson(200, custom);
-          return;
-        }
-
-        const safeExt = String(ext || (mime === 'image/webp' ? 'webp' : mime === 'audio/webm' ? 'webm' : 'bin')).replace(/[^a-z0-9]/gi, '');
-        const filename = `${fileHash}.${safeExt}`;
-        const objectKey = `assets/${filename}`;
-
-        const host = req.headers.host || `localhost:${DEFAULT_PORT}`;
-        const proto = req.socket?.encrypted ? 'https' : 'http';
-
-        // S3 / R2 presigning when full S3 endpoint + creds are provided
-        const endpoint = (process.env.KB_CDN_ENDPOINT || opts.cdn?.endpoint || '').replace(/\/+$/, '');
-        const bucket = process.env.KB_CDN_BUCKET || opts.cdn?.bucket || '';
-        const accessKeyId = process.env.KB_CDN_ACCESS_KEY_ID || opts.cdn?.accessKeyId;
-        const secretAccessKey = process.env.KB_CDN_SECRET_ACCESS_KEY || opts.cdn?.secretAccessKey;
-        const region = process.env.KB_CDN_REGION || opts.cdn?.region || 'auto';
-        const publicBase = (process.env.KB_CDN_PUBLIC_URL || opts.cdn?.publicUrl || '').replace(/\/+$/, '');
-
-        if (endpoint && accessKeyId && secretAccessKey) {
-          const presignedUrl = generateS3PresignedPutUrl({
-            endpoint,
-            bucket,
-            key: objectKey,
-            accessKeyId,
-            secretAccessKey,
-            region,
-            contentType: mime || 'application/octet-stream'
-          });
-          const publicUrl = publicBase ? `${publicBase}/${objectKey}` : `${endpoint}/${bucket ? bucket + '/' : ''}${objectKey}`;
-          sendJson(200, {
-            upload_url: presignedUrl,
-            public_url: publicUrl,
-            method: 'PUT',
-            headers: { 'Content-Type': mime || 'application/octet-stream' }
-          });
-          return;
-        }
-
-        // Local / in-memory store fallback
-        const uploadUrl = `${proto}://${host}/api/v1/media/upload?key=${encodeURIComponent(filename)}`;
-        const publicUrl = publicBase ? `${publicBase}/${filename}` : `${proto}://${host}/api/v1/media/file/${encodeURIComponent(filename)}`;
-        sendJson(200, {
-          upload_url: uploadUrl,
-          public_url: publicUrl,
-          method: 'PUT',
-          headers: { 'Content-Type': mime || 'application/octet-stream' }
-        });
-        return;
-      }
-
-      // PUT /media/upload?key=<filename>
-      if (req.method === 'PUT' && pathname === '/media/upload') {
-        const key = parsedUrl.searchParams.get('key');
-        if (!key || !/^[a-f0-9]{64}\.[a-z0-9]+$/i.test(key)) {
-          sendError(400, 'Valid key parameter required');
-          return;
-        }
-        const rawBytes = await readRawBody(req, MAX_SYNC_SNAPSHOT_SIZE);
-        if (mediaStore) {
-          const contentType = req.headers['content-type'] || 'application/octet-stream';
-          mediaStore.set(key, { data: rawBytes, contentType });
-        }
-        sendJson(200, { ok: true, key });
-        return;
-      }
-
-      // GET /media/file/:filename
-      const mediaFileMatch = pathname.match(/^\/media\/file\/([a-f0-9]{64}\.[a-z0-9]+)$/i);
-      if (req.method === 'GET' && mediaFileMatch) {
-        const key = mediaFileMatch[1];
-        const item = mediaStore?.get(key);
-        if (!item) {
-          sendError(404, 'Media asset not found');
-          return;
-        }
-        res.setHeader('Content-Type', item.contentType || 'application/octet-stream');
-        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
-        res.writeHead(200);
-        res.end(item.data);
-        return;
-      }
-
-      // 2. POST /payloads
-      if (req.method === 'POST' && pathname === '/payloads') {
-        const teacher = authenticateTeacher();
-        if (!teacher) {
-          sendError(401, 'Unauthorized: valid teacher token required');
-          return;
-        }
-
-        const rawBody = await readBody(req, MAX_PAYLOAD_SIZE);
-        let parsed;
-        try {
-          parsed = JSON.parse(rawBody);
-        } catch {
-          sendError(400, 'Invalid JSON body');
-          return;
-        }
-
-        if (!parsed.kind || !parsed.ciphertext) {
-          sendError(400, 'Missing kind or ciphertext in payload');
-          return;
-        }
-
-        const ref = randomBytes(16).toString('base64url').slice(0, 22);
-        db.payloads.create({
-          ref,
-          teacherId: teacher.id,
-          kind: parsed.kind,
-          ciphertext: parsed.ciphertext,
-          meta: parsed.meta,
-          expiresAt: parsed.expires_at || null
-        });
-
-        sendJson(201, { ref });
-        return;
-      }
-
-      // 3. GET /payloads/:ref
-      const payloadMatch = pathname.match(/^\/payloads\/([A-Za-z0-9_\-]+)$/);
-      if (req.method === 'GET' && payloadMatch) {
-        const ref = payloadMatch[1];
-        const row = db.payloads.get(ref);
-        if (!row) {
-          sendError(404, 'Payload not found');
-          return;
-        }
-        if (row.expired) {
-          sendError(410, 'Payload expired');
-          return;
-        }
-
-        sendJson(200, {
-          kind: row.kind,
-          ciphertext: row.ciphertext
-        });
-        return;
-      }
-
-      // Drops created with a secret only accept submissions and drafts that present it. The drop id
-      // shows up in the teacher's listing URLs; the secret travels only in a header.
-      const dropSecretOk = (drop) => !drop.secret_hash
-        || sameHash(drop.secret_hash, sha256(req.headers['x-kb-drop-secret'] || ''));
-
-      const readJson = async (max) => {
-        try {
-          return JSON.parse(await readBody(req, max));
-        } catch (err) {
-          if (err.code === 413) throw err;
-          return null;
-        }
-      };
-
-      // Sync workspaces (multi-device / co-teacher replication). Bodies are ciphertext.
-      if (req.method === 'POST' && pathname === '/sync') {
-        const teacher = authenticateTeacher();
-        if (!teacher) {
-          sendError(401, 'Unauthorized: valid teacher token required');
-          return;
-        }
-        const workspaceId = randomBytes(12).toString('hex');
-        const workspaceKey = randomBytes(32).toString('hex');
-        db.workspaces.create({ id: workspaceId, keyHash: sha256(workspaceKey), createdBy: teacher.id });
-        sendJson(201, { workspace_id: workspaceId, workspace_key: workspaceKey });
-        return;
-      }
-
-      const syncMatch = pathname.match(/^\/sync\/([0-9a-f]{24})\/(chunks|snapshots)(?:\/([0-9A-Za-z-]{8,64}))?$/);
-      if (syncMatch) {
-        // Any teacher on this relay who also holds the workspace key (own devices, co-teachers)
-        const teacher = authenticateTeacher();
-        if (!teacher) {
-          sendError(401, 'Unauthorized: valid teacher token required');
-          return;
-        }
-        const [, workspaceId, resource, deviceParam] = syncMatch;
-        const ws = db.workspaces.get(workspaceId);
-        if (!ws || !sameHash(ws.key_hash, sha256(req.headers['x-kb-workspace-key'] || ''))) {
-          sendError(403, 'Forbidden: unknown workspace or wrong workspace key');
-          return;
-        }
-
-        if (resource === 'chunks' && !deviceParam) {
-          if (req.method === 'POST') {
-            const body = await readJson(MAX_SYNC_CHUNK_SIZE);
-            const start = Number(body?.start);
-            const end = Number(body?.end);
-            if (!body || !DEVICE_ID_RE.test(body.device_id || '') || !Number.isInteger(start) || !Number.isInteger(end)
-              || start < 1 || end < start || typeof body.body !== 'string') {
-              sendError(400, 'Invalid sync chunk');
-              return;
-            }
-            const { created } = db.sync.putChunk({ workspaceId, deviceId: body.device_id, start, end, body: body.body });
-            sendJson(created ? 201 : 200, { ok: true });
-            return;
-          }
-          if (req.method === 'GET') {
-            const after = Math.max(0, parseInt(parsedUrl.searchParams.get('after') || '0', 10) || 0);
-            sendJson(200, db.sync.listChunks(workspaceId, { after }));
-            return;
-          }
-          if (req.method === 'DELETE') {
-            const deviceId = parsedUrl.searchParams.get('device_id') || '';
-            const through = parseInt(parsedUrl.searchParams.get('through') || '', 10);
-            if (!DEVICE_ID_RE.test(deviceId) || !Number.isInteger(through)) {
-              sendError(400, 'device_id and through are required');
-              return;
-            }
-            sendJson(200, { deleted: db.sync.deleteChunks(workspaceId, deviceId, through) });
-            return;
-          }
-        }
-
-        if (resource === 'snapshots') {
-          if (!deviceParam && req.method === 'GET') {
-            sendJson(200, { items: db.sync.listSnapshots(workspaceId) });
-            return;
-          }
-          if (deviceParam && req.method === 'PUT') {
-            const body = await readJson(MAX_SYNC_SNAPSHOT_SIZE);
-            if (!body || typeof body.body !== 'string' || typeof body.created_at !== 'string') {
-              sendError(400, 'Invalid snapshot');
-              return;
-            }
-            db.sync.putSnapshot({ workspaceId, deviceId: deviceParam, createdAt: body.created_at, body: body.body });
-            sendJson(200, { ok: true });
-            return;
-          }
-          if (deviceParam && req.method === 'GET') {
-            const row = db.sync.getSnapshot(workspaceId, deviceParam);
-            if (!row) {
-              sendError(404, 'Snapshot not found');
-              return;
-            }
-            sendJson(200, row);
-            return;
-          }
-        }
-
-        sendError(405, 'Method not allowed');
-        return;
-      }
-
-      // Student draft roaming: an access-code-encrypted draft, addressed by a hash of the
-      // student's identity and code, so the relay can neither read nor link it to a student
-      const draftMatch = pathname.match(/^\/drops\/([A-Za-z0-9_\-]+)\/drafts\/([^/]+)$/);
-      if (draftMatch && (req.method === 'PUT' || req.method === 'GET')) {
-        const [, dropId, draftId] = draftMatch;
-        if (!DRAFT_ID_RE.test(draftId)) {
-          sendError(400, 'Invalid draft id');
-          return;
-        }
-        const clientIp = req.socket.remoteAddress || '127.0.0.1';
-        if (!draftLimiter.isAllowed(clientIp)) {
-          sendError(429, 'Rate limit exceeded. Please wait a minute.');
-          return;
-        }
-        const drop = db.drops.get(dropId);
-        if (!drop) {
-          sendError(404, 'Drop box not found');
-          return;
-        }
-        if (drop.expired) {
-          sendError(410, 'Drop box expired');
-          return;
-        }
-        if (!dropSecretOk(drop)) {
-          sendError(403, 'Forbidden: missing or wrong drop secret');
-          return;
-        }
-        if (req.method === 'PUT') {
-          const text = (await readBody(req, MAX_DRAFT_SIZE)).trim();
-          if (!text.startsWith('KBDRAFT1.')) {
-            sendError(400, 'Invalid draft format');
-            return;
-          }
-          try {
-            const { updatedAt } = db.drafts.put({ dropId, draftId, ciphertext: text });
-            sendJson(200, { updated_at: updatedAt });
-            return;
-          } catch (err) {
-            if (err.code === 'QUOTA_EXCEEDED') {
-              sendError(413, 'Draft quota exceeded for this drop box');
-              return;
-            }
-            throw err;
-          }
-        }
-        const row = db.drafts.get(dropId, draftId);
-        if (!row) {
-          sendError(404, 'No saved draft');
-          return;
-        }
-        sendJson(200, { ciphertext: row.ciphertext, updated_at: row.updated_at });
-        return;
-      }
-
-      // 4. POST /drops
-      if (req.method === 'POST' && pathname === '/drops') {
-        const teacher = authenticateTeacher();
-        if (!teacher) {
-          sendError(401, 'Unauthorized: valid teacher token required');
-          return;
-        }
-
-        const rawBody = await readBody(req, MAX_PAYLOAD_SIZE);
-        let parsed;
-        try {
-          parsed = JSON.parse(rawBody);
-        } catch {
-          sendError(400, 'Invalid JSON body');
-          return;
-        }
-
-        if (!parsed.assignment_id) {
-          sendError(400, 'Missing assignment_id');
-          return;
-        }
-
-        const dropId = randomBytes(12).toString('hex');
-        const dropSecret = randomBytes(24).toString('hex');
-        db.drops.create({
-          id: dropId,
-          teacherId: teacher.id,
-          assignmentId: parsed.assignment_id,
-          publishVersion: parsed.publish_version ?? null,
-          expiresAt: parsed.expires_at || null,
-          secretHash: sha256(dropSecret)
-        });
-
-        sendJson(201, { drop_id: dropId, drop_secret: dropSecret });
-        return;
-      }
-
-      // 5. POST /drops/:dropId/submissions
-      const dropSubmitMatch = pathname.match(/^\/drops\/([A-Za-z0-9_\-]+)\/submissions$/);
-      if (req.method === 'POST' && dropSubmitMatch) {
-        const clientIp = req.socket.remoteAddress || '127.0.0.1';
-        if (!limiter.isAllowed(clientIp)) {
-          sendError(429, 'Rate limit exceeded. Please wait a minute before submitting again.');
-          return;
-        }
-
-        const dropId = dropSubmitMatch[1];
-        const drop = db.drops.get(dropId);
-        if (!drop) {
-          sendError(404, 'Drop box not found');
-          return;
-        }
-        if (drop.expired) {
-          sendError(410, 'Drop box expired');
-          return;
-        }
-        if (!dropSecretOk(drop)) {
-          sendError(403, 'Forbidden: missing or wrong drop secret');
-          return;
-        }
-
-        const rawBody = await readBody(req, MAX_SUBMISSION_SIZE);
-        const trimmed = rawBody.trim();
-        if (!trimmed.startsWith('KBSUB1.')) {
-          sendError(400, 'Invalid submission format: envelope must start with KBSUB1.');
-          return;
-        }
-
-        const receiptId = createHash('sha256').update(trimmed).digest('hex').slice(0, 8).toUpperCase();
-        const submissionId = randomBytes(16).toString('hex');
-        try {
-          const resEntry = db.submissions.create({
-            id: submissionId,
-            dropId,
-            text: trimmed
-          });
-
-          sendJson(201, {
-            receipt_id: receiptId,
-            received_at: resEntry.receivedAt
-          });
-          return;
-        } catch (err) {
-          if (err.code === 'QUOTA_EXCEEDED') {
-            sendError(413, 'Submission quota exceeded for this drop box');
-            return;
-          }
-          throw err;
-        }
-      }
-
-      // 6. GET /drops/:dropId/submissions
-      if (req.method === 'GET' && dropSubmitMatch) {
-        const teacher = authenticateTeacher();
-        if (!teacher) {
-          sendError(401, 'Unauthorized: valid teacher token required');
-          return;
-        }
-
-        const dropId = dropSubmitMatch[1];
-        const drop = db.drops.get(dropId);
-        if (!drop) {
-          sendError(404, 'Drop box not found');
-          return;
-        }
-        if (drop.teacher_id !== teacher.id) {
-          sendError(403, 'Forbidden: you do not own this drop box');
-          return;
-        }
-
-        const since = parsedUrl.searchParams.get('since') || undefined;
-        const items = db.submissions.list(dropId, { since });
-        sendJson(200, { items });
-        return;
-      }
-
-      // 7. DELETE /drops/:dropId
-      const dropDeleteMatch = pathname.match(/^\/drops\/([A-Za-z0-9_\-]+)$/);
-      if (req.method === 'DELETE' && dropDeleteMatch) {
-        const teacher = authenticateTeacher();
-        if (!teacher) {
-          sendError(401, 'Unauthorized: valid teacher token required');
-          return;
-        }
-
-        const dropId = dropDeleteMatch[1];
-        const deleted = db.drops.delete(dropId, teacher.id);
-        if (!deleted) {
-          sendError(404, 'Drop not found or not owned by you');
-          return;
-        }
-
-        res.writeHead(204);
-        res.end();
-        return;
-      }
-
-      // 8. PUT /api/feed/:courseId or /feed/:courseId
-      const feedMatch = pathname.match(/^(?:\/api)?\/feed\/([A-Za-z0-9_\-]+)$/);
-      if (req.method === 'PUT' && feedMatch) {
-        const teacher = authenticateTeacher();
-        if (!teacher) {
-          sendError(401, 'Unauthorized: valid teacher token required');
-          return;
-        }
-
-        const courseId = feedMatch[1];
-        const rawBody = await readBody(req, MAX_PAYLOAD_SIZE);
-        let parsed;
-        try {
-          parsed = JSON.parse(rawBody);
-        } catch {
-          sendError(400, 'Invalid JSON body');
-          return;
-        }
-
-        const ciphertext = typeof parsed === 'string' ? parsed : parsed.ciphertext;
-        if (!ciphertext) {
-          sendError(400, 'Missing ciphertext in feed payload');
-          return;
-        }
-
-        const etag = parsed.etag || createHash('sha256').update(ciphertext).digest('hex').slice(0, 16);
-        db.feeds.put({
-          courseId,
-          teacherId: teacher.id,
-          ciphertext,
-          etag,
-          updatedAt: new Date().toISOString()
-        });
-
-        res.setHeader('ETag', `"${etag}"`);
-        sendJson(200, { ok: true, etag });
-        return;
-      }
-
-      // 9. GET /api/feed/:courseId or /feed/:courseId
-      if (req.method === 'GET' && feedMatch) {
-        const courseId = feedMatch[1];
-        const feed = db.feeds.get(courseId);
-        if (!feed) {
-          sendError(404, 'Course feed not found');
-          return;
-        }
-
-        const ifNoneMatch = req.headers['if-none-match'];
-        if (ifNoneMatch && (ifNoneMatch === feed.etag || ifNoneMatch === `"${feed.etag}"`)) {
-          res.writeHead(304, {
-            'ETag': `"${feed.etag}"`,
-            'Access-Control-Allow-Origin': '*'
-          });
-          res.end();
-          return;
-        }
-
-        res.setHeader('ETag', `"${feed.etag}"`);
-        sendJson(200, {
-          course_id: feed.courseId,
-          ciphertext: feed.ciphertext,
-          etag: feed.etag,
-          updated_at: feed.updatedAt
-        });
-        return;
-      }
-
-      sendError(404, 'Route not found');
+      const webRes = await fetchHandler(webReq, { clientIp });
+      await sendWebResponse(webRes, res);
     } catch (err) {
-      if (err.code === 413 || err.message === 'PAYLOAD_TOO_LARGE') {
-        sendError(413, 'Payload too large');
-      } else {
-        console.error('[Relay Server Error]', err);
-        sendError(500, 'Internal server error');
+      console.error('[Relay Adapter Error]', err);
+      if (!res.headersSent) {
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Internal server error' }));
       }
     }
   };
