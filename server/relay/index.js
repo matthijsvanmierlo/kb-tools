@@ -1,7 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
-import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
+import { randomBytes, createHash, createHmac, timingSafeEqual } from 'node:crypto';
 import { createDatabase } from './db.js';
 import { extractBearerToken, hashToken } from './auth.js';
 
@@ -25,6 +25,64 @@ function sameHash(a, b) {
   const x = Buffer.from(String(a), 'hex');
   const y = Buffer.from(String(b), 'hex');
   return x.length === y.length && x.length > 0 && timingSafeEqual(x, y);
+}
+
+function generateS3PresignedPutUrl({ endpoint, bucket, key, accessKeyId, secretAccessKey, region = 'auto', contentType, expiresIn = 3600 }) {
+  const dateObj = new Date();
+  const amzDate = dateObj.toISOString().replace(/[:-]|\.\d{3}/g, '');
+  const dateStamp = amzDate.slice(0, 8);
+  const service = 's3';
+  const credentialScope = `${dateStamp}/${region}/${service}/aws4_request`;
+
+  const url = new URL(endpoint);
+  let host = url.host;
+  let path = `/${key}`;
+  if (bucket) {
+    path = `/${bucket}/${key}`;
+  }
+
+  const queryParams = {
+    'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+    'X-Amz-Credential': `${accessKeyId}/${credentialScope}`,
+    'X-Amz-Date': amzDate,
+    'X-Amz-Expires': String(expiresIn),
+    'X-Amz-SignedHeaders': 'content-type;host'
+  };
+
+  const canonicalQuery = Object.keys(queryParams)
+    .sort()
+    .map(k => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+    .join('&');
+
+  const canonicalHeaders = `content-type:${contentType || 'application/octet-stream'}\nhost:${host}\n`;
+  const signedHeaders = 'content-type;host';
+  const payloadHash = 'UNSIGNED-PAYLOAD';
+
+  const canonicalRequest = [
+    'PUT',
+    path,
+    canonicalQuery,
+    canonicalHeaders,
+    signedHeaders,
+    payloadHash
+  ].join('\n');
+
+  const hashedCanonicalRequest = createHash('sha256').update(canonicalRequest, 'utf8').digest('hex');
+
+  const stringToSign = [
+    'AWS4-HMAC-SHA256',
+    amzDate,
+    credentialScope,
+    hashedCanonicalRequest
+  ].join('\n');
+
+  const kDate = createHmac('sha256', `AWS4${secretAccessKey}`).update(dateStamp).digest();
+  const kRegion = createHmac('sha256', kDate).update(region).digest();
+  const kService = createHmac('sha256', kRegion).update(service).digest();
+  const kSigning = createHmac('sha256', kService).update('aws4_request').digest();
+  const signature = createHmac('sha256', kSigning).update(stringToSign, 'utf8').digest('hex');
+
+  return `${url.origin}${path}?${canonicalQuery}&X-Amz-Signature=${signature}`;
 }
 
 const DEFAULT_RETENTION_DAYS = 180;
@@ -98,6 +156,31 @@ function readBody(req, maxBytes) {
   });
 }
 
+function readRawBody(req, maxBytes) {
+  return new Promise((resolve, reject) => {
+    let bytes = 0;
+    const chunks = [];
+
+    req.on('data', chunk => {
+      bytes += chunk.length;
+      if (bytes > maxBytes) {
+        req.destroy();
+        const err = new Error('PAYLOAD_TOO_LARGE');
+        err.code = 413;
+        reject(err);
+        return;
+      }
+      chunks.push(chunk);
+    });
+
+    req.on('end', () => {
+      resolve(Buffer.concat(chunks));
+    });
+
+    req.on('error', reject);
+  });
+}
+
 /**
  * Create and configure the relay server.
  * @param {object} [opts]
@@ -133,6 +216,15 @@ export function createRelayServer(opts = {}) {
   prune();
   const pruneInterval = setInterval(prune, 3600 * 1000);
   if (pruneInterval.unref) pruneInterval.unref();
+
+  const cdnEnabled = Boolean(
+    opts.cdn ||
+    process.env.KB_CDN_ENDPOINT ||
+    process.env.KB_CDN_BUCKET ||
+    process.env.KB_CDN_PUBLIC_URL ||
+    process.env.KB_CDN_LOCAL_DIR
+  );
+  const mediaStore = opts.cdn?.mediaStore || (opts.cdn?.localDir ? new Map() : (opts.cdn ? new Map() : (process.env.KB_CDN_LOCAL_DIR ? new Map() : null)));
 
   const handler = async (req, res) => {
     if (opts.appHandler && !String(req.url || '').startsWith('/api/')) {
@@ -176,7 +268,9 @@ export function createRelayServer(opts = {}) {
 
       // 1. GET /health
       if (req.method === 'GET' && (pathname === '/health' || pathname === '/')) {
-        sendJson(200, { ok: true, version: VERSION, features: ['payloads', 'drops', 'drafts', 'sync', 'feeds'] });
+        const features = ['payloads', 'drops', 'drafts', 'sync', 'feeds'];
+        if (cdnEnabled) features.push('media');
+        sendJson(200, { ok: true, version: VERSION, features });
         return;
       }
 
@@ -187,6 +281,119 @@ export function createRelayServer(opts = {}) {
         const hash = hashToken(token);
         return db.teachers.getByTokenHash(hash);
       };
+
+      // Media endpoints (CDN broker & local fallback)
+      if (req.method === 'POST' && pathname === '/media/presign') {
+        const teacher = authenticateTeacher();
+        if (!teacher) {
+          sendError(401, 'Unauthorized: valid teacher token required');
+          return;
+        }
+
+        if (!cdnEnabled) {
+          sendError(501, 'Media CDN offloading is not configured on this relay server');
+          return;
+        }
+
+        const rawBody = await readBody(req, 16384);
+        let parsed;
+        try {
+          parsed = JSON.parse(rawBody);
+        } catch {
+          sendError(400, 'Invalid JSON body');
+          return;
+        }
+
+        const { sha256: fileHash, mime, ext } = parsed || {};
+        if (!fileHash || !/^[a-f0-9]{64}$/i.test(fileHash)) {
+          sendError(400, 'Valid 64-hex sha256 required');
+          return;
+        }
+
+        if (typeof opts.cdn?.presign === 'function') {
+          const custom = await opts.cdn.presign({ sha256: fileHash, mime, ext, teacherId: teacher.id });
+          sendJson(200, custom);
+          return;
+        }
+
+        const safeExt = String(ext || (mime === 'image/webp' ? 'webp' : mime === 'audio/webm' ? 'webm' : 'bin')).replace(/[^a-z0-9]/gi, '');
+        const filename = `${fileHash}.${safeExt}`;
+        const objectKey = `assets/${filename}`;
+
+        const host = req.headers.host || `localhost:${DEFAULT_PORT}`;
+        const proto = req.socket?.encrypted ? 'https' : 'http';
+
+        // S3 / R2 presigning when full S3 endpoint + creds are provided
+        const endpoint = (process.env.KB_CDN_ENDPOINT || opts.cdn?.endpoint || '').replace(/\/+$/, '');
+        const bucket = process.env.KB_CDN_BUCKET || opts.cdn?.bucket || '';
+        const accessKeyId = process.env.KB_CDN_ACCESS_KEY_ID || opts.cdn?.accessKeyId;
+        const secretAccessKey = process.env.KB_CDN_SECRET_ACCESS_KEY || opts.cdn?.secretAccessKey;
+        const region = process.env.KB_CDN_REGION || opts.cdn?.region || 'auto';
+        const publicBase = (process.env.KB_CDN_PUBLIC_URL || opts.cdn?.publicUrl || '').replace(/\/+$/, '');
+
+        if (endpoint && accessKeyId && secretAccessKey) {
+          const presignedUrl = generateS3PresignedPutUrl({
+            endpoint,
+            bucket,
+            key: objectKey,
+            accessKeyId,
+            secretAccessKey,
+            region,
+            contentType: mime || 'application/octet-stream'
+          });
+          const publicUrl = publicBase ? `${publicBase}/${objectKey}` : `${endpoint}/${bucket ? bucket + '/' : ''}${objectKey}`;
+          sendJson(200, {
+            upload_url: presignedUrl,
+            public_url: publicUrl,
+            method: 'PUT',
+            headers: { 'Content-Type': mime || 'application/octet-stream' }
+          });
+          return;
+        }
+
+        // Local / in-memory store fallback
+        const uploadUrl = `${proto}://${host}/api/v1/media/upload?key=${encodeURIComponent(filename)}`;
+        const publicUrl = publicBase ? `${publicBase}/${filename}` : `${proto}://${host}/api/v1/media/file/${encodeURIComponent(filename)}`;
+        sendJson(200, {
+          upload_url: uploadUrl,
+          public_url: publicUrl,
+          method: 'PUT',
+          headers: { 'Content-Type': mime || 'application/octet-stream' }
+        });
+        return;
+      }
+
+      // PUT /media/upload?key=<filename>
+      if (req.method === 'PUT' && pathname === '/media/upload') {
+        const key = parsedUrl.searchParams.get('key');
+        if (!key || !/^[a-f0-9]{64}\.[a-z0-9]+$/i.test(key)) {
+          sendError(400, 'Valid key parameter required');
+          return;
+        }
+        const rawBytes = await readRawBody(req, MAX_SYNC_SNAPSHOT_SIZE);
+        if (mediaStore) {
+          const contentType = req.headers['content-type'] || 'application/octet-stream';
+          mediaStore.set(key, { data: rawBytes, contentType });
+        }
+        sendJson(200, { ok: true, key });
+        return;
+      }
+
+      // GET /media/file/:filename
+      const mediaFileMatch = pathname.match(/^\/media\/file\/([a-f0-9]{64}\.[a-z0-9]+)$/i);
+      if (req.method === 'GET' && mediaFileMatch) {
+        const key = mediaFileMatch[1];
+        const item = mediaStore?.get(key);
+        if (!item) {
+          sendError(404, 'Media asset not found');
+          return;
+        }
+        res.setHeader('Content-Type', item.contentType || 'application/octet-stream');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        res.writeHead(200);
+        res.end(item.data);
+        return;
+      }
 
       // 2. POST /payloads
       if (req.method === 'POST' && pathname === '/payloads') {

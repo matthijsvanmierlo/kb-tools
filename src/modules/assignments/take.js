@@ -251,7 +251,7 @@ export async function renderTakeView(params, router, container) {
   let roamer = null;
   const saveDraft = () => {
     if (preview) return;
-    const draft = { answers: state.answers, checked: state.checked, startedAt: state.startedAt, index: state.index, name: state.student.name, saved_at: new Date().toISOString() };
+    const draft = { answers: state.answers, checked: state.checked, startedAt: state.startedAt, index: state.index, name: state.student.name, publish_version: payload.publish_version, saved_at: new Date().toISOString() };
     safeStorage.set(draftKey(), draft);
     roamer?.schedule(draft);
   };
@@ -402,6 +402,21 @@ export async function renderTakeView(params, router, container) {
           }
         } catch (_) {
           // Offline or no server: the local draft is enough
+        }
+        if (fromElsewhere && draft) {
+          const remoteVersion = Number(draft.publish_version ?? draft.publishVersion);
+          const currentVersion = Number(payload.publish_version ?? 1);
+          if (remoteVersion && remoteVersion < currentVersion) {
+            const reconciled = reconcileDraftAnswers(payload, draft.answers || {});
+            draft = {
+              ...draft,
+              answers: reconciled.newAnswers || reconciled.answers || {},
+              migrated_from_version: remoteVersion,
+              publish_version: currentVersion
+            };
+            safeStorage.set(draftKey(), draft);
+            toast.info('Updated assignment loaded — your answers from another device were preserved.');
+          }
         }
       }
       if (!draft && !preview) {

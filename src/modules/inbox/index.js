@@ -26,6 +26,8 @@ export async function renderInboxView(params, router, container) {
   const seenFiles = new Set();
 
   const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
+  const transport = await getTransport();
+  const hasRelaySubmissions = Boolean(transport?.capabilities?.collectSubmissions);
 
   const classifyAndStage = async (rawItems) => {
     const nextItems = [];
@@ -127,9 +129,11 @@ export async function renderInboxView(params, router, container) {
             <sl-tooltip content="Automatically import matched submissions into gradebook as soon as files appear in the watched folder">
               <sl-switch id="switch-auto-import" size="small" ${autoImport ? 'checked' : ''}>Auto-import</sl-switch>
             </sl-tooltip>
-            <sl-button size="small" id="btn-check-server">
-              <sl-icon slot="prefix" name="cloud-download"></sl-icon> Check server
-            </sl-button>
+            ${hasRelaySubmissions ? `
+              <sl-button size="small" id="btn-check-server">
+                <sl-icon slot="prefix" name="cloud-download"></sl-icon> Check server
+              </sl-button>
+            ` : ''}
             <sl-button size="small" id="btn-scan-qr">
               <sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Scan QR codes
             </sl-button>

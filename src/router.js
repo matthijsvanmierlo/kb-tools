@@ -197,9 +197,15 @@ export class Router {
     }
     this._setProgress(true);
 
-    // Dialogs and drawers live on <body>, outside the view; close them when leaving the view
-    if (isNewView && typeof document !== 'undefined') {
-      document.querySelectorAll('body > sl-dialog, body > sl-drawer').forEach(el => el.remove());
+    // Dialogs and drawers live on <body>, outside the view; close them when leaving the view.
+    // Also revoke in-memory object URLs created for decrypted CDN media blobs.
+    if (isNewView) {
+      if (typeof document !== 'undefined') {
+        document.querySelectorAll('body > sl-dialog, body > sl-drawer').forEach(el => el.remove());
+      }
+      try {
+        storage.revokeAllObjectURLs();
+      } catch (_) {}
     }
 
     // Call active view cleanup if registered

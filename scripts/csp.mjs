@@ -71,14 +71,28 @@ export function configOrigins(configPath = CONFIG_JSON) {
   const out = [];
   const relay = cfg.relay?.baseUrl || cfg.baseUrl;
   if (relay) out.push(new URL(relay).origin);
+  const cdn = cfg.cdn?.baseUrl || cfg.cdn?.endpoint;
+  if (cdn) {
+    try { out.push(new URL(cdn).origin); } catch (_) {}
+  }
   if (cfg.cloud?.google?.clientId) out.push(...CLOUD_ORIGINS.google);
   if (cfg.cloud?.microsoft?.clientId) out.push(...CLOUD_ORIGINS.microsoft);
   return out;
 }
 
+export function cdnOriginsFromEnv(env = process.env) {
+  const cdn = env.KB_CDN_ORIGIN || env.KB_CDN_PUBLIC_URL || env.KB_CDN_ENDPOINT;
+  if (!cdn) return [];
+  try {
+    return [new URL(cdn).origin];
+  } catch (_) {
+    return [];
+  }
+}
+
 /** Everything connect-src needs beyond 'self': relay plus enabled cloud providers (env and config.json) */
 export function extraConnectOrigins(env = process.env, { configPath = CONFIG_JSON } = {}) {
-  return [...new Set([...relayOriginsFromEnv(env), ...cloudOriginsFromEnv(env), ...configOrigins(configPath)])];
+  return [...new Set([...relayOriginsFromEnv(env), ...cloudOriginsFromEnv(env), ...cdnOriginsFromEnv(env), ...configOrigins(configPath)])];
 }
 
 /** Hash of the inline import map exactly as the browser sees it (text between the tags). */
@@ -92,16 +106,17 @@ export function importMapHash(html) {
  * @param {object} opts
  * @param {string} opts.importMapHash
  * @param {string[]} [opts.relayOrigins] - extra connect-src origins for a cross-origin relay
+ * @param {string[]} [opts.cdnOrigins] - extra origins for CDN media
  * @param {boolean} [opts.header] - include directives that only work as an HTTP header
  */
-export function buildCsp({ importMapHash: hash, relayOrigins = [], header = false }) {
+export function buildCsp({ importMapHash: hash, relayOrigins = [], cdnOrigins = [], header = false }) {
   const directives = {
     'default-src': ["'self'"],
     'script-src': ["'self'", hash],
     'style-src': ["'self'", "'unsafe-inline'"],
-    'img-src': ["'self'", 'data:', 'blob:'],
+    'img-src': ["'self'", 'data:', 'blob:', ...cdnOrigins],
     'font-src': ["'self'"],
-    'connect-src': ["'self'", 'data:', ...relayOrigins],
+    'connect-src': ["'self'", 'data:', ...relayOrigins, ...cdnOrigins],
     'media-src': ["'self'", 'blob:', 'data:', 'https:'],
     'frame-src': VIDEO_FRAME_ORIGINS,
     'worker-src': ["'self'"],

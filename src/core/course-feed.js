@@ -8,7 +8,7 @@ import { getDue } from './due-dates.js';
  * Encrypts course outlines, units, and items with the course access code for zero-trust delivery.
  */
 
-export async function buildCourseFeed(courseId, { origin, studentId } = {}) {
+export async function buildCourseFeed(courseId, { origin, studentId, relayUrl } = {}) {
   if (!courseId) throw new Error('courseId is required to build a course feed');
 
   const course = await storage.table('gradebook_courses').get(courseId);
@@ -72,7 +72,8 @@ export async function buildCourseFeed(courseId, { origin, studentId } = {}) {
       section: course.section,
       academic_year: course.academic_year,
       color: course.color,
-      access_code: course.access_code
+      access_code: course.access_code,
+      ...(relayUrl ? { relay_url: relayUrl } : {})
     },
     units: units.sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
     items: enrichedItems.sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
@@ -101,4 +102,18 @@ export async function decryptCourseFeed(feedEnvelope, accessCode) {
   const unpacked = await CryptoShareEngine.unpackSharePayload(d, isEncrypted, (accessCode || '').trim(), version);
   const data = typeof unpacked === 'string' ? JSON.parse(unpacked) : unpacked;
   return data?.payload || data;
+}
+
+/**
+ * Derive deterministic 24-hex feed ID from a course access code (or courseId if no code exists).
+ * Both teacher publish and student lookup use this so students can locate feeds without knowing internal UUIDs.
+ * @param {string} accessCodeOrCourseId
+ * @returns {Promise<string>}
+ */
+export async function deriveCourseFeedId(accessCodeOrCourseId) {
+  const norm = String(accessCodeOrCourseId || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  if (!norm) return 'feed-unknown';
+  const buf = new TextEncoder().encode(`kb-course-feed-v1|${norm}`);
+  const digest = await crypto.subtle.digest('SHA-256', buf);
+  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 24);
 }

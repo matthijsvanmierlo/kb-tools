@@ -675,6 +675,10 @@ export async function openRelayConfigDialog() {
       toast.danger('Base URL is required.');
       return;
     }
+    if (!token) {
+      toast.danger('Teacher Bearer Token is required.');
+      return;
+    }
     await setTransportConfig({ baseUrl, token, teacherId });
     toast.success('School server connected successfully!');
     dialog.hide();

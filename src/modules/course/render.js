@@ -4,8 +4,8 @@ import { toast } from '../../utils/toast.js';
 import { ConfirmDialog, PromptDialog } from '../../utils/dialogs.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { setDue, getDue } from '../../core/due-dates.js';
-import { buildCourseFeed } from '../../core/course-feed.js';
-import { getTransport, PublicFeedTransport } from '../../core/transport.js';
+import { buildCourseFeed, deriveCourseFeedId } from '../../core/course-feed.js';
+import { getTransport, PublicFeedTransport, isTeacherRelayConfigured } from '../../core/transport.js';
 import { isFeedDirty, markFeedPublished } from '../../core/course-revision.js';
 import { QRCode } from '../../core/qrcode.js';
 
@@ -44,6 +44,8 @@ export async function renderCoursePage(courseId, container) {
 
     const dirty = await isFeedDirty(courseId).catch(() => false);
     const color = Sanitizer.safeColor(course.color, '#2563eb');
+    const transport = await getTransport();
+    const hasRelay = isTeacherRelayConfigured(transport);
 
     container.innerHTML = `
       <div class="min-h-[calc(100vh-4rem)] bg-slate-50 pb-16">
@@ -82,7 +84,7 @@ export async function renderCoursePage(courseId, container) {
                   <sl-icon slot="prefix" name="journal-bookmark"></sl-icon> Gradebook
                 </sl-button>
                 <sl-button size="small" variant="${dirty ? 'primary' : 'default'}" id="btn-publish-feed">
-                  <sl-icon slot="prefix" name="cloud-upload"></sl-icon> Publish Feed
+                  <sl-icon slot="prefix" name="${hasRelay ? 'cloud-upload' : 'box-arrow-up'}"></sl-icon> ${hasRelay ? 'Publish Feed to Server' : 'Package Course (.kbshare)'}
                 </sl-button>
               </div>
             </div>
@@ -308,13 +310,15 @@ export async function renderCoursePage(courseId, container) {
       const btn = container.querySelector('#btn-publish-feed');
       btn.loading = true;
       try {
-        const feed = await buildCourseFeed(courseId);
         const transport = await getTransport();
-        const config = await storage.getMetadata('sync_config');
+        const hasRelay = isTeacherRelayConfigured(transport);
+        const relayUrl = hasRelay ? transport.baseUrl : null;
+        const feed = await buildCourseFeed(courseId, { relayUrl });
 
-        if (config?.baseUrl && config?.token) {
-          const feedTransport = new PublicFeedTransport(config);
-          await feedTransport.publishCourseFeed(courseId, feed.ciphertext, feed.etag);
+        if (hasRelay) {
+          const feedId = await deriveCourseFeedId(course.access_code || courseId);
+          const feedTransport = new PublicFeedTransport({ baseUrl: transport.baseUrl, token: transport.token });
+          await feedTransport.publishCourseFeed(feedId, feed.ciphertext, feed.etag);
           await markFeedPublished(courseId, feed.etag);
           toast.success('Course feed published to server!');
         } else {
@@ -495,8 +499,11 @@ async function openShareCoursePackageDialog(course) {
 
   toast.info('Preparing course package...', 1500);
   let sharePayload = null;
+  const transport = await getTransport();
+  const hasRelay = isTeacherRelayConfigured(transport);
+  const relayUrl = hasRelay ? transport.baseUrl : null;
   try {
-    const feed = await buildCourseFeed(course.id);
+    const feed = await buildCourseFeed(course.id, { relayUrl });
     sharePayload = await CryptoShareEngine.createSharePayload('course_feed', feed.raw_payload, course.access_code);
   } catch (err) {
     console.error('Failed to create course package:', err);
@@ -505,7 +512,10 @@ async function openShareCoursePackageDialog(course) {
   }
 
   const base = window.location.origin + window.location.pathname;
-  const joinUrl = `${base}#/student?code=${encodeURIComponent(course.access_code || '')}`;
+  let joinUrl = `${base}#/student?code=${encodeURIComponent(course.access_code || '')}`;
+  if (hasRelay && relayUrl) {
+    joinUrl += `&relay=${encodeURIComponent(relayUrl)}`;
+  }
   const shareUrl = sharePayload.url;
 
   let qrSvg = '';

@@ -4,7 +4,8 @@ import { toast } from '../../utils/toast.js';
 import { PromptDialog } from '../../utils/dialogs.js';
 import { getStudentCourses } from './course-store.js';
 import { exportStudentSession, importStudentSession } from './session-portability.js';
-import { getTransport, PublicFeedTransport } from '../../core/transport.js';
+import { getTransport, PublicFeedTransport, getStudentRelayUrl } from '../../core/transport.js';
+import { deriveCourseFeedId } from '../../core/course-feed.js';
 import { mergeCourseFeed } from './course-store.js';
 
 const esc = (v) => Sanitizer.escapeHTML(v ?? '');
@@ -113,7 +114,7 @@ export async function renderStudentCoursesView(params, router, container) {
       fileInput.value = '';
     });
 
-    const doEnrollWithCode = async (code) => {
+    const doEnrollWithCode = async (code, relayUrlOverride = null) => {
       const normalizedCode = String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
       if (normalizedCode.length < 4) {
         toast.warning('Please enter a valid access code.');
@@ -121,20 +122,25 @@ export async function renderStudentCoursesView(params, router, container) {
       }
 
       // Try fetching from configured relay or search local courses
-      try {
-        const config = await storage.getMetadata('sync_config');
-        if (config?.baseUrl) {
-          const transport = new PublicFeedTransport(config);
-          const feedRes = await transport.fetchCourseFeed(normalizedCode);
+      const relayUrl = relayUrlOverride || params?.relay || getStudentRelayUrl();
+      if (relayUrl) {
+        try {
+          const feedId = await deriveCourseFeedId(normalizedCode);
+          const transport = new PublicFeedTransport({ baseUrl: relayUrl });
+          const feedRes = await transport.fetchCourseFeed(feedId);
           if (feedRes && feedRes.ciphertext) {
-            await mergeCourseFeed(feedRes.ciphertext, { accessCode: normalizedCode });
+            await mergeCourseFeed(feedRes.ciphertext, {
+              accessCode: normalizedCode,
+              etag: feedRes.etag,
+              relayUrl
+            });
             toast.success('Successfully joined course and loaded course feed!');
             render();
             return;
           }
+        } catch (err) {
+          console.warn('Relay course lookup error:', err);
         }
-      } catch (err) {
-        console.warn('Relay course lookup error:', err);
       }
 
       // Local fallback: search existing teacher courses in same browser (shared device / demo)
@@ -170,12 +176,15 @@ export async function renderStudentCoursesView(params, router, container) {
         once: true,
         onResult: async (decodedText) => {
           let code = String(decodedText || '').trim();
+          let scannedRelay = null;
           if (code.includes('code=')) {
-            const match = code.match(/code=([^&]+)/);
-            if (match) code = decodeURIComponent(match[1]);
+            const matchCode = code.match(/code=([^&]+)/);
+            if (matchCode) code = decodeURIComponent(matchCode[1]);
+            const matchRelay = decodedText.match(/relay=([^&]+)/);
+            if (matchRelay) scannedRelay = decodeURIComponent(matchRelay[1]);
           }
           if (code.length <= 12 && /^[A-Z0-9_-]+$/i.test(code)) {
-            await doEnrollWithCode(code);
+            await doEnrollWithCode(code, scannedRelay);
           } else {
             await UniversalImportDialog.handleScannedPayload(decodedText, {
               role: 'student'
@@ -193,4 +202,8 @@ export async function renderStudentCoursesView(params, router, container) {
   };
 
   await render();
+
+  if (params?.code) {
+    await doEnrollWithCode(params.code, params.relay);
+  }
 }

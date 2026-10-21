@@ -6,7 +6,7 @@ import { decryptCourseFeed } from '../../core/course-feed.js';
  * Ingests, decrypts, and persists course feeds into student IndexedDB storage.
  */
 
-export async function mergeCourseFeed(feedEnvelope, { accessCode } = {}) {
+export async function mergeCourseFeed(feedEnvelope, { accessCode, etag, relayUrl } = {}) {
   let feed = null;
 
   if (feedEnvelope && feedEnvelope.course && Array.isArray(feedEnvelope.items)) {
@@ -25,6 +25,8 @@ export async function mergeCourseFeed(feedEnvelope, { accessCode } = {}) {
   // 1. Upsert course record into student_courses
   const coursesTable = storage.table('student_courses');
   const existingCourse = await coursesTable.get(course.id).catch(() => null);
+  const effectiveRelayUrl = relayUrl || course.relay_url || existingCourse?.relay_url || null;
+  const effectiveEtag = etag || feedEnvelope?.etag || revision || existingCourse?.etag || 'rev-0';
 
   const courseRecord = {
     ...(existingCourse || {}),
@@ -35,13 +37,24 @@ export async function mergeCourseFeed(feedEnvelope, { accessCode } = {}) {
     color: course.color || '#2563eb',
     access_code: accessCode || course.access_code || existingCourse?.access_code || '',
     revision: revision || existingCourse?.revision || 'rev-0',
+    etag: effectiveEtag,
+    ...(effectiveRelayUrl ? { relay_url: effectiveRelayUrl } : {}),
     units: units,
     updated_at: new Date().toISOString()
   };
   await coursesTable.put(courseRecord);
 
-  // 2. Upsert items into student_items and local lesson tables
+  // 2. Delete stale items no longer present in incoming feed
   const itemsTable = storage.table('student_items');
+  const existingCourseItems = await itemsTable.where('course_id').equals(course.id).toArray().catch(() => []);
+  const incomingItemIds = new Set(items.map(it => it.id));
+  for (const oldItem of existingCourseItems) {
+    if (!incomingItemIds.has(oldItem.id)) {
+      await itemsTable.delete(oldItem.id).catch(() => {});
+    }
+  }
+
+  // 3. Upsert items into student_items and local lesson tables
   for (const item of items) {
     const existingItem = await itemsTable.get(item.id).catch(() => null);
     const payload = item.payload || existingItem?.payload || null;
@@ -76,18 +89,53 @@ export async function mergeCourseFeed(feedEnvelope, { accessCode } = {}) {
           const existing = await fcTable.get(payload.id || sourceId).catch(() => null);
           if (!existing) {
             await fcTable.put({ ...payload, id: payload.id || sourceId });
+          } else {
+            // Preserve student's local spaced-repetition progress on matching card IDs
+            const existingFsrsMap = new Map();
+            if (Array.isArray(existing.cards)) {
+              for (const c of existing.cards) {
+                if (c.id && c.fsrs) existingFsrsMap.set(c.id, c.fsrs);
+              }
+            }
+            const mergedCards = Array.isArray(payload.cards) ? payload.cards.map(c => {
+              if (c.id && existingFsrsMap.has(c.id)) {
+                return { ...c, fsrs: existingFsrsMap.get(c.id) };
+              }
+              return c;
+            }) : payload.cards;
+            await fcTable.put({
+              ...existing,
+              ...payload,
+              id: payload.id || sourceId,
+              cards: mergedCards,
+              updated_at: payload.updated_at || new Date().toISOString()
+            });
           }
         } else if (kind === 'timeline') {
           const tlTable = storage.table('timelines');
           const existing = await tlTable.get(payload.id || sourceId).catch(() => null);
           if (!existing) {
             await tlTable.put({ ...payload, id: payload.id || sourceId });
+          } else {
+            await tlTable.put({
+              ...existing,
+              ...payload,
+              id: payload.id || sourceId,
+              updated_at: payload.updated_at || new Date().toISOString()
+            });
           }
         } else if (kind === 'video') {
           const vidTable = storage.table('video_assessments');
           const existing = await vidTable.get(payload.id || sourceId).catch(() => null);
           if (!existing) {
             await vidTable.put({ ...payload, id: payload.id || sourceId });
+          } else {
+            await vidTable.put({
+              ...existing,
+              ...payload,
+              id: payload.id || sourceId,
+              updated_at: payload.updated_at || new Date().toISOString()
+            });
           }
         }
       } catch (err) {

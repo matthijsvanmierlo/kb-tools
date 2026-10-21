@@ -1,8 +1,10 @@
 import { storage } from '../../core/storage.js';
 import { Sanitizer } from '../../core/sanitizer.js';
 import { toast } from '../../utils/toast.js';
-import { getStudentCourse } from './course-store.js';
+import { getStudentCourse, mergeCourseFeed } from './course-store.js';
 import { exportStudentSession } from './session-portability.js';
+import { getStudentRelayUrl, PublicFeedTransport } from '../../core/transport.js';
+import { deriveCourseFeedId } from '../../core/course-feed.js';
 
 const esc = (v) => Sanitizer.escapeHTML(v ?? '');
 
@@ -39,6 +41,7 @@ export async function renderStudentCourseDetailView(params, router, container) {
     if (key) ledgerMap.set(key, entry);
   }
 
+  const relayUrl = getStudentRelayUrl(course);
   const color = Sanitizer.safeColor(course.color, '#2563eb');
   const now = new Date().toISOString().slice(0, 10);
 
@@ -63,6 +66,11 @@ export async function renderStudentCourseDetailView(params, router, container) {
           </div>
 
           <div class="flex items-center gap-2 flex-wrap">
+            ${relayUrl ? `
+              <sl-button size="small" variant="default" id="btn-refresh-feed">
+                <sl-icon slot="prefix" name="arrow-clockwise"></sl-icon> Check for updates
+              </sl-button>
+            ` : ''}
             <sl-button size="small" variant="default" id="btn-export-session">
               <sl-icon slot="prefix" name="download"></sl-icon> Save Session (.kbsession)
             </sl-button>
@@ -178,4 +186,56 @@ export async function renderStudentCourseDetailView(params, router, container) {
   container.querySelector('#btn-export-session')?.addEventListener('click', () => {
     exportStudentSession();
   });
+
+  let disposed = false;
+  const checkForUpdates = async (interactive = false) => {
+    if (!relayUrl || !course.access_code || disposed) return;
+    try {
+      const feedId = await deriveCourseFeedId(course.access_code);
+      const transport = new PublicFeedTransport({ baseUrl: relayUrl });
+      const res = await transport.fetchCourseFeed(feedId, course.etag || course.revision);
+      if (disposed) return;
+      if (res && res.ciphertext) {
+        await mergeCourseFeed(res.ciphertext, {
+          accessCode: course.access_code,
+          etag: res.etag,
+          relayUrl
+        });
+        toast.success('Course updated with latest changes from your teacher!');
+        renderStudentCourseDetailView(params, router, container);
+      } else if (interactive) {
+        toast.info('Course is up to date.');
+      }
+    } catch (err) {
+      if (interactive) {
+        toast.warning('Could not check for updates: ' + (err.message || 'network error'));
+      }
+    }
+  };
+
+  const refreshBtn = container.querySelector('#btn-refresh-feed');
+  refreshBtn?.addEventListener('click', async () => {
+    refreshBtn.loading = true;
+    await checkForUpdates(true);
+    refreshBtn.loading = false;
+  });
+
+  let onVisibilityChange = null;
+  if (relayUrl && course.access_code) {
+    onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkForUpdates(false);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    // Background check on load
+    checkForUpdates(false);
+  }
+
+  return () => {
+    disposed = true;
+    if (onVisibilityChange) {
+      document.removeEventListener('visibilitychange', onVisibilityChange);
+    }
+  };
 }

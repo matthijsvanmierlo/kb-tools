@@ -127,10 +127,11 @@ export class RelayTransport extends SyncTransport {
   }
 
   get capabilities() {
+    const isTeacherConfigured = Boolean(this.baseUrl && this.token);
     return {
-      hostPayload: true,
-      collectSubmissions: true,
-      replication: true,
+      hostPayload: isTeacherConfigured,
+      collectSubmissions: isTeacherConfigured,
+      replication: isTeacherConfigured,
       roster: false
     };
   }
@@ -255,6 +256,30 @@ export class RelayTransport extends SyncTransport {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       throw new Error(err.error || `Failed to delete drop: ${res.status}`);
     }
+  }
+
+  /**
+   * Request a presigned media upload URL from the relay server (teacher only).
+   * @param {{ sha256: string, mime: string, ext?: string, size?: number }} opts
+   * @returns {Promise<{ upload_url: string, public_url: string, method?: string, headers?: Record<string, string> }>}
+   */
+  async presignMediaUpload({ sha256, mime, ext, size } = {}) {
+    if (!this.baseUrl || !this.token) {
+      throw new Error('Teacher relay connection required to presign media uploads');
+    }
+    const res = await fetch(`${this.apiBase}/media/presign`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${this.token}`
+      },
+      body: JSON.stringify({ sha256, mime, ext, size })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `Failed to presign media upload: HTTP ${res.status}`);
+    }
+    return await res.json();
   }
 
   // --- Student draft roaming (no auth; drafts are encrypted with the student's access code) ---
@@ -382,6 +407,49 @@ export async function setTransportConfig(config) {
     await storage.setMetadata('sync_config', null);
   }
   return await getTransport({ forceReload: true });
+}
+
+/**
+ * Check if the active transport has a configured teacher relay with valid credentials.
+ * @param {SyncTransport} [transport]
+ * @returns {boolean}
+ */
+export function isTeacherRelayConfigured(transport = _currentTransport) {
+  return Boolean(transport instanceof RelayTransport && transport.baseUrl && transport.token);
+}
+
+/**
+ * Get student-facing relay URL from a course, payload, or global managed config.
+ * @param {object} [target]
+ * @returns {string|null}
+ */
+export function getStudentRelayUrl(target = null) {
+  const url = target?.relay_url
+    || target?.relay?.base_url
+    || (typeof window !== 'undefined' && (window.KB_CONFIG?.relay?.baseUrl || window.KB_CONFIG?.baseUrl))
+    || null;
+  return url ? String(url).replace(/\/+$/, '') : null;
+}
+
+/**
+ * Check if CDN media upload is configured via the relay or managed config.
+ * @param {SyncTransport} [transport]
+ * @returns {Promise<boolean>}
+ */
+export async function isCdnUploadConfigured(transport = null) {
+  const t = transport || await getTransport();
+  if (t instanceof RelayTransport && t.baseUrl && t.token) {
+    try {
+      const h = await t.health();
+      if (h.ok && Array.isArray(h.features) && h.features.includes('media')) {
+        return true;
+      }
+    } catch (_) {}
+  }
+  if (typeof window !== 'undefined' && window.KB_CONFIG?.cdn?.baseUrl) {
+    return true;
+  }
+  return false;
 }
 
 /**

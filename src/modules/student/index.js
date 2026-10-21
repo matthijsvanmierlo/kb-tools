@@ -16,7 +16,7 @@ import { exportStudentSession, importStudentSession } from './session-portabilit
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
 export async function renderStudentHubView(params, router, container) {
-  // Auto-save class access code if navigated via QR code link (#/student?code=...)
+  // Auto-enroll and navigate if accessed via QR / join link (#/student?code=...&relay=...)
   if (params?.code) {
     const rawCode = String(params.code).trim().toUpperCase();
     if (rawCode) {
@@ -26,11 +26,13 @@ export async function renderStudentHubView(params, router, container) {
         if (!saved.includes(rawCode)) {
           saved.push(rawCode);
           await storage.setMetadata('student_saved_class_codes', saved);
-          toast.success(`Saved class access code: ${rawCode}`);
         }
       } catch (err) {
         console.warn('Error saving class code from params:', err);
       }
+      const relayParam = params.relay ? `&relay=${encodeURIComponent(params.relay)}` : '';
+      router.navigate(`#/student/courses?code=${encodeURIComponent(rawCode)}${relayParam}`);
+      return;
     }
   }
 
