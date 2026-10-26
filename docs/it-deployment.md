@@ -135,7 +135,27 @@ A small Node.js service that stores only ciphertext. It enables:
 - multi-device sync without a shared folder;
 - co-teaching;
 - student draft roaming;
-- public course feeds (`GET /api/feed/:courseId`) with ETag caching.
+- public course feeds (`GET /api/feed/:courseId`) with ETag caching;
+- encrypted CDN media offloading (audio, images, and student task file attachments).
+
+### CDN Media Offloading & Student File Attachments
+
+KennisBoost supports offloading large media assets (deck card audio/images, drawing over-budget rasters, and student assignment attachments) to S3-compatible object storage (such as Cloudflare R2, MinIO, or AWS S3) or a local filesystem folder:
+
+- **End-to-End Client Encryption:** All student attachments are encrypted in the browser with unique AES-256-GCM keys prior to upload. The CDN and relay server store only raw ciphertext; the encryption key is held only by the student and the teacher's grading ledger (`kb-cdn+aes://`).
+- **Drop-Authorized Presigning:** Students request expiring, HMAC-signed upload URLs using their drop box secret (`POST /api/v1/drops/:dropId/media/presign`). Teacher credentials are never needed on student devices.
+- **Quota & Type Enforcement:** Configurable per-drop file counts and total byte quotas protect against storage exhaustion. Executables and dangerous extensions are strictly rejected by the relay broker.
+
+| Environment Variable | Description |
+|---|---|
+| `KB_MEDIA_SIGNING_SECRET` | Secret key for signing media upload URLs (auto-generated in DB if unset) |
+| `KB_CDN_ENDPOINT` | S3-compatible endpoint (e.g. `https://<account>.r2.cloudflarestorage.com`) |
+| `KB_CDN_BUCKET` | Storage bucket name |
+| `KB_CDN_ACCESS_KEY_ID` | S3 Access Key ID |
+| `KB_CDN_SECRET_ACCESS_KEY` | S3 Secret Access Key |
+| `KB_CDN_REGION` | S3 region (default `auto`) |
+| `KB_CDN_PUBLIC_URL` | Public base URL for serving media assets |
+| `KB_CDN_LOCAL_DIR` | Local storage folder for on-premise relays without S3 |
 
 ### Zero-Config Local LAN Relay & mDNS (`teacher-box.local`)
 

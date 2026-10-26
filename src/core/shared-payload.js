@@ -10,7 +10,8 @@
 import { Sanitizer } from './sanitizer.js';
 
 export const SHARE_TYPES = new Set([
-  'flashcards', 'timeline', 'video', 'gradebook', 'student_grade_report', 'assignment', 'assignment_feedback', 'course_feed'
+  'flashcards', 'timeline', 'video', 'gradebook', 'student_grade_report', 'assignment', 'assignment_feedback', 'course_feed',
+  'task', 'task_feedback'
 ]);
 
 const MAX_DEPTH = 32;
@@ -24,7 +25,8 @@ const NUMERIC_KEYS = new Set([
   'days_late', 'pending', 'needs_manual', 'percent', 'weight', 'default_points', 'pts', 'n',
   'stability', 'difficulty', 'reps', 'lapses', 'due_timestamp', 'elapsed_days', 'scheduled_days',
   'publish_version', 'zoom_level', 'focal_epoch_ms', 'high_score', 'longest_streak',
-  'accuracy', 'totalScore', 'maxScore'
+  'accuracy', 'totalScore', 'maxScore',
+  'max_points', 'line', 'end_line', 'max_files', 'max_mb', 'size', 'w', 'h'
 ]);
 const COLOR_KEYS = new Set(['color', 'background', 'background_color', 'accent']);
 const ENUMS = {

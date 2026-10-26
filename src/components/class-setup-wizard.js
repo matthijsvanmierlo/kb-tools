@@ -449,7 +449,7 @@ export class ClassSetupWizard {
               <sl-icon slot="prefix" name="journal-bookmark"></sl-icon> Open Gradebook
             </sl-button>
             <sl-button variant="default" class="w-full" id="wiz-btn-finish-assignment">
-              <sl-icon slot="prefix" name="clipboard-check"></sl-icon> Create Assignment
+              <sl-icon slot="prefix" name="clipboard-check"></sl-icon> Create Assessment
             </sl-button>
             ${stagedStudents.length > 0 && generateCodes ? `
               <sl-button variant="default" class="w-full" id="wiz-btn-finish-print-slips">
@@ -475,7 +475,7 @@ export class ClassSetupWizard {
       });
 
       dialog.querySelector('#wiz-btn-finish-assignment')?.addEventListener('click', () => {
-        window.location.hash = '#/assignments';
+        window.location.hash = '#/assessments';
         dialog.hide();
       });
 

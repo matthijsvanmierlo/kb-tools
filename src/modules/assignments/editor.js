@@ -745,9 +745,9 @@ export async function renderEditor(assignment, router, container) {
     openImportQuestionsDialog();
   });
 
-  on('#asg-back', 'click', async () => { await save(true); router.navigate('#/assignments'); });
-  on('#asg-preview', 'click', async () => { await save(true); router.navigate(`#/assignments/take?preview=${a.id}`); });
-  on('#asg-submissions', 'click', async () => { await save(true); router.navigate(`#/assignments/submissions?id=${a.id}`); });
+  on('#asg-back', 'click', async () => { await save(true); router.navigate('#/assessments'); });
+  on('#asg-preview', 'click', async () => { await save(true); router.navigate(`#/assessments/take?preview=${a.id}`); });
+  on('#asg-submissions', 'click', async () => { await save(true); router.navigate(`#/assessments/submissions?id=${a.id}`); });
   on('#asg-publish', 'click', async () => {
     await save(true);
     openPublishDialog(a);

@@ -156,7 +156,7 @@ export class UniversalImportDialog {
               <sl-icon slot="prefix" name="download"></sl-icon> Templates
             </sl-button>
             <sl-menu id="univ-template-menu">
-              <sl-menu-item value="assignment">Assignment CSV Template</sl-menu-item>
+              <sl-menu-item value="assignment">Assessment CSV Template</sl-menu-item>
               <sl-menu-item value="flashcards">Flashcards CSV Template</sl-menu-item>
               <sl-menu-item value="timeline">Timeline CSV Template</sl-menu-item>
               <sl-menu-item value="roster">Class Roster CSV Template</sl-menu-item>
@@ -217,7 +217,7 @@ export class UniversalImportDialog {
         icon = 'stack';
       } else if (type === 'assignment') {
         items = Array.isArray(payload.questions) ? payload.questions : [];
-        typeLabel = `Assignment (${items.length} questions)`;
+        typeLabel = `Assessment (${items.length} questions)`;
         badgeColor = 'bg-amber-100 text-amber-800';
         icon = 'ui-checks';
       } else if (type === 'timeline') {
@@ -355,7 +355,7 @@ export class UniversalImportDialog {
         const asgValidated = parseCSVWithValidation(trimmed, AssignmentQuestionRowSchema);
         if (asgValidated.success && asgValidated.data?.length > 0) {
           const asgPayload = {
-            title: filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ') || 'Imported Assignment',
+            title: filename.replace(/\.[^/.]+$/, '').replace(/[_\-]+/g, ' ') || 'Imported Assessment',
             questions: asgValidated.data
           };
           renderPreviewForUnpacked('assignment', asgPayload, filename);

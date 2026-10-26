@@ -1,6 +1,7 @@
 import { DatabaseSync } from 'node:sqlite';
 import { dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
+import { randomBytes } from 'node:crypto';
 import { RELAY_SCHEMA_SQL } from './schema.js';
 
 /**
@@ -217,6 +218,47 @@ export function createDatabase(filePath = ':memory:') {
           updatedAt: row.updated_at
         } : null;
       }
+    },
+
+    getMediaSigningSecret() {
+      const row = db.prepare('SELECT value FROM relay_meta WHERE key = ?').get('media_signing_secret');
+      if (row?.value) return row.value;
+      const secret = randomBytes(32).toString('hex');
+      db.prepare('INSERT OR REPLACE INTO relay_meta (key, value) VALUES (?, ?)').run('media_signing_secret', secret);
+      return secret;
+    },
+
+    dropMedia: {
+      checkQuota(dropId, newBytes, { maxFiles = 100, maxTotalBytes = 100 * 1024 * 1024 } = {}) {
+        const row = db.prepare('SELECT count(*) as count, coalesce(sum(size), 0) as total_size FROM drop_media WHERE drop_id = ?').get(dropId);
+        const count = Number(row?.count || 0);
+        const totalSize = Number(row?.total_size || 0);
+        if (count + 1 > maxFiles || totalSize + newBytes > maxTotalBytes) {
+          const err = new Error('DROP_MEDIA_QUOTA_EXCEEDED');
+          err.code = 'QUOTA_EXCEEDED';
+          throw err;
+        }
+        return true;
+      },
+      record({ dropId, key, size }) {
+        const now = new Date().toISOString();
+        db.prepare(`INSERT INTO drop_media (drop_id, key, size, created_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT (key) DO UPDATE SET size = excluded.size`)
+          .run(dropId, key, size, now);
+        return { dropId, key, size, createdAt: now };
+      },
+      getStats(dropId) {
+        const row = db.prepare('SELECT count(*) as count, coalesce(sum(size), 0) as total_size FROM drop_media WHERE drop_id = ?').get(dropId);
+        return { count: Number(row?.count || 0), totalSize: Number(row?.total_size || 0) };
+      }
+    },
+
+    checkMediaQuota(dropId, newBytes, opts) {
+      return this.dropMedia.checkQuota(dropId, newBytes, opts);
+    },
+
+    recordMediaUpload({ dropId, key, size }) {
+      return this.dropMedia.record({ dropId, key, size });
     }
   };
 }

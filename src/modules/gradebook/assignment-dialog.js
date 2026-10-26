@@ -39,6 +39,7 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
 
   let interactiveAssignments = [];
   let interactiveVideos = [];
+  let interactiveTasks = [];
 
   const dialog = document.createElement('sl-dialog');
   dialog.label = isEdit ? 'Edit assignment' : 'New assignment';
@@ -64,7 +65,8 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
             <sl-select id="as-source-type" label="Linked tool" value="${esc(sourceType)}">
               <sl-option value="none">None (Manual Gradebook Column)</sl-option>
-              <sl-option value="assignment"><sl-icon slot="prefix" name="ui-checks"></sl-icon> Interactive Assignment</sl-option>
+              <sl-option value="task"><sl-icon slot="prefix" name="journal-text"></sl-icon> Assignment</sl-option>
+              <sl-option value="assignment"><sl-icon slot="prefix" name="ui-checks"></sl-icon> Interactive Assessment</sl-option>
               <sl-option value="video"><sl-icon slot="prefix" name="play-circle"></sl-icon> Video Assessment</sl-option>
             </sl-select>
 
@@ -168,14 +170,26 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
       else actions.classList.add('hidden');
     }
 
-    if (type === 'assignment') {
+    if (type === 'task') {
       container.innerHTML = `
         <div class="flex items-end gap-2">
           <sl-select id="as-source-item-select" label="Linked Assignment" value="${esc(current.source?.id || '')}" class="flex-1">
             <sl-option value="">-- Choose assignment --</sl-option>
+            ${interactiveTasks.map(t => `<sl-option value="${esc(t.id)}">${esc(t.title || 'Untitled')}${t.class_id === course.id ? ' (This class)' : ''}</sl-option>`).join('')}
+          </sl-select>
+          <sl-button size="medium" id="as-source-item-create" title="Create new assignment linked to this class">
+            <sl-icon slot="prefix" name="plus-lg"></sl-icon> New
+          </sl-button>
+        </div>
+      `;
+    } else if (type === 'assignment') {
+      container.innerHTML = `
+        <div class="flex items-end gap-2">
+          <sl-select id="as-source-item-select" label="Linked Assessment" value="${esc(current.source?.id || '')}" class="flex-1">
+            <sl-option value="">-- Choose assessment --</sl-option>
             ${interactiveAssignments.map(a => `<sl-option value="${esc(a.id)}">${esc(a.title || 'Untitled')}${a.class_id === course.id ? ' (This class)' : ''}</sl-option>`).join('')}
           </sl-select>
-          <sl-button size="medium" id="as-source-item-create" title="Create new interactive assignment linked to this class">
+          <sl-button size="medium" id="as-source-item-create" title="Create new assessment linked to this class">
             <sl-icon slot="prefix" name="plus-lg"></sl-icon> New
           </sl-button>
         </div>
@@ -201,9 +215,11 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
       const selectedId = itemSelect.value || null;
       if (selectedId) {
         current.source = { type, id: selectedId };
-        const found = type === 'assignment'
-          ? interactiveAssignments.find(a => a.id === selectedId)
-          : interactiveVideos.find(v => v.id === selectedId);
+        const found = type === 'task'
+          ? interactiveTasks.find(t => t.id === selectedId)
+          : (type === 'assignment'
+            ? interactiveAssignments.find(a => a.id === selectedId)
+            : interactiveVideos.find(v => v.id === selectedId));
         if (found && !current.title) {
           current.title = found.title;
           const titleInput = dialog.querySelector('#as-title');
@@ -220,8 +236,28 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
 
     createBtn?.addEventListener('click', async () => {
       readForm();
-      const title = current.title || (type === 'assignment' ? 'New Interactive Assignment' : 'New Video Assessment');
-      if (type === 'assignment') {
+      const title = current.title || (type === 'task' ? 'New Assignment' : (type === 'assignment' ? 'New Assessment' : 'New Video Assessment'));
+      if (type === 'task') {
+        const { createBlankTask } = await import('../tasks/index.js');
+        const newTask = createBlankTask();
+        newTask.title = title;
+        newTask.class_id = course.id;
+        newTask.gradebook = {
+          course_id: course.id,
+          column_id: current.id,
+          category_id: current.category_id || null
+        };
+        newTask.grading = {
+          scoring: current.scoring || 'points',
+          max_points: current.max_score || 100,
+          standard_ids: current.standard_ids || []
+        };
+        await storage.table('tasks').put(newTask);
+        interactiveTasks.unshift(newTask);
+        current.source = { type: 'task', id: newTask.id };
+        if (!current.title) current.title = title;
+        toast.success('New assignment created & linked!');
+      } else if (type === 'assignment') {
         const newAsg = {
           version: 1,
           id: generateUUID(),
@@ -335,10 +371,16 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
         toast.warning('Please select or create an interactive item first.');
         return;
       }
-      if (current.source.type === 'assignment') {
+      if (current.source.type === 'task') {
+        const item = await storage.table('tasks').get(current.source.id);
+        if (item) {
+          const { openTaskPublishDialog } = await import('../tasks/publish.js');
+          openTaskPublishDialog(item);
+        } else toast.danger('Linked assignment not found.');
+      } else if (current.source.type === 'assignment') {
         const item = await storage.table('assignments').get(current.source.id);
         if (item) openPublishDialog(item);
-        else toast.danger('Linked assignment not found.');
+        else toast.danger('Linked assessment not found.');
       } else if (current.source.type === 'video') {
         const item = await storage.table('video_assessments').get(current.source.id);
         if (item) openVideoShareDialog(item);
@@ -349,9 +391,13 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
     dialog.querySelector('#as-btn-open-editor')?.addEventListener('click', () => {
       if (!current.source?.id) return;
       dialog.hide();
-      window.location.hash = current.source.type === 'assignment'
-        ? `#/assignments/edit?id=${current.source.id}`
-        : `#/video/edit?id=${current.source.id}`;
+      if (current.source.type === 'task') {
+        window.location.hash = `#/assignments/create?id=${current.source.id}`;
+      } else if (current.source.type === 'assignment') {
+        window.location.hash = `#/assessments/edit?id=${current.source.id}`;
+      } else {
+        window.location.hash = `#/video/edit?id=${current.source.id}`;
+      }
     });
 
     dialog.querySelector('#as-scoring')?.addEventListener('sl-change', (e) => {
@@ -370,7 +416,7 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
 
       // Synchronize class link on the linked interactive content if present
       if (current.source?.type && current.source?.type !== 'none' && current.source?.id) {
-        const table = current.source.type === 'assignment' ? 'assignments' : 'video_assessments';
+        const table = current.source.type === 'task' ? 'tasks' : (current.source.type === 'assignment' ? 'assignments' : 'video_assessments');
         const item = await storage.table(table).get(current.source.id);
         if (item) {
           await syncContentClassLink(item, current.source.type, course.id);
@@ -398,6 +444,11 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
   }
 
   // Load interactive items
+  storage.table('tasks').toArray().then(items => {
+    interactiveTasks = items;
+    updateSourcePicker();
+  }).catch(() => {});
+
   storage.table('assignments').toArray().then(items => {
     interactiveAssignments = items;
     updateSourcePicker();

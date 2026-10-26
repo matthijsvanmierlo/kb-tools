@@ -1,4 +1,5 @@
 import 'fake-indexeddb/auto';
+import crypto from 'node:crypto';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createRelayServer } from '../server/relay/index.js';
 import { hashToken } from '../server/relay/auth.js';
@@ -249,19 +250,19 @@ describe('Phase 36: Relay Sync UX, Deterministic Feeds, and CDN Media Offloading
 
     it('accepts authenticated presign and allows upload and static retrieval', async () => {
       const transport = new RelayTransport({ baseUrl: relayUrl, token: teacherToken });
-      const hash = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+      const testBytes = new Uint8Array([1, 2, 3, 4]);
+      const hash = crypto.createHash('sha256').update(testBytes).digest('hex');
       const presigned = await transport.presignMediaUpload({
         sha256: hash,
         mime: 'image/webp',
         ext: 'webp',
-        size: 4
+        size: testBytes.byteLength
       });
 
       expect(presigned.upload_url).toBeTruthy();
       expect(presigned.public_url).toBeTruthy();
 
       // Perform upload
-      const testBytes = new Uint8Array([1, 2, 3, 4]);
       const uploadRes = await fetch(presigned.upload_url, {
         method: presigned.method || 'PUT',
         headers: { 'Content-Type': 'image/webp' },

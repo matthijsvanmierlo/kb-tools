@@ -216,12 +216,15 @@ export const RosterRowSchema = z.object({
 export const GradebookAssignmentSchema = z.object({
   id: z.string().uuid(),
   course_id: z.string().uuid(),
-  term_id: z.string(),
-  category_id: z.string(),
+  term_id: z.string().nullable().optional(),
+  category_id: z.string().nullable().optional(),
   title: z.string().min(1),
-  due_date: z.string(),
+  due_date: z.string().optional().default(''),
   max_score: z.number().positive().default(100),
-  rubric_id: z.string().optional(),
+  scoring: z.enum(['points', 'proficiency']).optional().default('points'),
+  standard_ids: z.array(z.string()).optional(),
+  source: z.object({ type: z.string(), id: z.string() }).nullable().optional(),
+  rubric_id: z.string().nullable().optional(),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
   is_demo: z.boolean().optional()
@@ -236,10 +239,169 @@ export const GradebookGradeSchema = z.object({
   status: z.enum(['submitted', 'missing', 'late', 'exempt']).default('submitted'),
   days_late: z.number().nonnegative().default(0),
   rubric_eval: z.record(z.string(), z.string()).optional(), // criterion_id -> tier_id
+  rubric_comments: z.record(z.string(), z.string()).optional(),
+  standard_scores: z.record(z.string(), z.string()).optional(),
+  standard_comments: z.record(z.string(), z.string()).optional(),
   feedback: z.string().optional(),
+  feedback_link: z.string().nullable().optional(),
+  source_submission_id: z.string().nullable().optional(),
   created_at: z.string().optional(),
   updated_at: z.string().optional(),
   is_demo: z.boolean().optional()
+});
+
+// --- Tasks (Assignments) & Drawing Schemas ---
+
+export const CodeCommentSchema = z.object({
+  id: z.string(),
+  line: z.number().int().positive(),
+  end_line: z.number().int().positive().optional(),
+  text: z.string(),
+  created_at: z.string().optional()
+});
+
+export const DrawStrokeElementSchema = z.object({
+  id: z.string(),
+  type: z.literal('stroke'),
+  color: z.string(),
+  size: z.number(),
+  points: z.array(z.array(z.number()))
+});
+
+export const DrawShapeElementSchema = z.object({
+  id: z.string(),
+  type: z.literal('shape'),
+  shape: z.enum(['rect', 'ellipse', 'line', 'arrow']),
+  x: z.number(),
+  y: z.number(),
+  w: z.number(),
+  h: z.number(),
+  color: z.string(),
+  fill: z.boolean().optional(),
+  size: z.number().optional()
+});
+
+export const DrawTextElementSchema = z.object({
+  id: z.string(),
+  type: z.literal('text'),
+  x: z.number(),
+  y: z.number(),
+  text: z.string(),
+  color: z.string(),
+  fontSize: z.number()
+});
+
+export const DrawElementSchema = z.union([
+  DrawStrokeElementSchema,
+  DrawShapeElementSchema,
+  DrawTextElementSchema
+]);
+
+export const DrawDocSchema = z.object({
+  version: z.number().default(2),
+  width: z.number().default(1000),
+  height: z.number().default(600),
+  elements: z.array(DrawElementSchema).default([]),
+  compressed: z.string().optional(),
+  png_ref: z.string().optional(),
+  png_data: z.string().optional()
+});
+
+export function normalizeSketchData(data) {
+  if (!data) return { version: 2, width: 1000, height: 600, elements: [] };
+  if (data.elements) return data;
+  const strokes = data.strokes || data.lines;
+  if (Array.isArray(strokes)) {
+    const elements = strokes.map((s, idx) => ({
+      id: s.id || `stroke-${idx}`,
+      type: 'stroke',
+      color: s.color || data.color || '#000000',
+      size: s.size || s.width || data.width || 3,
+      points: Array.isArray(s) ? s : (s.points || [])
+    }));
+    return {
+      version: 2,
+      width: data.width || 1000,
+      height: data.height || 600,
+      elements
+    };
+  }
+  return { version: 2, width: 1000, height: 600, elements: [] };
+}
+
+export const TaskCodeFileSchema = z.object({
+  id: z.string(),
+  filename: z.string(),
+  language: z.string(),
+  body: z.string(),
+  origin: z.enum(['editor', 'upload']).default('editor')
+});
+
+export const TaskAttachmentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  mime: z.string(),
+  size: z.number(),
+  sha256: z.string().optional(),
+  ref: z.string() // kb-cdn+aes:// or data:
+});
+
+export const TaskSubmissionContentSchema = z.object({
+  text_md: z.string().optional().default(''),
+  code: z.array(TaskCodeFileSchema).optional().default([]),
+  attachments: z.array(TaskAttachmentSchema).optional().default([]),
+  drawing: DrawDocSchema.nullable().optional()
+});
+
+export const TaskSchema = z.object({
+  id: z.string(),
+  version: z.number().default(1),
+  title: z.string().min(1),
+  description: z.string().optional().default(''),
+  class_id: z.string().nullable().optional(),
+  gradebook: z.object({
+    course_id: z.string().nullable().optional(),
+    category_id: z.string().nullable().optional(),
+    column_id: z.string().nullable().optional(),
+    gradebook_assignment_id: z.string().nullable().optional()
+  }).optional(),
+  grading: z.object({
+    scoring: z.enum(['points', 'proficiency']).default('points'),
+    max_points: z.number().default(100),
+    rubric_id: z.string().nullable().optional(),
+    standard_ids: z.array(z.string()).default([])
+  }).optional(),
+  submission_types: z.object({
+    text: z.object({ enabled: z.boolean().default(true) }).optional(),
+    code: z.object({
+      enabled: z.boolean().default(false),
+      languages: z.array(z.string()).default(['python', 'javascript']),
+      default_language: z.string().default('python'),
+      filename_hint: z.string().optional()
+    }).optional(),
+    code_files: z.object({
+      enabled: z.boolean().default(false),
+      accept: z.array(z.string()).default(['.py', '.js']),
+      max_files: z.number().default(5)
+    }).optional(),
+    files: z.object({
+      enabled: z.boolean().default(false),
+      accept: z.array(z.string()).default(['.pdf', '.png', '.jpg']),
+      max_files: z.number().default(3),
+      max_mb: z.number().default(25)
+    }).optional(),
+    drawing: z.object({ enabled: z.boolean().default(false) }).optional()
+  }).optional(),
+  settings: z.object({
+    due_date: z.string().optional().default(''),
+    due_time: z.string().optional().default(''),
+    require_access_code: z.boolean().default(true),
+    allow_resubmit: z.boolean().default(true),
+    release_feedback_immediately: z.boolean().default(true)
+  }).optional(),
+  publish: z.any().nullable().optional(),
+  created_at: z.string().optional(),
+  updated_at: z.string().optional()
 });
 
 // --- 2. CSV Header Normalization ---

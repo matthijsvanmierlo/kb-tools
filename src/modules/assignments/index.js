@@ -1,3 +1,6 @@
+/**
+ * Branded "Assessments" in the UI; internal identifiers keep the historical name for data compatibility.
+ */
 import { storage } from '../../core/storage.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { toast } from '../../utils/toast.js';
@@ -13,40 +16,40 @@ import { ContentImporter } from '../../core/content-importer.js';
 import { normalizeSharedEnvelope } from '../../core/shared-payload.js';
 
 /**
- * Assignments Module Controller (KB-ASSIGN-000)
- * Routes: #/assignments (library), #/assignments/edit, #/assignments/take, #/assignments/submissions
+ * Assessments Module Controller (KB-ASSIGN-000)
+ * Routes: #/assessments (library), #/assessments/edit, #/assessments/take, #/assessments/submissions
  */
 export async function renderAssignmentsView(params, router, container) {
   await ensureSampleAssignment();
-  const hash = window.location.hash || '#/assignments';
+  const hash = window.location.hash || '#/assessments';
 
-  if (hash.startsWith('#/assignments/take')) {
+  if (hash.startsWith('#/assessments/take') || hash.startsWith('#/assignments/take')) {
     const { renderTakeView } = await import('./take.js');
     return renderTakeView(params, router, container);
   }
 
-  if (hash.startsWith('#/assignments/edit')) {
+  if (hash.startsWith('#/assessments/edit') || hash.startsWith('#/assignments/edit')) {
     let assignment = params.id ? await storage.table('assignments').get(params.id) : null;
     if (params.id && !assignment) {
-      toast.warning('Assignment not found.');
-      router.navigate('#/assignments');
+      toast.warning('Assessment not found.');
+      router.navigate('#/assessments');
       return;
     }
     if (!assignment) {
       assignment = createBlankAssignment();
       await storage.table('assignments').put(assignment);
       // Keep the URL pointing at the saved record so reloads don't create duplicates
-      history.replaceState(null, '', `#/assignments/edit?id=${assignment.id}`);
+      history.replaceState(null, '', `#/assessments/edit?id=${assignment.id}`);
     }
     const { renderEditor } = await import('./editor.js');
     return renderEditor(assignment, router, container);
   }
 
-  if (hash.startsWith('#/assignments/submissions')) {
+  if (hash.startsWith('#/assessments/submissions') || hash.startsWith('#/assignments/submissions')) {
     const assignment = params.id ? await storage.table('assignments').get(params.id) : null;
     if (!assignment) {
-      toast.warning('Assignment not found.');
-      router.navigate('#/assignments');
+      toast.warning('Assessment not found.');
+      router.navigate('#/assessments');
       return;
     }
     const { renderSubmissions } = await import('./submissions.js');
@@ -88,14 +91,14 @@ async function renderLibrary(container) {
 
   const library = new ProjectLibraryView({
     moduleType: 'assignments',
-    title: 'Assignments',
-    itemTypeName: 'Assignment',
+    title: 'Assessments',
+    itemTypeName: 'Assessment',
     tableName: 'assignments',
-    createRoute: '#/assignments/edit',
+    createRoute: '#/assessments/edit',
     accentColor: '#d97706',
     iconName: 'ui-checks',
-    getOpenUrl: (item) => `#/assignments/edit?id=${item.id}`,
-    getEditUrl: (item) => `#/assignments/edit?id=${item.id}`,
+    getOpenUrl: (item) => `#/assessments/edit?id=${item.id}`,
+    getEditUrl: (item) => `#/assessments/edit?id=${item.id}`,
     getMetadataSummary: (item) => {
       const n = item.questions?.length || 0;
       const sub = counts.get(item.id) || 0;
@@ -103,8 +106,8 @@ async function renderLibrary(container) {
     },
     onImport: () => {
       CSVImportDialog.open({
-        title: 'Import Assignment',
-        subtitle: 'Upload a .kbshare assignment file, CSV/JSON file, or paste rows from Google Sheets or Excel.',
+        title: 'Import Assessment',
+        subtitle: 'Upload a .kbshare assessment file, CSV/JSON file, or paste rows from Google Sheets or Excel.',
         templateFilename: 'assignment_template.csv',
         templateContent: ASSIGNMENT_CSV_TEMPLATE,
         schema: AssignmentQuestionRowSchema,
@@ -117,7 +120,7 @@ async function renderLibrary(container) {
               classId: activeClass,
               filename
             });
-            toast.success(`Imported assignment "${res.title}" with ${res.count} questions from .kbshare!`);
+            toast.success(`Imported assessment "${res.title}" with ${res.count} questions from .kbshare!`);
           } else if (isJson) {
             const parsed = normalizeSharedEnvelope({ type: 'assignment', payload: resultData }).payload;
             const now = new Date().toISOString();
@@ -125,17 +128,17 @@ async function renderLibrary(container) {
               ...createBlankAssignment(),
               ...parsed,
               id: generateUUID(),
-              title: parsed.title || (filename || 'Imported Assignment').replace(/\.[^/.]+$/, ''),
+              title: parsed.title || (filename || 'Imported Assessment').replace(/\.[^/.]+$/, ''),
               class_id: activeClass || parsed.class_id || null,
               created_at: now,
               updated_at: now
             };
             await storage.table('assignments').put(newAsg);
-            toast.success(`Imported assignment "${newAsg.title}" with ${newAsg.questions?.length || 0} questions from JSON!`);
+            toast.success(`Imported assessment "${newAsg.title}" with ${newAsg.questions?.length || 0} questions from JSON!`);
           } else {
-            let title = (filename || 'Imported Assignment').replace(/\.[^/.]+$/, '');
-            if (title === 'pasted_data') title = 'Pasted Assignment';
-            else if (title === 'assignment_template' || title === 'template') title = 'Assignment';
+            let title = (filename || 'Imported Assessment').replace(/\.[^/.]+$/, '');
+            if (title === 'pasted_data') title = 'Pasted Assessment';
+            else if (title === 'assignment_template' || title === 'template') title = 'Assessment';
             else {
               title = title.replace(/[_\-]+/g, ' ');
               title = title.charAt(0).toUpperCase() + title.slice(1);
@@ -150,7 +153,7 @@ async function renderLibrary(container) {
               updated_at: now
             };
             await storage.table('assignments').put(newAsg);
-            toast.success(`Imported assignment "${title}" with ${newAsg.questions.length} questions!`);
+            toast.success(`Imported assessment "${title}" with ${newAsg.questions.length} questions!`);
           }
           library.searchQuery = '';
           library.selectedClassId = activeClass;
@@ -169,7 +172,7 @@ async function renderLibrary(container) {
       const copy = {
         ...JSON.parse(JSON.stringify(item)),
         id: generateUUID(),
-        title: `${item.title || 'Assignment'} (Copy)`,
+        title: `${item.title || 'Assessment'} (Copy)`,
         questions: (item.questions || []).map(cloneQuestion),
         gradebook: { ...(item.gradebook || {}), column_id: null },
         publish: null,
@@ -177,7 +180,7 @@ async function renderLibrary(container) {
         updated_at: now
       };
       await storage.table('assignments').put(copy);
-      toast.success('Assignment duplicated!');
+      toast.success('Assessment duplicated!');
       library.render(container);
     }
   });

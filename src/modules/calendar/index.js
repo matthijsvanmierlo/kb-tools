@@ -18,13 +18,15 @@ export function getEventLaunchUrl(ev, isStudent = false) {
   if (!ev) return isStudent ? '#/student' : '#/classes';
   const sourceId = encodeURIComponent(ev.sourceId || ev.id || '');
   if (isStudent) {
-    if (ev.kind === 'assignment') return `#/assignments/take?id=${sourceId}`;
+    if (ev.kind === 'task') return `#/assignments/work?itemId=${sourceId}`;
+    if (ev.kind === 'assignment') return `#/assessments/take?id=${sourceId}`;
     if (ev.kind === 'video') return `#/video/kiosk?id=${sourceId}`;
     if (ev.kind === 'flashcards') return `#/flashcards/study?id=${sourceId}`;
     if (ev.kind === 'timeline') return `#/timeline/view?id=${sourceId}`;
     return ev.courseId ? `#/student/course?id=${encodeURIComponent(ev.courseId)}` : '#/student';
   }
-  if (ev.kind === 'assignment') return `#/assignments/edit?id=${sourceId}`;
+  if (ev.kind === 'task') return `#/assignments/create?id=${sourceId}`;
+  if (ev.kind === 'assignment') return `#/assessments/edit?id=${sourceId}`;
   if (ev.kind === 'video') return `#/video/edit?id=${sourceId}`;
   if (ev.kind === 'flashcards') return `#/flashcards/edit?id=${sourceId}`;
   if (ev.kind === 'timeline') return `#/timeline/view?id=${sourceId}`;
@@ -34,10 +36,13 @@ export function getEventLaunchUrl(ev, isStudent = false) {
 export function getEventActionLabel(ev, isStudent = false) {
   if (!ev) return 'Open';
   if (!isStudent) {
+    if (ev.kind === 'task') return 'Edit Assignment';
+    if (ev.kind === 'assignment') return 'Edit Assessment';
     const kindName = ev.kind ? (ev.kind.charAt(0).toUpperCase() + ev.kind.slice(1)) : 'Lesson';
     return `Edit ${kindName}`;
   }
-  if (ev.kind === 'assignment') return 'Start Assignment';
+  if (ev.kind === 'task') return 'Work on Assignment';
+  if (ev.kind === 'assignment') return 'Start Assessment';
   if (ev.kind === 'video') return 'Watch Video Lesson';
   if (ev.kind === 'flashcards') return 'Study Flashcards';
   if (ev.kind === 'timeline') return 'Explore Timeline';
@@ -45,6 +50,7 @@ export function getEventActionLabel(ev, isStudent = false) {
 }
 
 export function getEventIcon(kind) {
+  if (kind === 'task') return 'journal-text';
   if (kind === 'assignment') return 'file-earmark-check';
   if (kind === 'video') return 'play-circle';
   if (kind === 'flashcards') return 'collection';

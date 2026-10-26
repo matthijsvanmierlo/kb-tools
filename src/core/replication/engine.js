@@ -19,6 +19,7 @@ import { bytesToB64, b64ToBytes } from '../submission-crypto.js';
 export const SYNC_TABLES = [
   'flashcards', 'timelines', 'video_assessments', 'gradebook_courses', 'gradebook_students',
   'gradebook_assignments', 'gradebook_grades', 'gradebook_rubrics', 'assignments', 'assignment_submissions',
+  'tasks', 'task_submissions',
   'course_units', 'course_items'
 ];
 const SYNCED = new Set(SYNC_TABLES);
@@ -268,7 +269,7 @@ export class ReplicationEngine {
 
     const incomingWins = !local || this._newer(op.record, sourceDevice, local);
     let conflict = 0;
-    const conflictTables = ['gradebook_grades', 'assignments', 'gradebook_assignments'];
+    const conflictTables = ['gradebook_grades', 'assignments', 'tasks', 'gradebook_assignments'];
     if (local && conflictTables.includes(op.table) && pending.has(`${op.table}|${keyString(op.key)}`)
       && comparable(local) !== comparable(op.record)) {
       await this._recordConflict(op, local, incomingWins, sourceDevice);

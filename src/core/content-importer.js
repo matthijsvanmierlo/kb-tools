@@ -388,9 +388,38 @@ export class ContentImporter {
       };
     }
 
+    if (type === 'task') {
+      const title = payload.title || cleanFilenameTitle || 'Imported Assignment';
+      const record = {
+        version: 1,
+        id: generateUUID(),
+        title: Sanitizer.escapeHTML(title),
+        description: payload.description ? Sanitizer.escapeHTML(payload.description) : '',
+        class_id: classId || null,
+        submission_types: payload.submission_types || { text: { enabled: true } },
+        grading: payload.grading || { scoring: 'points', max_points: 100 },
+        settings: payload.settings || {},
+        gradebook: { ...(payload.gradebook || {}), column_id: null },
+        publish: null,
+        created_at: now,
+        updated_at: now
+      };
+
+      await storage.table('tasks').put(record);
+      return {
+        success: true,
+        type: 'task',
+        table: 'tasks',
+        id: record.id,
+        title: record.title,
+        count: 1,
+        record
+      };
+    }
+
     if (type === 'assignment') {
       const questions = Array.isArray(payload.questions) ? payload.questions : [];
-      const title = payload.title || cleanFilenameTitle || 'Imported Assignment';
+      const title = payload.title || cleanFilenameTitle || 'Imported Assessment';
       const record = {
         version: 1,
         id: generateUUID(),

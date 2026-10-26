@@ -92,9 +92,9 @@ export function buildClickableHtmlFile({
   const now = new Date().toLocaleString();
 
   const typeLabels = {
-    assignment: 'Assignment Package',
+    assignment: 'Assessment Package',
     submission: 'Student Submission',
-    feedback: 'Assignment Feedback',
+    feedback: 'Assessment Feedback',
     report: 'Grade Report',
     lesson: 'KennisBoost Lesson'
   };
@@ -289,7 +289,7 @@ ${serialized}
           }
 
           if (payloadType === 'assignment') {
-            targetUrl = targetUrl.replace(/#.*$/, '') + '#/assignments/take';
+            targetUrl = targetUrl.replace(/#.*$/, '') + '#/assessments/take';
           } else if (payloadType === 'feedback') {
             targetUrl = targetUrl.replace(/#.*$/, '') + '#/student/gradebook';
           } else if (payloadType === 'submission') {

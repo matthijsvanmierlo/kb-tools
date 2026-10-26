@@ -16,6 +16,13 @@ export async function getDue(kind, id) {
         time: a?.settings?.due_time || null
       };
     }
+    if (kind === 'task') {
+      const t = await storage.table('tasks').get(id);
+      return {
+        date: t?.due_date || t?.settings?.due_date || null,
+        time: t?.due_time || t?.settings?.due_time || null
+      };
+    }
     if (kind === 'video') {
       const v = await storage.table('video_assessments').get(id);
       return {
@@ -71,6 +78,18 @@ export async function setDue(kind, id, { date = null, time = null } = {}) {
         await storage.table('assignments').put(a);
         linkedClassId = a.gradebook?.course_id || a.class_id || null;
       }
+    } else if (kind === 'task') {
+      const t = await storage.table('tasks').get(id);
+      if (t) {
+        t.due_date = normalizedDate;
+        t.due_time = normalizedTime;
+        t.settings = t.settings || {};
+        t.settings.due_date = normalizedDate;
+        t.settings.due_time = normalizedTime;
+        t.updated_at = now;
+        await storage.table('tasks').put(t);
+        linkedClassId = t.class_id || t.gradebook?.course_id || null;
+      }
     } else if (kind === 'video') {
       const v = await storage.table('video_assessments').get(id);
       if (v) {
@@ -112,7 +131,7 @@ export async function setDue(kind, id, { date = null, time = null } = {}) {
 
     // Synchronize linked gradebook assignment if exists
     try {
-      const srcType = kind === 'video' ? 'video' : (kind === 'assignment' ? 'assignment' : kind);
+      const srcType = kind === 'video' ? 'video' : (kind === 'assignment' ? 'assignment' : (kind === 'task' ? 'task' : kind));
       const cols = await storage.table('gradebook_assignments').toArray();
       const linked = cols.filter(c => (c.source?.type === srcType && c.source?.id === id) || (kind === 'assignment' && c.id === id));
       for (const col of linked) {
@@ -125,7 +144,7 @@ export async function setDue(kind, id, { date = null, time = null } = {}) {
     // Synchronize course_items referencing this item
     try {
       const cItems = await storage.table('course_items').toArray();
-      const matchingCItems = cItems.filter(item => item.ref_id === id && (item.kind === kind || (kind === 'assignment' && item.kind === 'assignments')));
+      const matchingCItems = cItems.filter(item => item.ref_id === id && (item.kind === kind || (kind === 'assignment' && item.kind === 'assignments') || (kind === 'task' && item.kind === 'tasks')));
       for (const item of matchingCItems) {
         item.due_date = normalizedDate;
         item.due_time = normalizedTime;

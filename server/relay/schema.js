@@ -83,6 +83,19 @@ CREATE TABLE IF NOT EXISTS course_feeds (
   FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS relay_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS drop_media (
+  drop_id TEXT NOT NULL,
+  key TEXT PRIMARY KEY,
+  size INTEGER NOT NULL,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (drop_id) REFERENCES drops(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_sync_chunks_ws ON sync_chunks(workspace_id, seq);
 CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at);
 CREATE INDEX IF NOT EXISTS idx_sync_chunks_created ON sync_chunks(created_at);
@@ -90,4 +103,5 @@ CREATE INDEX IF NOT EXISTS idx_payloads_expires ON payloads(expires_at);
 CREATE INDEX IF NOT EXISTS idx_drops_expires ON drops(expires_at);
 CREATE INDEX IF NOT EXISTS idx_submissions_drop ON submissions(drop_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_course_feeds_updated ON course_feeds(updated_at);
+CREATE INDEX IF NOT EXISTS idx_drop_media_drop ON drop_media(drop_id);
 `;

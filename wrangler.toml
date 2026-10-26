@@ -28,3 +28,4 @@ crons = ["0 3 * * *"]
 [vars]
 KB_RELAY_ORIGINS = "*"
 KB_RELAY_RETENTION_DAYS = "180"
+# KB_MEDIA_SIGNING_SECRET = "<custom-media-signing-secret>"

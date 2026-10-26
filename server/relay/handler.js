@@ -11,7 +11,32 @@ export const MAX_SUBMISSION_SIZE = 256 * 1024; // 256 KB
 export const MAX_DRAFT_SIZE = 64 * 1024; // 64 KB
 export const MAX_SYNC_CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
 export const MAX_SYNC_SNAPSHOT_SIZE = 32 * 1024 * 1024; // 32 MB
+export const MAX_STUDENT_MEDIA_SIZE = 25 * 1024 * 1024; // 25 MB
 export const DEFAULT_RETENTION_DAYS = 180;
+
+export const ALLOWED_MEDIA_EXTS = new Set([
+  'bin', 'enc', 'webp', 'png', 'jpg', 'jpeg', 'gif', 'svg',
+  'pdf', 'txt', 'md', 'csv', 'json', 'zip', 'html', 'css',
+  'js', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cpp', 'h', 'hpp',
+  'cs', 'go', 'rs', 'rb', 'sql', 'xml', 'yaml', 'yml',
+  'mp3', 'wav', 'ogg', 'webm', 'mp4', 'm4a', 'kbsub', 'kbshare'
+]);
+
+export function isAllowedMime(mime) {
+  if (!mime) return false;
+  const m = String(mime).toLowerCase().split(';')[0].trim();
+  return (
+    m.startsWith('image/') ||
+    m.startsWith('audio/') ||
+    m.startsWith('video/') ||
+    m.startsWith('text/') ||
+    m === 'application/pdf' ||
+    m === 'application/zip' ||
+    m === 'application/x-zip-compressed' ||
+    m === 'application/json' ||
+    m === 'application/octet-stream'
+  );
+}
 
 const DEVICE_ID_RE = /^[0-9A-Za-z-]{8,64}$/;
 const DRAFT_ID_RE = /^[0-9a-f]{64}$/;
@@ -98,8 +123,26 @@ export function createRelayFetchHandler(options = {}) {
     allowedOrigins = ['*'],
     cdnConfig = {},
     mediaStore = null,
-    presignHook = null
+    presignHook = null,
+    mediaSigningSecret = null
   } = options;
+
+  let cachedSigningSecret = mediaSigningSecret ||
+    (typeof process !== 'undefined' && process.env?.KB_MEDIA_SIGNING_SECRET) || null;
+
+  async function resolveSigningSecret() {
+    if (cachedSigningSecret) return cachedSigningSecret;
+    if (typeof db?.getMediaSigningSecret === 'function') {
+      try {
+        cachedSigningSecret = await db.getMediaSigningSecret();
+        if (cachedSigningSecret) return cachedSigningSecret;
+      } catch (e) {
+        // fallback
+      }
+    }
+    cachedSigningSecret = 'kb-media-secret';
+    return cachedSigningSecret;
+  }
 
   const cdnEnabled = Boolean(
     cdnConfig.enabled ||
@@ -251,7 +294,11 @@ export function createRelayFetchHandler(options = {}) {
         }
 
         // Direct store fallback (R2, Fs, or Memory)
-        const uploadUrl = `${proto}://${host}/api/v1/media/upload?key=${encodeURIComponent(filename)}`;
+        const exp = Math.floor(Date.now() / 1000) + 3600;
+        const signingSecret = await resolveSigningSecret();
+        const sig = createHmac('sha256', signingSecret).update(`${filename}|${exp}`).digest('hex');
+
+        const uploadUrl = `${proto}://${host}/api/v1/media/upload?key=${encodeURIComponent(filename)}&exp=${exp}&sig=${sig}`;
         const publicUrl = publicBase ? `${publicBase}/${filename}` : `${proto}://${host}/api/v1/media/file/${encodeURIComponent(filename)}`;
         return json(200, {
           upload_url: uploadUrl,
@@ -261,12 +308,33 @@ export function createRelayFetchHandler(options = {}) {
         });
       }
 
-      // PUT /media/upload?key=<filename>
+      // PUT /media/upload?key=<filename>&exp=<unix>&sig=<hmac>[&drop_id=<id>]
       if (request.method === 'PUT' && pathname === '/media/upload') {
         const key = url.searchParams.get('key');
         if (!key || !/^[a-f0-9]{64}\.[a-z0-9]+$/i.test(key)) {
           return error(400, 'Valid key parameter required');
         }
+
+        const expStr = url.searchParams.get('exp');
+        const sig = url.searchParams.get('sig');
+        const dropId = url.searchParams.get('drop_id');
+
+        if (!expStr || !sig) {
+          return error(401, 'Unauthorized: exp and sig required');
+        }
+        const exp = parseInt(expStr, 10);
+        if (isNaN(exp) || Math.floor(Date.now() / 1000) > exp) {
+          return error(403, 'Media upload URL has expired');
+        }
+
+        const signingSecret = await resolveSigningSecret();
+        const expectedSigPlain = createHmac('sha256', signingSecret).update(`${key}|${exp}`).digest('hex');
+        const expectedSigDrop = dropId ? createHmac('sha256', signingSecret).update(`${key}|${exp}|${dropId}`).digest('hex') : null;
+
+        if (sig !== expectedSigPlain && (!expectedSigDrop || sig !== expectedSigDrop)) {
+          return error(403, 'Invalid media upload signature');
+        }
+
         const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
         if (contentLength > MAX_SYNC_SNAPSHOT_SIZE) {
           return error(413, 'Payload too large');
@@ -275,10 +343,27 @@ export function createRelayFetchHandler(options = {}) {
         if (arrayBuf.byteLength > MAX_SYNC_SNAPSHOT_SIZE) {
           return error(413, 'Payload too large');
         }
+
+        // Verify body sha256 matches key
+        const expectedHash = key.split('.')[0].toLowerCase();
+        const actualHash = createHash('sha256').update(new Uint8Array(arrayBuf)).digest('hex').toLowerCase();
+        if (actualHash !== expectedHash) {
+          return error(400, 'Body sha256 does not match key');
+        }
+
         const contentType = request.headers.get('content-type') || 'application/octet-stream';
         if (mediaStore) {
           await mediaStore.put(key, new Uint8Array(arrayBuf), contentType);
         }
+
+        if (dropId) {
+          if (typeof db?.recordMediaUpload === 'function') {
+            await db.recordMediaUpload({ dropId, key, size: arrayBuf.byteLength });
+          } else if (typeof db?.dropMedia?.record === 'function') {
+            await db.dropMedia.record({ dropId, key, size: arrayBuf.byteLength });
+          }
+        }
+
         return json(200, { ok: true, key });
       }
 
@@ -467,6 +552,84 @@ export function createRelayFetchHandler(options = {}) {
           return error(404, 'No saved draft');
         }
         return json(200, { ciphertext: row.ciphertext, updated_at: row.updated_at });
+      }
+
+      // -------------------------------------------------------------
+      // Student media presign (drop-authorized CDN upload)
+      // -------------------------------------------------------------
+      const dropMediaPresignMatch = pathname.match(/^\/drops\/([A-Za-z0-9_\-]+)\/media\/presign$/);
+      if (request.method === 'POST' && dropMediaPresignMatch) {
+        const [, dropId] = dropMediaPresignMatch;
+        if (!cdnEnabled) {
+          return error(501, 'Media CDN offloading is not configured on this relay server');
+        }
+        if (!draftLimiter.isAllowed(clientIp)) {
+          return error(429, 'Rate limit exceeded. Please wait a minute.');
+        }
+        const drop = await db.drops.get(dropId);
+        if (!drop) {
+          return error(404, 'Drop box not found');
+        }
+        if (drop.expired) {
+          return error(410, 'Drop box expired');
+        }
+        if (!dropSecretOk(drop)) {
+          return error(403, 'Forbidden: missing or wrong drop secret');
+        }
+
+        const parsed = await readJson(16384);
+        const { sha256: fileHash, mime, ext, size } = parsed || {};
+        if (!fileHash || !/^[a-f0-9]{64}$/i.test(fileHash)) {
+          return error(400, 'Valid 64-hex sha256 required');
+        }
+        const fileSize = parseInt(size, 10);
+        if (isNaN(fileSize) || fileSize <= 0) {
+          return error(400, 'Valid positive size required');
+        }
+        if (fileSize > MAX_STUDENT_MEDIA_SIZE) {
+          return error(413, 'File size exceeds 25MB limit');
+        }
+
+        const safeExt = String(ext || (mime === 'image/webp' ? 'webp' : mime === 'audio/webm' ? 'webm' : 'bin')).toLowerCase().replace(/[^a-z0-9]/gi, '');
+        if (!ALLOWED_MEDIA_EXTS.has(safeExt)) {
+          return error(400, `File extension .${safeExt} is not permitted`);
+        }
+        const safeMime = String(mime || 'application/octet-stream').toLowerCase().split(';')[0].trim();
+        if (!isAllowedMime(safeMime)) {
+          return error(400, `Content-Type ${safeMime} is not permitted`);
+        }
+
+        try {
+          if (typeof db?.checkMediaQuota === 'function') {
+            await db.checkMediaQuota(dropId, fileSize);
+          } else if (typeof db?.dropMedia?.checkQuota === 'function') {
+            await db.dropMedia.checkQuota(dropId, fileSize);
+          }
+        } catch (err) {
+          if (err.code === 'QUOTA_EXCEEDED') {
+            return error(413, 'Media quota exceeded for this drop box');
+          }
+          throw err;
+        }
+
+        const filename = `${fileHash}.${safeExt}`;
+        const host = request.headers.get('host') || url.host || `localhost:${DEFAULT_PORT}`;
+        const proto = url.protocol === 'https:' ? 'https' : (request.headers.get('x-forwarded-proto') || 'http');
+        const publicBase = (cdnConfig.publicUrl || '').replace(/\/+$/, '');
+
+        const exp = Math.floor(Date.now() / 1000) + 3600;
+        const signingSecret = await resolveSigningSecret();
+        const sig = createHmac('sha256', signingSecret).update(`${filename}|${exp}|${dropId}`).digest('hex');
+
+        const uploadUrl = `${proto}://${host}/api/v1/media/upload?key=${encodeURIComponent(filename)}&exp=${exp}&sig=${sig}&drop_id=${encodeURIComponent(dropId)}`;
+        const publicUrl = publicBase ? `${publicBase}/${filename}` : `${proto}://${host}/api/v1/media/file/${encodeURIComponent(filename)}`;
+
+        return json(200, {
+          upload_url: uploadUrl,
+          public_url: publicUrl,
+          method: 'PUT',
+          headers: { 'Content-Type': mime || 'application/octet-stream' }
+        });
       }
 
       // -------------------------------------------------------------

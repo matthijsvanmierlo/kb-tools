@@ -8,11 +8,13 @@ import { QrAssembler } from '../src/core/qr-transfer.js';
 import { scanQrFromSource } from '../src/components/qr-handoff.js';
 import { buildCourseFeed } from '../src/core/course-feed.js';
 import { mergeCourseFeed } from '../src/modules/student/course-store.js';
+import { loadCalendarEvents } from '../src/modules/calendar/model.js';
 
 describe('Comprehensive Content Sharing Matrix', () => {
   beforeEach(async () => {
     await storage.table('flashcards').clear();
     await storage.table('assignments').clear();
+    await storage.table('tasks').clear().catch(() => {});
     await storage.table('timelines').clear();
     await storage.table('video_assessments').clear();
     await storage.table('gradebook_courses').clear();
@@ -204,6 +206,23 @@ describe('Comprehensive Content Sharing Matrix', () => {
       expect(saved.title).toBe('World War II Quiz');
       expect(saved.questions[0].prompt).toBe('In which year did WWII end?');
     });
+
+    it('imports task assignments into tasks table', async () => {
+      const taskPayload = {
+        title: 'Shakespeare Essay',
+        description: 'Analyze Hamlet soliloquy.',
+        submission_types: { text: { enabled: true } },
+        grading: { scoring: 'points', max_points: 100 }
+      };
+
+      const res = await ContentImporter.importRecordToLibrary('task', taskPayload);
+      expect(res.success).toBe(true);
+      expect(res.table).toBe('tasks');
+
+      const saved = await storage.table('tasks').get(res.id);
+      expect(saved.title).toBe('Shakespeare Essay');
+      expect(saved.grading.max_points).toBe(100);
+    });
   });
 
   describe('5. Course Feed Packaging & Student Offline Persistence', () => {
@@ -224,20 +243,41 @@ describe('Comprehensive Content Sharing Matrix', () => {
         cards: [{ front: 'Igneous', back: 'Formed from magma' }]
       });
 
-      await storage.table('course_items').put({
-        id: 'item-1',
-        course_id: courseId,
-        title: 'Rock Types Flashcards',
-        kind: 'flashcards',
-        source_id: deckId,
-        order: 1
+      const taskId = 'task-geo-lab';
+      await storage.table('tasks').put({
+        id: taskId,
+        title: 'Mineral Identification Lab',
+        submission_types: { text: { enabled: true }, drawing: { enabled: true } },
+        settings: { due_date: '2026-11-15' },
+        grading: { scoring: 'points', max_points: 50 },
+        publish: { version: 1, salt: 'salt1' }
       });
+
+      await storage.table('course_items').bulkPut([
+        {
+          id: 'item-1',
+          course_id: courseId,
+          title: 'Rock Types Flashcards',
+          kind: 'flashcards',
+          source_id: deckId,
+          order: 1
+        },
+        {
+          id: 'item-2',
+          course_id: courseId,
+          title: 'Mineral Identification Lab',
+          kind: 'task',
+          source_id: taskId,
+          order: 2
+        }
+      ]);
 
       // 1. Teacher builds course feed package
       const feed = await buildCourseFeed(courseId);
-      expect(feed.raw_payload.items).toHaveLength(1);
+      expect(feed.raw_payload.items).toHaveLength(2);
       expect(feed.raw_payload.items[0].payload).toBeDefined();
-      expect(feed.raw_payload.items[0].payload.title).toBe('Rock Types');
+      expect(feed.raw_payload.items[1].payload.kind).toBe('kb-task');
+      expect(feed.raw_payload.items[1].payload.title).toBe('Mineral Identification Lab');
 
       // 2. Student imports course feed package
       const merged = await mergeCourseFeed(feed.raw_payload, { accessCode: 'EARTH3' });
@@ -245,8 +285,12 @@ describe('Comprehensive Content Sharing Matrix', () => {
 
       // Verify student_items received the payload
       const studentItems = await storage.table('student_items').where('course_id').equals(courseId).toArray();
-      expect(studentItems).toHaveLength(1);
-      expect(studentItems[0].payload).toBeDefined();
+      expect(studentItems).toHaveLength(2);
+
+      const taskItem = studentItems.find(it => it.kind === 'task');
+      expect(taskItem).toBeDefined();
+      expect(taskItem.payload.kind).toBe('kb-task');
+      expect(taskItem.payload.submission_types.drawing.enabled).toBe(true);
 
       // Verify local flashcards table received the deck for offline study
       const localDeck = await storage.table('flashcards').get(deckId);
@@ -254,6 +298,32 @@ describe('Comprehensive Content Sharing Matrix', () => {
       expect(localDeck.title).toBe('Rock Types');
       const frontVal = typeof localDeck.cards[0].front === 'object' ? localDeck.cards[0].front.text : localDeck.cards[0].front;
       expect(frontVal).toBe('Igneous');
+    });
+
+    it('aggregates task due dates into calendar events', async () => {
+      const courseId = 'course-art-101';
+      await storage.table('gradebook_courses').put({
+        id: courseId,
+        name: 'Studio Art',
+        color: '#8b5cf6'
+      });
+
+      await storage.table('tasks').put({
+        id: 'task-sketch-1',
+        title: 'Perspective Sketch',
+        class_id: courseId,
+        settings: { due_date: '2026-11-20', due_time: '17:00' },
+        grading: { scoring: 'points', max_points: 40 }
+      });
+
+      const events = await loadCalendarEvents();
+      const taskEvent = events.find(e => e.kind === 'task' && e.title === 'Perspective Sketch');
+
+      expect(taskEvent).toBeDefined();
+      expect(taskEvent.date).toBe('2026-11-20');
+      expect(taskEvent.time).toBe('17:00');
+      expect(taskEvent.points).toBe(40);
+      expect(taskEvent.courseName).toBe('Studio Art');
     });
   });
 });

@@ -673,7 +673,7 @@ export async function renderTakeView(params, router, container) {
       else refreshNavOnly();
     };
 
-    root.querySelector('#take-exit-preview')?.addEventListener('click', () => router.navigate(`#/assignments/edit?id=${payload.assignment_id}`));
+    root.querySelector('#take-exit-preview')?.addEventListener('click', () => router.navigate(`#/assessments/edit?id=${payload.assignment_id}`));
 
     root.querySelectorAll('[data-choice]').forEach(btn => btn.addEventListener('click', () => {
       const id = btn.dataset.choice;
@@ -976,7 +976,7 @@ export async function renderTakeView(params, router, container) {
         ${(preview || isPractice) ? '<div class="flex justify-center"><sl-button id="res-restart" variant="primary"><sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Try again</sl-button></div>' : ''}
       </div>`;
 
-    container.querySelector('#take-exit-preview')?.addEventListener('click', () => router.navigate(`#/assignments/edit?id=${payload.assignment_id}`));
+    container.querySelector('#take-exit-preview')?.addEventListener('click', () => router.navigate(`#/assessments/edit?id=${payload.assignment_id}`));
     container.querySelector('#res-restart')?.addEventListener('click', () => {
       state.answers = {};
       state.checked = {};

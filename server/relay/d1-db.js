@@ -237,6 +237,58 @@ export function createD1Database(d1) {
           updatedAt: row.updated_at
         } : null;
       }
+    },
+
+    async getMediaSigningSecret() {
+      const row = await d1.prepare('SELECT value FROM relay_meta WHERE key = ?').bind('media_signing_secret').first();
+      if (row?.value) return row.value;
+      let secret;
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+        const buf = new Uint8Array(32);
+        crypto.getRandomValues(buf);
+        secret = Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+      } else {
+        const { randomBytes } = await import('node:crypto');
+        secret = randomBytes(32).toString('hex');
+      }
+      await d1.prepare('INSERT OR REPLACE INTO relay_meta (key, value) VALUES (?, ?)')
+        .bind('media_signing_secret', secret)
+        .run();
+      return secret;
+    },
+
+    dropMedia: {
+      async checkQuota(dropId, newBytes, { maxFiles = 100, maxTotalBytes = 100 * 1024 * 1024 } = {}) {
+        const row = await d1.prepare('SELECT count(*) as count, coalesce(sum(size), 0) as total_size FROM drop_media WHERE drop_id = ?').bind(dropId).first();
+        const count = Number(row?.count || 0);
+        const totalSize = Number(row?.total_size || 0);
+        if (count + 1 > maxFiles || totalSize + newBytes > maxTotalBytes) {
+          const err = new Error('DROP_MEDIA_QUOTA_EXCEEDED');
+          err.code = 'QUOTA_EXCEEDED';
+          throw err;
+        }
+        return true;
+      },
+      async record({ dropId, key, size }) {
+        const now = new Date().toISOString();
+        await d1.prepare(`INSERT INTO drop_media (drop_id, key, size, created_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT (key) DO UPDATE SET size = excluded.size`)
+          .bind(dropId, key, size, now)
+          .run();
+        return { dropId, key, size, createdAt: now };
+      },
+      async getStats(dropId) {
+        const row = await d1.prepare('SELECT count(*) as count, coalesce(sum(size), 0) as total_size FROM drop_media WHERE drop_id = ?').bind(dropId).first();
+        return { count: Number(row?.count || 0), totalSize: Number(row?.total_size || 0) };
+      }
+    },
+
+    async checkMediaQuota(dropId, newBytes, opts) {
+      return this.dropMedia.checkQuota(dropId, newBytes, opts);
+    },
+
+    async recordMediaUpload({ dropId, key, size }) {
+      return this.dropMedia.record({ dropId, key, size });
     }
   };
 }

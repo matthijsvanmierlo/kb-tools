@@ -140,6 +140,126 @@ export class StudentLedger {
   }
 
   /**
+   * Ingest student feedback for a task (kind: 'task_feedback').
+   * Merges by [course_id + task_id] and updates the student ledger.
+   *
+   * @param {object} feedbackPayload
+   * @returns {Promise<{ course: object, item: object }>}
+   */
+  static async ingestTaskFeedback(feedbackPayload) {
+    if (!feedbackPayload || typeof feedbackPayload !== 'object') {
+      throw new Error('INVALID_FEEDBACK_PAYLOAD');
+    }
+
+    const now = new Date().toISOString();
+    const cMeta = feedbackPayload.course || {};
+    const taskMeta = feedbackPayload.task || {};
+    const sMeta = feedbackPayload.student || {};
+
+    const courseId = cMeta.id || cMeta.course_id || (cMeta.name ? `course_${String(cMeta.name).toLowerCase().replace(/[^a-z0-9]+/g, '_')}` : 'default_class');
+    const courseName = cMeta.name || 'My Class';
+    const section = cMeta.section || '';
+
+    let course = await storage.table('student_courses').get(courseId).catch(() => null);
+    if (!course) {
+      course = {
+        id: courseId,
+        course_id: courseId,
+        course_name: courseName,
+        section,
+        created_at: now,
+        updated_at: now
+      };
+      await storage.table('student_courses').put(course);
+    }
+
+    const taskId = taskMeta.id || feedbackPayload.task_id || feedbackPayload.assignment_id || generateUUID();
+    let existing = null;
+    const existingArr = await storage.table('student_ledger')
+      .where('[course_id+assignment_id]')
+      .equals([courseId, taskId])
+      .toArray()
+      .catch(() => []);
+
+    if (existingArr?.length) {
+      existing = existingArr[0];
+    } else {
+      const titleTarget = String(taskMeta.title || feedbackPayload.title || '').trim().toLowerCase();
+      if (titleTarget) {
+        const courseEntries = await storage.table('student_ledger').where('course_id').equals(courseId).toArray().catch(() => []);
+        const matched = courseEntries.find(e => String(e.title || '').trim().toLowerCase() === titleTarget);
+        if (matched) existing = matched;
+      }
+    }
+
+    const rawScore = feedbackPayload.grade?.points ?? feedbackPayload.score?.earned ?? null;
+    const maxScore = feedbackPayload.grade?.max_points ?? feedbackPayload.task?.max_points ?? 100;
+    const newScore = {
+      earned: rawScore !== null ? Number(rawScore) : null,
+      possible: Number(maxScore),
+      status: feedbackPayload.grade?.status || 'submitted',
+      scoring: feedbackPayload.task?.scoring || feedbackPayload.grade?.scoring || 'points'
+    };
+    const newOverallFeedback = feedbackPayload.overall_feedback || feedbackPayload.feedback || '';
+
+    const history = Array.isArray(existing?.history) ? [...existing.history] : [];
+    if (existing && existing.score && (
+      existing.score.earned !== newScore.earned ||
+      (existing.overall_feedback || '') !== newOverallFeedback
+    )) {
+      history.push({
+        score: { ...existing.score },
+        overall_feedback: existing.overall_feedback || '',
+        received_at: existing.received_at || existing.updated_at || now,
+        updated_by: 'teacher'
+      });
+    }
+
+    const item = {
+      id: existing?.id || generateUUID(),
+      course_id: courseId,
+      assignment_id: taskId,
+      title: taskMeta.title || feedbackPayload.title || existing?.title || 'Assignment Feedback',
+      item_type: 'task_feedback',
+      student_id: sMeta.student_id || feedbackPayload.student_id || existing?.student_id || '',
+      student_name: sMeta.full_name || feedbackPayload.student_name || existing?.student_name || '',
+      score: newScore,
+      overall_feedback: newOverallFeedback,
+      rubric: feedbackPayload.rubric || existing?.rubric || null,
+      standards: feedbackPayload.grade?.standards || existing?.standards || [],
+      code_files: feedbackPayload.code_files || existing?.code_files || [],
+      drawing: feedbackPayload.drawing || existing?.drawing || null,
+      attachments: feedbackPayload.attachments || existing?.attachments || [],
+      text: feedbackPayload.text || existing?.text || '',
+      history,
+      due_date: taskMeta.due_date || existing?.due_date || null,
+      submitted_at: feedbackPayload.submission?.submitted_at || existing?.submitted_at || null,
+      received_at: feedbackPayload.generated_at || now,
+      receipt_id: existing?.receipt_id || null,
+      submission_text: existing?.submission_text || null,
+      updated_at: now
+    };
+
+    await storage.table('student_ledger').put(item);
+
+    if (item.student_id || item.student_name) {
+      StudentProfile.saveIdentity({
+        studentId: item.student_id,
+        fullName: item.student_name,
+        courseId,
+        courseName,
+        section
+      }).catch(() => {});
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('kb-student-ledger-updated', { detail: { courseId, item } }));
+    }
+
+    return { course, item };
+  }
+
+  /**
    * Ingest a multi-assignment student grade report.
    * Supports both reportPayload.assignments and reportPayload.grades.
    * @param {object} reportPayload

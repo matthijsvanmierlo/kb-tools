@@ -7,9 +7,10 @@ import { storage } from '../../core/storage.js';
  */
 
 export async function loadCalendarEvents({ courseId = null, startDate = null, endDate = null } = {}) {
-  const [courses, assignments, flashcards, timelines, videos, courseItems, gradebookAssignments, studentCourses, studentItems] = await Promise.all([
+  const [courses, assignments, tasks, flashcards, timelines, videos, courseItems, gradebookAssignments, studentCourses, studentItems] = await Promise.all([
     storage.table('gradebook_courses').toArray().catch(() => []),
     storage.table('assignments').toArray().catch(() => []),
+    storage.table('tasks').toArray().catch(() => []),
     storage.table('flashcards').toArray().catch(() => []),
     storage.table('timelines').toArray().catch(() => []),
     storage.table('video_assessments').toArray().catch(() => []),
@@ -56,7 +57,7 @@ export async function loadCalendarEvents({ courseId = null, startDate = null, en
     });
   };
 
-  // 1. Assignments
+  // 1. Assessments
   for (const a of assignments) {
     const date = a.settings?.due_date || a.due_date;
     const time = a.settings?.due_time || a.due_time;
@@ -71,6 +72,25 @@ export async function loadCalendarEvents({ courseId = null, startDate = null, en
       points: a.total_points ?? 100,
       raw: a
     });
+  }
+
+  // 1b. Tasks (Assignments)
+  for (const t of tasks) {
+    const date = t.settings?.due_date || t.due_date;
+    const time = t.settings?.due_time || t.due_time;
+    if (date) {
+      addEvent({
+        id: t.id,
+        kind: 'task',
+        sourceId: t.id,
+        title: t.title,
+        date,
+        time,
+        cId: t.gradebook?.course_id || t.class_id,
+        points: t.grading?.max_points ?? 100,
+        raw: t
+      });
+    }
   }
 
   // 2. Flashcards

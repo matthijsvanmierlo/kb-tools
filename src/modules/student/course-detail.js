@@ -138,6 +138,7 @@ export async function renderStudentCourseDetailView(params, router, container) {
 
                   const icons = {
                     assignment: 'file-earmark-check text-blue-600',
+                    task: 'journal-text text-indigo-600',
                     flashcards: 'collection text-purple-600',
                     timeline: 'clock-history text-emerald-600',
                     video: 'play-circle text-rose-600'
@@ -145,10 +146,13 @@ export async function renderStudentCourseDetailView(params, router, container) {
                   const iconClass = icons[kind] || 'file-earmark text-slate-500';
 
                   // Determine launch URL
-                  let launchUrl = `#/assignments/take?itemId=${encodeURIComponent(it.id)}`;
-                  if (kind === 'flashcards') launchUrl = `#/flashcards/study?id=${encodeURIComponent(sourceId)}`;
+                  let launchUrl = `#/assessments/take?itemId=${encodeURIComponent(it.id)}`;
+                  if (kind === 'task') launchUrl = `#/assignments/work?itemId=${encodeURIComponent(it.id)}`;
+                  else if (kind === 'flashcards') launchUrl = `#/flashcards/study?id=${encodeURIComponent(sourceId)}`;
                   else if (kind === 'timeline') launchUrl = `#/timeline/view?id=${encodeURIComponent(sourceId)}`;
                   else if (kind === 'video') launchUrl = `#/video/kiosk?id=${encodeURIComponent(sourceId)}`;
+
+                  const displayKind = kind === 'assignment' ? 'Assessment' : (kind === 'task' ? 'Assignment' : kind);
 
                   return `
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 rounded-xl hover:bg-slate-50/80 transition-colors gap-3">
@@ -160,7 +164,7 @@ export async function renderStudentCourseDetailView(params, router, container) {
                             ${statusPill}
                           </div>
                           <div class="flex items-center gap-3 text-xs text-slate-500 mt-1 flex-wrap">
-                            <span class="capitalize text-slate-600 font-medium">${esc(kind)}</span>
+                            <span class="capitalize text-slate-600 font-medium">${esc(displayKind)}</span>
                             ${dueText ? `<span>•</span>${dueText}` : ''}
                             ${it.points ? `<span>•</span><span>${it.points} pts</span>` : ''}
                           </div>

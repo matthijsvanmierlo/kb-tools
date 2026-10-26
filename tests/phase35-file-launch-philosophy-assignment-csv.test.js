@@ -40,7 +40,7 @@ describe('Phase 35: File Launching, Philosophy Page & Assignment CSV Import/Expo
         title: 'Physics Test',
         payloadType: 'assignment',
         payload,
-        shareUrl: 'http://localhost:3000/#/assignments/take?share=abc123payload',
+        shareUrl: 'http://localhost:3000/#/assessments/take?share=abc123payload',
         appBaseUrl: 'http://localhost:3000/'
       });
 

@@ -46,7 +46,7 @@ const TOOLS = [
   { goal: 'Course units, syllabus & live feed', tool: 'Courses', icon: 'journal-bookmark', tone: 'blue', graded: 'Curriculum structure', handin: 'Zero-server public feeds', href: '#/course' },
   { goal: 'Unified schedule & calendar sync', tool: 'Calendar', icon: 'calendar3', tone: 'violet', graded: 'Due dates across all tools', handin: 'RFC 5545 iCalendar (.ics)', href: '#/calendar' },
   { goal: 'Automated file & zip submission intake', tool: 'Inbox', icon: 'inbox', tone: 'amber', graded: 'Staging & auto-import', handin: 'Watch folder & drag-and-drop', href: '#/inbox' },
-  { goal: 'Quizzes, homework, exit tickets', tool: 'Assignments', icon: 'ui-checks', tone: 'amber', graded: 'Auto + manual for written answers', handin: 'Encrypted .kbsub file or pasted code', href: '#/assignments' },
+  { goal: 'Quizzes, homework, exit tickets', tool: 'Assessments', icon: 'ui-checks', tone: 'amber', graded: 'Auto + manual for written answers', handin: 'Encrypted .kbsub file or pasted code', href: '#/assessments' },
   { goal: 'Watch a video and check understanding', tool: 'Video', icon: 'play-circle', tone: 'rose', graded: 'Auto (choice + keyword answers)', handin: 'Encrypted .kbr receipt', href: '#/video' },
   { goal: 'Labs, essays, projects, presentations', tool: 'Gradebook + rubric', icon: 'journal-check', tone: 'emerald', graded: 'By you, with rubric and comments', handin: 'However you collect work today', href: '#/gradebook' },
   { goal: 'Memorisation and spaced practice', tool: 'Flashcards', icon: 'stack', tone: 'blue', graded: 'Not graded (self-study)', handin: '—', href: '#/flashcards' },
@@ -189,15 +189,15 @@ export async function renderGuideView(params, router, container) {
             </div>
           </section>
 
-          <!-- 4. Assignments -->
+          <!-- 4. Assessments -->
           ${workflow({
             id: 'guide-assignments',
             icon: 'ui-checks',
             tone: 'amber',
-            title: 'Auto-graded quizzes and homework',
+            title: 'Auto-graded quizzes and assessments',
             when: 'Multiple choice, select-all, true/false, short answer, numeric, fill in the blank, ordering, matching and written responses.',
             list: [
-              { title: 'Create and link it', text: 'Assignments → <strong>New Assignment</strong>. In Settings choose the class, gradebook category and due date so scores land in the right column and late work is marked automatically.' },
+              { title: 'Create and link it', text: 'Assessments → <strong>New Assessment</strong>. In Settings choose the class, gradebook category and due date so scores land in the right column and late work is marked automatically.' },
               { title: 'Write the questions', text: 'Add questions with <strong>Add question</strong>. Give partial credit where it makes sense, list accepted alternatives for short answers, and add an explanation students see after answering. Written responses are graded by you.' },
               { title: 'Choose feedback', text: '<strong>Score after submitting</strong> suits most homework. Use <strong>Instant, after each question</strong> for practice, and <strong>None until you return grades</strong> for tests. Leave “Show correct answers” off until everyone has submitted.' },
               { title: 'Preview, then publish', text: 'Use <strong>Preview</strong> to take it as a student. Then <strong>Publish &amp; share</strong> and post the link (or the .kbshare file) in your LMS. The link never contains the answer key.' },
@@ -206,8 +206,8 @@ export async function renderGuideView(params, router, container) {
             ],
             extra: tip('If you edit questions after publishing, publish a new version and share the new link. Older submissions are still accepted and are labelled with their version.', 'blue', 'info-circle'),
             actions: [
-              { label: 'New assignment', href: '#/assignments/edit', icon: 'plus-lg' },
-              { label: 'Open Assignments', href: '#/assignments' }
+              { label: 'New assessment', href: '#/assessments/edit', icon: 'plus-lg' },
+              { label: 'Open Assessments', href: '#/assessments' }
             ]
           })}
 
@@ -218,7 +218,7 @@ export async function renderGuideView(params, router, container) {
                 <sl-icon name="diagram-3"></sl-icon>
               </span>
               <div class="min-w-0">
-                <h2 class="text-xl font-bold text-slate-900">Assignment Delivery &amp; Hand-in Matrix</h2>
+                <h2 class="text-xl font-bold text-slate-900">Assessment Delivery &amp; Hand-in Matrix</h2>
                 <p class="text-sm text-slate-500 mt-1">Choose the optimal delivery and collection method for your classroom, school firewall, and LMS setup.</p>
               </div>
             </header>
@@ -241,7 +241,7 @@ export async function renderGuideView(params, router, container) {
                   <tbody class="divide-y divide-slate-100 text-slate-600">
                     <tr>
                       <td class="p-3 font-semibold text-slate-900">Standard Web Link (Fragment)</td>
-                      <td class="p-3 font-mono text-[11px]">#/assignments/take#...</td>
+                      <td class="p-3 font-mono text-[11px]">#/assessments/take#...</td>
                       <td class="p-3">Google Classroom, LMS assignments, student dashboards, email.</td>
                       <td class="p-3">Entire assignment is packed in the URL hash. 100% offline-ready once loaded. No backend or accounts required.</td>
                     </tr>
@@ -513,7 +513,7 @@ export async function renderGuideView(params, router, container) {
               <!-- Category 1 -->
               <div class="faq-category-block space-y-3">
                 <h3 class="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                  <sl-icon name="pencil-square" class="text-amber-500"></sl-icon> Assignments, Versions &amp; Answer Keys
+                  <sl-icon name="pencil-square" class="text-amber-500"></sl-icon> Assessments, Versions &amp; Answer Keys
                 </h3>
                 <div class="space-y-2">
                   <details class="group bg-slate-50 rounded-xl border border-slate-200 px-5 py-4 transition-all" data-faq-item data-keywords="edit assignment answer key typo regrade reconcile manual override score feedback">

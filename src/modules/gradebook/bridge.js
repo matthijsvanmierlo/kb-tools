@@ -23,7 +23,7 @@ export class GradebookBridge {
    * @param {string} [opts.dueDate]
    * @returns {Promise<object>} gradebook assignment record
    */
-  static async upsertLinkedColumn({ courseId, source, sourceType, sourceId, title, maxScore, maxPoints, categoryId, standardIds, dueDate }) {
+  static async upsertLinkedColumn({ courseId, source, sourceType, sourceId, title, maxScore, maxPoints, categoryId, standardIds, dueDate, scoring, rubricId }) {
     const table = storage.table('gradebook_assignments');
     const actualSource = source || (sourceType && sourceId ? { type: sourceType, id: sourceId } : null);
     if (!actualSource) throw new Error('MISSING_SOURCE');
@@ -48,6 +48,10 @@ export class GradebookBridge {
       standard_ids: standardIds || existing?.standard_ids || [],
       source: actualSource
     };
+    if (scoring !== undefined) record.scoring = scoring;
+    else if (!record.scoring) record.scoring = 'points';
+    if (rubricId !== undefined) record.rubric_id = rubricId;
+
     await table.put(record);
     return record;
   }
@@ -97,8 +101,9 @@ export async function syncContentClassLink(item, moduleType, classId) {
 
   const isAssignment = moduleType === 'assignments' || moduleType === 'assignment';
   const isVideo = moduleType === 'video' || moduleType === 'videos';
+  const isTask = moduleType === 'tasks' || moduleType === 'task';
 
-  if (isAssignment) {
+  if (isAssignment || isTask) {
     item.gradebook = {
       ...(item.gradebook || {}),
       course_id: targetClassId
@@ -120,22 +125,28 @@ export async function syncContentClassLink(item, moduleType, classId) {
     }
   }
 
-  if (targetClassId && (isAssignment || isVideo)) {
+  if (targetClassId && (isAssignment || isVideo || isTask)) {
     let maxPoints = 0;
     if (isAssignment) {
       maxPoints = (item.questions || []).reduce((sum, q) => sum + (Number(q.points) || 0), 0) || 100;
     } else if (isVideo) {
       maxPoints = (item.checkpoints || []).reduce((sum, cp) => sum + (Number(cp.points) || 1), 0) || 10;
+    } else if (isTask) {
+      maxPoints = item.grading?.max_points ?? 100;
     }
 
     try {
       const col = await GradebookBridge.upsertLinkedColumn({
         courseId: targetClassId,
-        sourceType: isAssignment ? 'assignment' : 'video',
+        sourceType: isAssignment ? 'assignment' : (isTask ? 'task' : 'video'),
         sourceId: item.id,
         title: item.title || item.name || 'Untitled',
         maxPoints,
-        dueDate: item.settings?.due_date || undefined
+        dueDate: item.settings?.due_date || undefined,
+        categoryId: item.gradebook?.category_id,
+        scoring: isTask ? item.grading?.scoring : undefined,
+        rubricId: isTask ? item.grading?.rubric_id : undefined,
+        standardIds: isTask ? item.grading?.standard_ids : undefined
       });
       if (!item.gradebook) item.gradebook = {};
       item.gradebook.column_id = col.id;
@@ -143,10 +154,10 @@ export async function syncContentClassLink(item, moduleType, classId) {
     } catch (err) {
       console.warn('GradebookBridge column auto-sync error:', err);
     }
-  } else if (!targetClassId && (isAssignment || isVideo) && item.id) {
+  } else if (!targetClassId && (isAssignment || isVideo || isTask) && item.id) {
     // Unassigned: remove linked column from gradebook_assignments if exists
     try {
-      const srcType = isAssignment ? 'assignment' : 'video';
+      const srcType = isAssignment ? 'assignment' : (isTask ? 'task' : 'video');
       const cols = await storage.table('gradebook_assignments').toArray();
       const stale = cols.filter(c => c.source?.type === srcType && c.source?.id === item.id);
       if (stale.length > 0) {
@@ -158,7 +169,7 @@ export async function syncContentClassLink(item, moduleType, classId) {
   item.updated_at = new Date().toISOString();
 
   // Persist if item belongs to a known table
-  const tableName = isAssignment ? 'assignments' : (isVideo ? 'video_assessments' : null);
+  const tableName = isAssignment ? 'assignments' : (isTask ? 'tasks' : (isVideo ? 'video_assessments' : null));
   if (tableName && item.id) {
     try {
       await storage.table(tableName).put(item);

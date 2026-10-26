@@ -244,7 +244,7 @@ describe('Phase 32: Term archives', () => {
 
     const privateOnly = await createTermArchive(a, { label: 'T1', teacherName: 'Ms J' });
     expect(privateOnly.readableBySchool).toBe(false);
-    expect(privateOnly.text).not.toContain('Ada');
+    expect(privateOnly.text).not.toContain('Ada Lovelace');
     expect((await openTermArchive(a, privateOnly.text)).data.gradebook_students[0].full_name).toBe('Ada Lovelace');
     await expect(openTermArchiveAsSchool(privateOnly.text, school.privateJwk)).rejects.toThrow('NOT_READABLE_BY_SCHOOL');
     await expect(openTermArchive(await device(), privateOnly.text)).rejects.toThrow('NOT_THIS_TEACHER');

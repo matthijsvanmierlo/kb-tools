@@ -38,8 +38,9 @@ export class RubricScorer {
 
       // Selected points
       if (tierId) {
+        const tier = (rubric.tiers || []).find(t => t.id === tierId);
         const cell = crit.cells ? crit.cells[tierId] : null;
-        const pts = cell ? (cell.points ?? 0) : 0;
+        const pts = cell ? (cell.points ?? tier?.default_points ?? 0) : (tier?.default_points ?? 0);
         totalEarned += pts * weight;
       }
     }

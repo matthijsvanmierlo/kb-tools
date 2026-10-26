@@ -24,7 +24,8 @@ export const NAV_CONFIG = {
       label: 'Create',
       icon: 'plus-circle',
       items: [
-        { id: 'nav-asg', route: '#/assignments', label: 'Assignments', icon: 'ui-checks' },
+        { id: 'nav-asg', route: '#/assessments', label: 'Assessments', icon: 'ui-checks' },
+        { id: 'nav-tasks', route: '#/assignments', label: 'Assignments', icon: 'journal-text' },
         { id: 'nav-fc', route: '#/flashcards', label: 'Flashcards', icon: 'stack' },
         { id: 'nav-tl', route: '#/timeline', label: 'Timeline', icon: 'bar-chart-steps' },
         { id: 'nav-vid', route: '#/video', label: 'Video', icon: 'play-circle' }

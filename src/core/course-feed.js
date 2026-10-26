@@ -35,6 +35,30 @@ export async function buildCourseFeed(courseId, { origin, studentId, relayUrl } 
       try {
         if (kind === 'assignment') {
           itemPayload = await storage.table('assignments').get(sourceId).catch(() => null);
+        } else if (kind === 'task') {
+          const rawTask = await storage.table('tasks').get(sourceId).catch(() => null);
+          if (rawTask) {
+            itemPayload = {
+              kind: 'kb-task',
+              v: 1,
+              task_id: rawTask.id,
+              publish_version: rawTask.publish?.version || 1,
+              title: rawTask.title,
+              description: rawTask.description || '',
+              submission_types: rawTask.submission_types || {},
+              settings: {
+                due_date: rawTask.settings?.due_date || '',
+                due_time: rawTask.settings?.due_time || '',
+                require_access_code: Boolean(rawTask.settings?.require_access_code)
+              },
+              teacher_key: rawTask.publish?.teacher_key || null,
+              salt: rawTask.publish?.salt || null,
+              roster_checks: rawTask.publish?.roster_checks || null,
+              relay: rawTask.publish?.relay || null,
+              scoring: rawTask.grading?.scoring || 'points',
+              max_points: rawTask.grading?.max_points ?? 100
+            };
+          }
         } else if (kind === 'flashcards' || kind === 'flashcard') {
           itemPayload = await storage.table('flashcards').get(sourceId).catch(() => null);
         } else if (kind === 'timeline') {

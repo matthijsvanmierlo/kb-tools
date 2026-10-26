@@ -150,11 +150,12 @@ export async function renderCoursePage(courseId, container) {
                   <div class="divide-y divide-slate-100 p-2">
                     ${unitItems.length === 0 ? `
                       <div class="py-6 text-center text-xs text-slate-400">
-                        No items in this unit yet. Click "+ Add Item" to attach assignments, decks, videos, or timelines.
+                        No items in this unit yet. Click "+ Add Item" to attach assessments, decks, videos, or timelines.
                       </div>
                     ` : unitItems.map(it => {
                       const kind = it.kind || it.type || 'assignment';
                       const icons = {
+                        task: 'journal-text text-indigo-600',
                         assignment: 'file-earmark-check text-blue-600',
                         flashcards: 'collection text-purple-600',
                         timeline: 'clock-history text-emerald-600',
@@ -345,7 +346,8 @@ export async function renderCoursePage(courseId, container) {
 }
 
 async function openAddItemDialog(courseId, unitId, onAdded) {
-  const [assignments, decks, timelines, videos] = await Promise.all([
+  const [tasks, assignments, decks, timelines, videos] = await Promise.all([
+    storage.table('tasks').toArray().catch(() => []),
     storage.table('assignments').toArray().catch(() => []),
     storage.table('flashcards').toArray().catch(() => []),
     storage.table('timelines').toArray().catch(() => []),
@@ -357,8 +359,9 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
   dialog.style.setProperty('--width', '600px');
   dialog.innerHTML = `
     <div class="space-y-4 py-1 text-sm">
-      <sl-select label="Select Content Source" id="sel-item-source" value="assignment">
-        <sl-option value="assignment">Assignment (${assignments.length} available)</sl-option>
+      <sl-select label="Select Content Source" id="sel-item-source" value="${tasks.length ? 'task' : 'assignment'}">
+        <sl-option value="task">Assignment (${tasks.length} available)</sl-option>
+        <sl-option value="assignment">Assessment (${assignments.length} available)</sl-option>
         <sl-option value="flashcards">Flashcard Deck (${decks.length} available)</sl-option>
         <sl-option value="timeline">Timeline (${timelines.length} available)</sl-option>
         <sl-option value="video">Video Assessment (${videos.length} available)</sl-option>
@@ -382,7 +385,8 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
   const updateSelect = () => {
     const val = sourceSelect.value;
     let items = [];
-    if (val === 'assignment') items = assignments;
+    if (val === 'task') items = tasks;
+    else if (val === 'assignment') items = assignments;
     else if (val === 'flashcards') items = decks;
     else if (val === 'timeline') items = timelines;
     else if (val === 'video') items = videos;
@@ -414,7 +418,8 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
     }
 
     let sourceItem = null;
-    if (kind === 'assignment') sourceItem = assignments.find(a => a.id === selectedId);
+    if (kind === 'task') sourceItem = tasks.find(t => t.id === selectedId);
+    else if (kind === 'assignment') sourceItem = assignments.find(a => a.id === selectedId);
     else if (kind === 'flashcards') sourceItem = decks.find(d => d.id === selectedId);
     else if (kind === 'timeline') sourceItem = timelines.find(t => t.id === selectedId);
     else if (kind === 'video') sourceItem = videos.find(v => v.id === selectedId);

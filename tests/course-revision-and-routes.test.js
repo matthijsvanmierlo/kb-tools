@@ -135,7 +135,8 @@ describe('Course Revision, QR Code & Dynamic Route Rendering', () => {
 
   describe('Calendar role-aware routing and student action experience', () => {
     it('generates student taking URLs for student role', () => {
-      expect(getEventLaunchUrl({ kind: 'assignment', sourceId: 'asg-1' }, true)).toBe('#/assignments/take?id=asg-1');
+      expect(getEventLaunchUrl({ kind: 'task', sourceId: 'task-1' }, true)).toBe('#/assignments/work?itemId=task-1');
+      expect(getEventLaunchUrl({ kind: 'assignment', sourceId: 'asg-1' }, true)).toBe('#/assessments/take?id=asg-1');
       expect(getEventLaunchUrl({ kind: 'video', sourceId: 'vid-1' }, true)).toBe('#/video/kiosk?id=vid-1');
       expect(getEventLaunchUrl({ kind: 'flashcards', sourceId: 'deck-1' }, true)).toBe('#/flashcards/study?id=deck-1');
       expect(getEventLaunchUrl({ kind: 'timeline', sourceId: 'time-1' }, true)).toBe('#/timeline/view?id=time-1');
@@ -144,7 +145,8 @@ describe('Course Revision, QR Code & Dynamic Route Rendering', () => {
     });
 
     it('generates teacher editing URLs for teacher role', () => {
-      expect(getEventLaunchUrl({ kind: 'assignment', sourceId: 'asg-1' }, false)).toBe('#/assignments/edit?id=asg-1');
+      expect(getEventLaunchUrl({ kind: 'task', sourceId: 'task-1' }, false)).toBe('#/assignments/create?id=task-1');
+      expect(getEventLaunchUrl({ kind: 'assignment', sourceId: 'asg-1' }, false)).toBe('#/assessments/edit?id=asg-1');
       expect(getEventLaunchUrl({ kind: 'video', sourceId: 'vid-1' }, false)).toBe('#/video/edit?id=vid-1');
       expect(getEventLaunchUrl({ kind: 'flashcards', sourceId: 'deck-1' }, false)).toBe('#/flashcards/edit?id=deck-1');
       expect(getEventLaunchUrl({ kind: 'timeline', sourceId: 'time-1' }, false)).toBe('#/timeline/view?id=time-1');
@@ -153,13 +155,15 @@ describe('Course Revision, QR Code & Dynamic Route Rendering', () => {
     });
 
     it('returns student-friendly action verbs for lessons', () => {
-      expect(getEventActionLabel({ kind: 'assignment' }, true)).toBe('Start Assignment');
+      expect(getEventActionLabel({ kind: 'task' }, true)).toBe('Work on Assignment');
+      expect(getEventActionLabel({ kind: 'assignment' }, true)).toBe('Start Assessment');
       expect(getEventActionLabel({ kind: 'video' }, true)).toBe('Watch Video Lesson');
       expect(getEventActionLabel({ kind: 'flashcards' }, true)).toBe('Study Flashcards');
       expect(getEventActionLabel({ kind: 'timeline' }, true)).toBe('Explore Timeline');
       expect(getEventActionLabel({ kind: 'other' }, true)).toBe('Open Lesson');
 
-      expect(getEventActionLabel({ kind: 'assignment' }, false)).toBe('Edit Assignment');
+      expect(getEventActionLabel({ kind: 'task' }, false)).toBe('Edit Assignment');
+      expect(getEventActionLabel({ kind: 'assignment' }, false)).toBe('Edit Assessment');
       expect(getEventActionLabel({ kind: 'video' }, false)).toBe('Edit Video');
     });
 
@@ -192,7 +196,7 @@ describe('Course Revision, QR Code & Dynamic Route Rendering', () => {
         // Primary action button is present with student verb
         const actionBtn = dialog.querySelector('#btn-open-lesson');
         expect(actionBtn).not.toBeNull();
-        expect(actionBtn.textContent).toContain('Start Assignment');
+        expect(actionBtn.textContent).toContain('Start Assessment');
       } finally {
         dialog.remove();
         RoleMode.set('teacher');
@@ -222,7 +226,7 @@ describe('Course Revision, QR Code & Dynamic Route Rendering', () => {
 
         const actionBtn = dialog.querySelector('#btn-open-lesson');
         expect(actionBtn).not.toBeNull();
-        expect(actionBtn.textContent).toContain('Edit Assignment');
+        expect(actionBtn.textContent).toContain('Edit Assessment');
       } finally {
         dialog.remove();
       }

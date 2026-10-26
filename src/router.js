@@ -36,7 +36,14 @@ export const ROUTE_TITLES = {
   '#/timeline/view': 'View Timeline',
   '#/video': 'Interactive Video',
   '#/gradebook': 'Gradebook',
+  '#/assessments': 'Assessments',
+  '#/assessments/edit': 'Assessment Editor',
+  '#/assessments/take': 'Take Assessment',
+  '#/assessments/submissions': 'Assessment Submissions',
   '#/assignments': 'Assignments',
+  '#/assignments/create': 'Assignment Editor',
+  '#/assignments/work': 'Complete Assignment',
+  '#/assignments/review': 'Review Submissions',
   '#/assignments/edit': 'Assignment Editor',
   '#/assignments/take': 'Take Assignment',
   '#/inbox': 'Submission Inbox',
@@ -58,6 +65,15 @@ export function routeTitle(path) {
   if (title) return `${title} · KennisBoost Tools`;
   return 'KennisBoost Tools';
 }
+
+// Map legacy hash paths to their modern destinations.
+// NOTE: The new tasks (Assignments) module must use disjoint sub-paths
+// (create, work, review) so these redirects stay unconditional.
+export const LEGACY_REDIRECTS = {
+  '#/assignments/take': '#/assessments/take',
+  '#/assignments/submissions': '#/assessments/submissions',
+  '#/assignments/edit': '#/assessments/edit'
+};
 
 /**
  * Hash-based Single Page App Router
@@ -134,6 +150,15 @@ export class Router {
       return;
     }
 
+    if (LEGACY_REDIRECTS[path]) {
+      const target = LEGACY_REDIRECTS[path];
+      const search = Object.keys(params).length > 0
+        ? '?' + new URLSearchParams(params).toString()
+        : '';
+      this.navigate(`${target}${search}`);
+      return;
+    }
+
     this.currentPath = path;
     this.currentParams = params;
 
@@ -154,7 +179,7 @@ export class Router {
     } catch (_) {}
 
     // Minimal Chrome (Exam / Kiosk) vs Standard Chrome
-    const isMinimalChrome = (path === '#/assignments/take' && !params?.preview)
+    const isMinimalChrome = ((path === '#/assessments/take' || path === '#/assignments/take' || path === '#/assignments/work') && !params?.preview)
       || path === '#/share'
       || path.endsWith('/kiosk')
       || Boolean(params?.kiosk);
@@ -500,7 +525,7 @@ export class Router {
     store.setState('ephemeralData', { type, payload });
 
     try {
-      const itemId = payload?.assignment_id || payload?.id || (typeof crypto !== 'undefined' ? crypto.randomUUID() : 'shared-item');
+      const itemId = payload?.task_id || payload?.assignment_id || payload?.id || (typeof crypto !== 'undefined' ? crypto.randomUUID() : 'shared-item');
       const courseId = payload?.course_id || payload?.course_meta?.course_id || null;
       const dueDate = payload?.due_date || payload?.settings?.due_date || null;
       storage.table('student_items').put({
@@ -515,7 +540,7 @@ export class Router {
       }).catch(() => {});
     } catch (_) {}
 
-    const isStudent = type === 'assignment' || (type === 'video' && payload?.secure) || type === 'student_grade_report' || type === 'assignment_feedback';
+    const isStudent = type === 'assignment' || type === 'task' || (type === 'video' && payload?.secure) || type === 'student_grade_report' || type === 'assignment_feedback' || type === 'task_feedback';
     if (typeof document !== 'undefined' && document.body) {
       if (isStudent) {
         document.body.dataset.mode = 'student';
@@ -545,8 +570,17 @@ export class Router {
       RoleMode.set('student');
       toast.success(`Feedback for "${payload.assignment?.title || 'Assignment'}" added to your gradebook!`);
       this.navigate('#/student/gradebook');
+    } else if (type === 'task_feedback') {
+      if (StudentLedger.ingestTaskFeedback) {
+        StudentLedger.ingestTaskFeedback(payload).catch(console.error);
+      }
+      RoleMode.set('student');
+      toast.success(`Feedback for "${payload.task?.title || 'Assignment'}" added to your gradebook!`);
+      this.navigate('#/student/gradebook');
     } else if (type === 'assignment') {
-      this.navigate('#/assignments/take');
+      this.navigate('#/assessments/take');
+    } else if (type === 'task') {
+      this.navigate('#/assignments/work');
     } else if (type === 'gradebook') {
       store.setState('activeCourse', payload);
       this.navigate('#/gradebook');
@@ -559,7 +593,7 @@ export class Router {
     if (typeof document === 'undefined') return;
     // Grade reports and assignments are for viewing/answering only, never for copying into a library
     // (Video links are student copies without answer keys, so saving them as a project makes no sense)
-    if (type === 'assignment' || type === 'student_grade_report' || type === 'assignment_feedback' || (type === 'video' && payload?.secure)) {
+    if (type === 'assignment' || type === 'task' || type === 'student_grade_report' || type === 'assignment_feedback' || type === 'task_feedback' || (type === 'video' && payload?.secure)) {
       document.getElementById('kb-ephemeral-banner')?.remove();
       return;
     }
@@ -595,7 +629,7 @@ export class Router {
         if (type === 'flashcards' && res.id) this.navigate(`#/flashcards/edit?id=${res.id}`);
         else if (type === 'timeline' && res.id) this.navigate(`#/timeline/edit?id=${res.id}`);
         else if (type === 'video' && res.id) this.navigate(`#/video/edit?id=${res.id}`);
-        else if (type === 'assignment' && res.id) this.navigate(`#/assignments/edit?id=${res.id}`);
+        else if (type === 'assignment' && res.id) this.navigate(`#/assessments/edit?id=${res.id}`);
         else if (type === 'course_feed' && res.id) this.navigate(`#/course?courseId=${res.id}`);
         else if (type === 'gradebook' && res.id) this.navigate(`#/gradebook?courseId=${res.id}`);
       } catch (err) {
@@ -632,7 +666,14 @@ export class Router {
         '#/inbox': 'Student Work Inbox',
         '#/feedback': 'Assignment Feedback',
         '#/gradebook': 'Browser Gradebook',
+        '#/assessments': 'Assessments',
+        '#/assessments/edit': 'Assessment Editor',
+        '#/assessments/take': 'Assessment',
+        '#/assessments/submissions': 'Assessment Submissions',
         '#/assignments': 'Assignments',
+        '#/assignments/create': 'Assignment Editor',
+        '#/assignments/work': 'Assignment',
+        '#/assignments/review': 'Review Submissions',
         '#/assignments/edit': 'Assignment Editor',
         '#/assignments/take': 'Assignment',
         '#/assignments/submissions': 'Assignment Submissions',

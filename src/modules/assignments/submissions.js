@@ -784,17 +784,6 @@ export async function renderSubmissions(assignment, router, container) {
   // ---------------------------------------------------------------------------
   // Gradebook sync
   // ---------------------------------------------------------------------------
-  function feedbackSummary(sub) {
-    const s = finalScore(a, sub);
-    const lines = [];
-    if (sub.feedback) lines.push(sub.feedback.trim());
-    (a.questions || []).forEach((q, i) => {
-      const fb = sub.manual?.[q.id]?.feedback;
-      if (fb && fb.trim()) lines.push(`Q${i + 1}: ${fb.trim()}`);
-    });
-    lines.push(`Assignment: ${s.earned}/${s.possible} pts${s.pending ? ` (${s.pending} awaiting review)` : ''}.`);
-    return lines.join('\n');
-  }
 
   async function syncToGradebook(list) {
     if (!course) { toast.warning('Link a class first.'); return; }
@@ -875,7 +864,7 @@ export async function renderSubmissions(assignment, router, container) {
       publishedUrl = share.url;
     } catch (_) {}
 
-    const baseTakeUrl = publishedUrl || `${window.location.origin}${window.location.pathname}#/assignments/take`;
+    const baseTakeUrl = publishedUrl || `${window.location.origin}${window.location.pathname}#/assessments/take`;
     const assignmentLinksMap = {};
     roster.forEach(s => {
       const fullName = s.full_name || `${s.given_name || ''} ${s.family_name || ''}`.trim();
@@ -1013,7 +1002,7 @@ export async function renderSubmissions(assignment, router, container) {
   // Bindings
   // ---------------------------------------------------------------------------
   function bind(notSubmitted = []) {
-    container.querySelector('#sub-back')?.addEventListener('click', () => router.navigate(`#/assignments/edit?id=${a.id}`));
+    container.querySelector('#sub-back')?.addEventListener('click', () => router.navigate(`#/assessments/edit?id=${a.id}`));
     container.querySelector('#sub-paste')?.addEventListener('click', openPasteDialog);
     container.querySelector('#sub-return-feedback')?.addEventListener('click', () => openReturnFeedbackDialog(notSubmitted));
     container.querySelector('#btn-filter-all')?.addEventListener('click', () => { filterMode = 'all'; render(); });
@@ -1071,7 +1060,7 @@ export async function renderSubmissions(assignment, router, container) {
         const firstName = s.given_name || nameParts.given || '';
         const lastName = s.family_name || nameParts.family || '';
         const fullName = s.full_name || joinName({ given: firstName, family: lastName });
-        const baseTakeUrl = `${window.location.origin}${window.location.pathname}#/assignments/take`;
+        const baseTakeUrl = `${window.location.origin}${window.location.pathname}#/assessments/take`;
         const link = LinkBuilder.withParams(baseTakeUrl, { sid: s.student_id, sname: fullName });
         return {
           Email: s.email || '',

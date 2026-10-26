@@ -116,7 +116,7 @@ describe('Phase 22: QR hand-in transfer (rev-3 §4.1)', () => {
 
   it('supports single raw non-KBQ1 QR codes when allowSingleRaw is enabled', async () => {
     const assembler = new QrAssembler({ allowSingleRaw: true });
-    const url = 'https://kennisboost.nl/#/assignments/take?data=abc123xyz';
+    const url = 'https://kennisboost.nl/#/assessments/take?data=abc123xyz';
     const r1 = await assembler.add(url);
     expect(r1.status).toBe('complete');
     expect(r1.text).toBe(url);

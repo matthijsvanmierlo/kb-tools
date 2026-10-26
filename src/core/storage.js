@@ -15,6 +15,8 @@ const DATA_TABLES = new Set([
   'gradebook_rubrics',
   'assignments',
   'assignment_submissions',
+  'tasks',
+  'task_submissions',
   'student_courses',
   'student_ledger',
   'course_units',
@@ -37,10 +39,12 @@ export function scopeOf(tableName, record) {
     case 'gradebook_grades':
     case 'gradebook_rubrics': return { course_id: record.course_id || null };
     case 'assignments':
+    case 'tasks':
     case 'flashcards':
     case 'timelines':
     case 'video_assessments': return { course_id: record.class_id || null };
     case 'assignment_submissions': return { assignment_id: record.assignment_id || null };
+    case 'task_submissions': return { task_id: record.task_id || null };
     case 'student_courses': return { course_id: record.course_id || record.id };
     case 'student_ledger':
     case 'course_units':
@@ -374,11 +378,18 @@ export class StorageManager {
       }
     });
 
+    // v7: Tasks (Assignments) and Task Submissions
+    this.db.version(7).stores({
+      tasks: 'id, title, class_id, updated_at',
+      task_submissions: 'id, task_id, student_id, submitted_at, synced_at, updated_at, [task_id+student_id]'
+    });
+
     // Initialize in-memory tables for ephemeral mode
     const tables = [
       'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
       'gradebook_students', 'gradebook_assignments', 'gradebook_grades',
       'gradebook_rubrics', 'assignments', 'assignment_submissions',
+      'tasks', 'task_submissions',
       'student_courses', 'student_ledger', 'course_units', 'course_items', 'student_items',
       'app_metadata', 'binary_blobs', 'outbox'
     ];

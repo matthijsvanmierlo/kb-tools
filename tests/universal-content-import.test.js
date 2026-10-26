@@ -9,6 +9,7 @@ describe('Universal Content Import & .kbshare Integration', () => {
   beforeEach(async () => {
     await storage.table('flashcards').clear();
     await storage.table('assignments').clear();
+    await storage.table('tasks').clear().catch(() => {});
     await storage.table('timelines').clear();
     await storage.table('video_assessments').clear();
     document.body.innerHTML = '';
@@ -234,6 +235,29 @@ describe('Universal Content Import & .kbshare Integration', () => {
       expect(inDb).toBeDefined();
       expect(inDb.title).toBe('Plate Tectonics Interactive Video');
       expect(inDb.checkpoints).toHaveLength(2);
+    });
+
+    it('unpacks and persists a .kbshare task (assignment) into Dexie database', async () => {
+      const taskPayload = {
+        title: 'Creative Writing Assignment',
+        description: 'Write a short story about a forgotten lighthouse.',
+        submission_types: { text: { enabled: true }, drawing: { enabled: true } },
+        grading: { scoring: 'points', max_points: 50 }
+      };
+
+      const share = await CryptoShareEngine.createSharePayload('task', taskPayload, '');
+      const unpacked = await ContentImporter.unpackKbShare(share.rawFileContent);
+
+      const res = await ContentImporter.importRecordToLibrary('task', unpacked.payload);
+
+      expect(res.success).toBe(true);
+      expect(res.table).toBe('tasks');
+
+      const inDb = await storage.table('tasks').get(res.id);
+      expect(inDb).toBeDefined();
+      expect(inDb.title).toBe('Creative Writing Assignment');
+      expect(inDb.submission_types.text.enabled).toBe(true);
+      expect(inDb.grading.max_points).toBe(50);
     });
   });
 

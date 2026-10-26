@@ -21,7 +21,7 @@ export class HandinInstructions {
     const dueStr = dueDate ? `due ${dueDate}` : 'no due date';
     const mail = email || teacherEmail || '';
     const emailClause = mail ? ` or email it to ${mail}` : '';
-    return `${title || 'Assignment'} — ${dueStr}
+    return `${title || 'Assessment'} — ${dueStr}
 1. Open this link: ${link}
 2. Enter your full name, your student ID and the access code you received from me.
 3. Answer the questions. Your answers save automatically in your browser.
@@ -41,7 +41,7 @@ Nothing is sent automatically. Your work is encrypted so only I can open it.`;
    * @returns {HTMLElement}
    */
   static render({ assignment, link, dueDate, teacherEmail }) {
-    const title = assignment?.title || 'Assignment';
+    const title = assignment?.title || 'Assessment';
     const due = dueDate || (assignment?.settings?.due_date ? new Date(`${assignment.settings.due_date}T12:00:00`).toLocaleDateString() : '');
     const email = teacherEmail || '';
     const text = this.getTemplate({ title, dueDate: due, link, email });

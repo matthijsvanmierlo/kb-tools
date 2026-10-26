@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import 'fake-indexeddb/auto';
+import crypto from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import worker from '../server/relay/worker.js';
 import { createD1Database } from '../server/relay/d1-db.js';
@@ -244,7 +245,8 @@ describe('Phase 37: Cloudflare Worker, D1 Database, and Zero-Leak #/connect Rout
     });
 
     it('handles native Cloudflare R2 media upload and download', async () => {
-      const hash = 'a'.repeat(64);
+      const mediaBytes = new Uint8Array([1, 2, 3, 4, 5]);
+      const hash = crypto.createHash('sha256').update(mediaBytes).digest('hex');
       const filename = `${hash}.webp`;
 
       // 1. Presign returns direct upload URL
@@ -261,9 +263,8 @@ describe('Phase 37: Cloudflare Worker, D1 Database, and Zero-Leak #/connect Rout
       const preData = await preRes.json();
       expect(preData.upload_url).toContain(`/api/v1/media/upload?key=${filename}`);
 
-      // 2. Upload file bytes to R2
-      const mediaBytes = new Uint8Array([1, 2, 3, 4, 5]);
-      const upReq = new Request(`https://relay.test.workers.dev/api/v1/media/upload?key=${filename}`, {
+      // 2. Upload file bytes to R2 using the presigned upload URL
+      const upReq = new Request(preData.upload_url, {
         method: 'PUT',
         headers: { 'Content-Type': 'image/webp' },
         body: mediaBytes

@@ -44,12 +44,13 @@ export class CommandPalette {
     const existing = document.getElementById('kb-command-palette-dialog');
     if (existing) existing.remove();
 
-    const [courses, decks, timelines, videos, assignmentSets] = await Promise.all([
+    const [courses, decks, timelines, videos, assignmentSets, taskList] = await Promise.all([
       storage.table('gradebook_courses').toArray().catch(() => []),
       storage.table('flashcards').toArray().catch(() => []),
       storage.table('timelines').toArray().catch(() => []),
       storage.table('video_assessments').toArray().catch(() => []),
-      storage.table('assignments').toArray().catch(() => [])
+      storage.table('assignments').toArray().catch(() => []),
+      storage.table('tasks').toArray().catch(() => [])
     ]);
 
     const dialog = document.createElement('sl-dialog');
@@ -112,8 +113,10 @@ export class CommandPalette {
       { category: 'Navigation', title: 'Open Flashcards Library', icon: 'stack', run: () => router.navigate('#/flashcards') },
       { category: 'Navigation', title: 'Open Timeline Maker', icon: 'bar-chart-steps', run: () => router.navigate('#/timeline') },
       { category: 'Navigation', title: 'Open Video Assessments', icon: 'play-circle', run: () => router.navigate('#/video') },
-      { category: 'Navigation', title: 'Open Assignments', icon: 'ui-checks', run: () => router.navigate('#/assignments') },
-      { category: 'Navigation', title: 'New Auto-graded Assignment', icon: 'plus-lg', run: () => router.navigate('#/assignments/edit') },
+      { category: 'Navigation', title: 'Open Assessments', icon: 'ui-checks', run: () => router.navigate('#/assessments') },
+      { category: 'Navigation', title: 'New Interactive Assessment', icon: 'plus-lg', run: () => router.navigate('#/assessments/edit') },
+      { category: 'Navigation', title: 'Open Assignments', icon: 'journal-text', run: () => router.navigate('#/assignments') },
+      { category: 'Navigation', title: 'New Assignment (Text, Code, Drawing, Files)', icon: 'plus-lg', run: () => router.navigate('#/assignments/create') },
       { category: 'Navigation', title: 'Teacher Guide: Recommended Workflows', icon: 'signpost-split', run: () => router.navigate('#/guide') },
       { category: 'Navigation', title: 'About KennisBoost Tools', icon: 'info-circle', run: () => router.navigate('#/about') },
       { category: 'Navigation', title: 'Local-First Philosophy & Privacy Architecture', icon: 'shield-check', run: () => router.navigate('#/philosophy') },
@@ -135,7 +138,8 @@ export class CommandPalette {
       ...decks.map(d => ({ category: 'Flashcards', title: d.title, subtitle: `${d.cards?.length || 0} cards`, icon: 'stack', run: () => router.navigate(`#/flashcards/study?id=${d.id}`) })),
       ...timelines.map(t => ({ category: 'Timelines', title: t.title, subtitle: `${t.events?.length || 0} events`, icon: 'bar-chart-steps', run: () => router.navigate(`#/timeline/view?id=${t.id}`) })),
       ...videos.map(v => ({ category: 'Videos', title: v.title, subtitle: `${v.checkpoints?.length || 0} checkpoints`, icon: 'play-circle', run: () => router.navigate(`#/video/kiosk?id=${v.id}`) })),
-      ...assignmentSets.map(a => ({ category: 'Assignments', title: a.title, subtitle: `${a.questions?.length || 0} questions`, icon: 'ui-checks', run: () => router.navigate(`#/assignments/edit?id=${a.id}`) }))
+      ...assignmentSets.map(a => ({ category: 'Assessments', title: a.title, subtitle: `${a.questions?.length || 0} questions`, icon: 'ui-checks', run: () => router.navigate(`#/assessments/edit?id=${a.id}`) })),
+      ...taskList.map(t => ({ category: 'Assignments', title: t.title, subtitle: t.grading?.scoring === 'proficiency' ? 'Proficiency' : `${t.grading?.max_points ?? 100} pts`, icon: 'journal-text', run: () => router.navigate(`#/assignments/create?id=${t.id}`) }))
     ];
 
     const allCommands = [...staticActions, ...projectItems];

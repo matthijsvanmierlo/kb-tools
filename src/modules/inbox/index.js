@@ -47,9 +47,19 @@ export async function renderInboxView(params, router, container) {
       if (c.kind === 'assignment') {
         const asg = c.assignment_id ? await storage.table('assignments').get(c.assignment_id) : null;
         if (asg) {
-          targetTitle = asg.title || 'Untitled Assignment';
+          targetTitle = asg.title || 'Untitled Assessment';
         } else {
-          targetTitle = `Assignment (${c.assignment_id || 'unknown'})`;
+          targetTitle = `Assessment (${c.assignment_id || 'unknown'})`;
+          status = 'Assessment not found';
+          statusTone = 'amber';
+          errorDetail = 'This assessment is not in your library on this device.';
+        }
+      } else if (c.kind === 'task') {
+        const tsk = c.task_id ? await storage.table('tasks').get(c.task_id) : null;
+        if (tsk) {
+          targetTitle = tsk.title || 'Untitled Assignment';
+        } else {
+          targetTitle = `Assignment (${c.task_id || 'unknown'})`;
           status = 'Assignment not found';
           statusTone = 'amber';
           errorDetail = 'This assignment is not in your library on this device.';
@@ -288,10 +298,16 @@ export async function renderInboxView(params, router, container) {
           return;
         }
 
-        const assignments = await storage.table('assignments').toArray();
-        const dropAssignments = assignments.filter(a => a.publish?.relay?.drop_id || a.relay?.drop_id);
+        const [assignments, tasks] = await Promise.all([
+          storage.table('assignments').toArray().catch(() => []),
+          storage.table('tasks').toArray().catch(() => [])
+        ]);
+        const dropAssignments = [
+          ...assignments.filter(a => a.publish?.relay?.drop_id || a.relay?.drop_id),
+          ...tasks.filter(t => t.publish?.relay?.drop_id || t.relay?.drop_id)
+        ];
         if (!dropAssignments.length) {
-          toast.info('No assignments with an active server drop box found.');
+          toast.info('No assignments or tasks with an active server drop box found.');
           return;
         }
 
@@ -466,6 +482,7 @@ export async function renderInboxView(params, router, container) {
     if (!staged.length) return;
 
     const assignmentGroups = new Map(); // assignment_id -> array of items
+    const taskGroups = new Map(); // task_id -> array of items
     const videoItems = [];
     const skippedItems = [];
 
@@ -474,6 +491,10 @@ export async function renderInboxView(params, router, container) {
         const aid = item.classification.assignment_id;
         if (!assignmentGroups.has(aid)) assignmentGroups.set(aid, []);
         assignmentGroups.get(aid).push(item);
+      } else if (item.classification.kind === 'task' && item.classification.task_id) {
+        const tid = item.classification.task_id;
+        if (!taskGroups.has(tid)) taskGroups.set(tid, []);
+        taskGroups.get(tid).push(item);
       } else if (item.classification.kind === 'video_receipt' || item.classification.kind === 'legacy_receipt') {
         videoItems.push(item);
       } else {
@@ -488,12 +509,12 @@ export async function renderInboxView(params, router, container) {
       const assignment = await storage.table('assignments').get(assignmentId);
       if (!assignment) {
         summaries.push({
-          type: 'Assignment',
-          title: `Assignment (${assignmentId})`,
+          type: 'Assessment',
+          title: `Assessment (${assignmentId})`,
           added: 0,
           duplicates: 0,
-          errors: [{ source: 'Inbox', message: 'Assignment not found in library' }],
-          link: '#/assignments'
+          errors: [{ source: 'Inbox', message: 'Assessment not found in library' }],
+          link: '#/assessments'
         });
         continue;
       }
@@ -508,12 +529,57 @@ export async function renderInboxView(params, router, container) {
       });
 
       summaries.push({
-        type: 'Assignment',
-        title: assignment.title || 'Assignment',
+        type: 'Assessment',
+        title: assignment.title || 'Assessment',
         added: res.added,
         duplicates: res.duplicates,
         errors: res.errors,
-        link: `#/assignments/submissions?id=${assignment.id}`
+        link: `#/assessments/submissions?id=${assignment.id}`
+      });
+    }
+
+    // 1b. Process tasks (Assignments)
+    for (const [taskId, items] of taskGroups.entries()) {
+      const task = await storage.table('tasks').get(taskId);
+      if (!task) {
+        summaries.push({
+          type: 'Assignment',
+          title: `Assignment (${taskId})`,
+          added: 0,
+          duplicates: 0,
+          errors: [{ source: 'Inbox', message: 'Assignment not found in library' }],
+          link: '#/assignments'
+        });
+        continue;
+      }
+
+      const courseId = task.gradebook?.course_id || task.class_id;
+      const roster = courseId ? await storage.table('gradebook_students').where('course_id').equals(courseId).toArray().catch(() => []) : [];
+      const { importTaskSubmissions } = await import('../tasks/submissions.js');
+
+      let added = 0;
+      const errors = [];
+
+      for (const it of items) {
+        const res = await importTaskSubmissions({
+          text: it.text,
+          task,
+          teacherPrivateKey: keys.privateJwk,
+          roster
+        });
+        added += res.imported;
+        if (res.failed > 0) {
+          errors.push(...res.errors.map(m => ({ source: it.source, message: m })));
+        }
+      }
+
+      summaries.push({
+        type: 'Assignment',
+        title: task.title || 'Assignment',
+        added,
+        duplicates: 0,
+        errors,
+        link: `#/assignments/review?id=${task.id}`
       });
     }
 

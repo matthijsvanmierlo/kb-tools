@@ -45,6 +45,11 @@ async function loadAssignmentsModule(...args) {
   return mod.renderAssignmentsView(...args);
 }
 
+async function loadTasksModule(route, params) {
+  const mod = await import('./modules/tasks/index.js');
+  return mod.default(route, params, router);
+}
+
 async function loadStudentReportModule(...args) {
   const mod = await import('./modules/gradebook/student-report.js');
   return mod.renderStudentReportView(...args);
@@ -96,6 +101,11 @@ async function loadCalendarModule(...args) {
 }
 
 async function loadFeedbackModule(...args) {
+  const eph = store.getState('ephemeralData');
+  if (eph?.type === 'task_feedback' || eph?.payload?.kind === 'task_feedback') {
+    const mod = await import('./modules/tasks/feedback-view.js');
+    return mod.renderTaskFeedbackView(...args);
+  }
   const mod = await import('./modules/assignments/feedback-view.js');
   return mod.renderFeedbackView(...args);
 }
@@ -145,7 +155,14 @@ async function bootstrapApp() {
     router.register('#/classes', loadClassesModule);
     router.register('#/course', loadCourseModule);
     router.register('#/calendar', loadCalendarModule);
-    router.register('#/assignments', loadAssignmentsModule);
+    router.register('#/assessments', loadAssignmentsModule);
+    router.register('#/assessments/edit', loadAssignmentsModule);
+    router.register('#/assessments/take', loadAssignmentsModule);
+    router.register('#/assessments/submissions', loadAssignmentsModule);
+    router.register('#/assignments', loadTasksModule);
+    router.register('#/assignments/create', loadTasksModule);
+    router.register('#/assignments/work', loadTasksModule);
+    router.register('#/assignments/review', loadTasksModule);
     router.register('#/assignments/edit', loadAssignmentsModule);
     router.register('#/assignments/take', loadAssignmentsModule);
     router.register('#/assignments/submissions', loadAssignmentsModule);
@@ -158,11 +175,11 @@ async function bootstrapApp() {
     router.register('#/student/course', loadStudentCourseDetailModule);
     router.register('#/student/gradebook', loadStudentGradebookModule);
 
-    // Global drag-and-drop listener for home, assignments, and student hub (§6.4)
+    // Global drag-and-drop listener for home, assessments, assignments, and student hub (§6.4)
     if (typeof window !== 'undefined') {
       window.addEventListener('dragover', (e) => {
         const hash = window.location.hash || '#/';
-        if (hash === '#/' || hash === '#/home' || hash.startsWith('#/assignments') || hash.startsWith('#/student')) {
+        if (hash === '#/' || hash === '#/home' || hash.startsWith('#/assessments') || hash.startsWith('#/assignments') || hash.startsWith('#/student')) {
           if (e.dataTransfer && Array.from(e.dataTransfer.types || []).includes('Files')) {
             e.preventDefault();
           }
@@ -170,7 +187,7 @@ async function bootstrapApp() {
       });
       window.addEventListener('drop', (e) => {
         const hash = window.location.hash || '#/';
-        if (hash === '#/' || hash === '#/home' || hash === '#/assignments') {
+        if (hash === '#/' || hash === '#/home' || hash === '#/assessments' || hash === '#/assignments') {
           const files = Array.from(e.dataTransfer?.files || []);
           if (files.length > 0) {
             e.preventDefault();
@@ -359,7 +376,7 @@ function bindStorageControls() {
     const tables = [
       'gradebook_courses', 'gradebook_students', 'gradebook_assignments',
       'gradebook_grades', 'gradebook_rubrics', 'assignments',
-      'assignment_submissions', 'flashcards', 'timelines', 'video_assessments'
+      'assignment_submissions', 'tasks', 'task_submissions', 'flashcards', 'timelines', 'video_assessments'
     ];
     const tableCounts = {};
     for (const t of tables) {
@@ -421,8 +438,9 @@ function describeRelayError(err, baseUrl) {
 const RESTORE_LABELS = {
   flashcards: 'Flashcard decks', timelines: 'Timelines', video_assessments: 'Video lessons',
   gradebook_courses: 'Classes', gradebook_students: 'Students', gradebook_assignments: 'Gradebook assignments',
-  gradebook_grades: 'Grades', gradebook_rubrics: 'Rubrics', assignments: 'Assignments',
-  assignment_submissions: 'Submissions', media: 'Images & audio clips'
+  gradebook_grades: 'Grades', gradebook_rubrics: 'Rubrics', assignments: 'Assessments',
+  assignment_submissions: 'Assessment submissions', tasks: 'Assignments', task_submissions: 'Assignment submissions',
+  media: 'Images & audio clips'
 };
 
 /**

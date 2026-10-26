@@ -330,9 +330,9 @@ export async function renderAboutView(params, router, container) {
           <div class="p-4 rounded-xl border border-slate-200 bg-white hover:border-amber-300 transition-colors space-y-2">
             <div class="flex items-center justify-between">
               <span class="font-bold text-slate-900 flex items-center gap-2">
-                <sl-icon name="ui-checks" class="text-amber-600"></sl-icon> Assignments &amp; Hand-in
+                <sl-icon name="ui-checks" class="text-amber-600"></sl-icon> Assessments &amp; Hand-in
               </span>
-              <sl-button size="small" variant="default" href="#/assignments">Open</sl-button>
+              <sl-button size="small" variant="default" href="#/assessments">Open</sl-button>
             </div>
             <p class="text-xs text-slate-600">Auto-graded practice and blind summative assessments with tamper-evident commitment chains.</p>
           </div>

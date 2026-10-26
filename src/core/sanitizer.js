@@ -230,12 +230,28 @@ export class Sanitizer {
   static renderSTEMMarkdown(rawInput) {
     if (!rawInput || typeof rawInput !== 'string') return '';
 
+    // Stage 0: Protect fenced code blocks and inline code from math extraction
+    const codeTokens = [];
+    let codeIndex = 0;
+
+    let tokenized = rawInput.replace(/(```[\s\S]*?```|~~~[\s\S]*?~~~)/g, (match) => {
+      const placeholder = `@@KB_CODE_BLOCK_${codeIndex++}@@`;
+      codeTokens.push({ placeholder, text: match });
+      return placeholder;
+    });
+
+    tokenized = tokenized.replace(/(`+)([\s\S]*?)\1/g, (match) => {
+      const placeholder = `@@KB_CODE_SPAN_${codeIndex++}@@`;
+      codeTokens.push({ placeholder, text: match });
+      return placeholder;
+    });
+
     const mathTokens = [];
     let tokenIndex = 0;
 
     // Stage 1: Tokenize block math $$...$$ and inline math $...$
     // Block math: $$ ... $$
-    let tokenized = rawInput.replace(/\$\$([\s\S]+?)\$\$/g, (match, expr) => {
+    tokenized = tokenized.replace(/\$\$([\s\S]+?)\$\$/g, (match, expr) => {
       const placeholder = `@@KB_MATH_BLOCK_${tokenIndex++}@@`;
       mathTokens.push({ placeholder, expr: expr.trim(), displayMode: true });
       return placeholder;
@@ -247,6 +263,11 @@ export class Sanitizer {
       mathTokens.push({ placeholder, expr: expr.trim(), displayMode: false });
       return placeholder;
     });
+
+    // Restore protected code blocks before passing to markdown parser
+    for (const token of codeTokens) {
+      tokenized = tokenized.replace(token.placeholder, () => token.text);
+    }
 
     // Stage 2: Render math tokens into KaTeX HTML
     const renderedMath = new Map();
@@ -288,4 +309,5 @@ export class Sanitizer {
   }
 }
 
+export const renderSTEMMarkdown = (raw) => Sanitizer.renderSTEMMarkdown(raw);
 export default Sanitizer;

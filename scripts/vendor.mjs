@@ -31,7 +31,23 @@ export const ESM_PACKAGES = {
   jspdf: 'jspdf.mjs',
   'jspdf-autotable': 'jspdf-autotable.mjs',
   jszip: 'jszip.mjs',
-  'qrcode-generator': 'qrcode-generator.mjs'
+  'qrcode-generator': 'qrcode-generator.mjs',
+  codemirror: {
+    file: 'codemirror.mjs',
+    shim: `
+export * from 'codemirror';
+export * from '@codemirror/state';
+export * from '@codemirror/view';
+export { python } from '@codemirror/lang-python';
+export { javascript } from '@codemirror/lang-javascript';
+export { java } from '@codemirror/lang-java';
+export { cpp } from '@codemirror/lang-cpp';
+export { html } from '@codemirror/lang-html';
+export { css } from '@codemirror/lang-css';
+export { sql } from '@codemirror/lang-sql';
+export { oneDark } from '@codemirror/theme-one-dark';
+`
+  }
 };
 
 // Optional jsPDF features the app never calls (doc.html(), SVG rendering) — left unresolved.
@@ -40,8 +56,12 @@ const OPTIONAL_EXTERNALS = ['html2canvas', 'canvg', 'core-js'];
 async function bundlePackages() {
   const names = Object.keys(ESM_PACKAGES);
   for (const name of names) {
-    // Re-export both named and default exports so `import x from` and `import * as` both work
-    const shim = `export * from '${name}';\nimport * as m from '${name}';\nexport default (m.default ?? m);\n`;
+    const pkgConfig = ESM_PACKAGES[name];
+    const outfile = typeof pkgConfig === 'string' ? pkgConfig : pkgConfig.file;
+    const shim = typeof pkgConfig === 'object' && pkgConfig.shim
+      ? pkgConfig.shim
+      : `export * from '${name}';\nimport * as m from '${name}';\nexport default (m.default ?? m);\n`;
+
     await build({
       stdin: { contents: shim, resolveDir: root, sourcefile: `${name}-entry.js` },
       bundle: true,
@@ -50,8 +70,8 @@ async function bundlePackages() {
       target: ['es2020'],
       minify: true,
       legalComments: 'inline',
-      external: [...names.filter(n => n !== name), ...OPTIONAL_EXTERNALS],
-      outfile: path.join(vendorDir, ESM_PACKAGES[name]),
+      external: [...names.filter(n => n !== name && !n.startsWith('@codemirror')), ...OPTIONAL_EXTERNALS],
+      outfile: path.join(vendorDir, outfile),
       logLevel: 'warning',
       // `m.default` is intentionally probed on packages without a default export
       logOverride: { 'import-is-undefined': 'silent' }

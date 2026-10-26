@@ -37,9 +37,9 @@ export function generateSubmissionPDF({ assignment, submission, student, course 
 
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(16);
-  doc.text('Assignment Feedback Report', 40, 35);
+  doc.text('Assessment Feedback Report', 40, 35);
   doc.setFontSize(11);
-  doc.text(`${assignment?.title || 'Assignment'} · ${courseName}${courseSection}`, 40, 53);
+  doc.text(`${assignment?.title || 'Assessment'} · ${courseName}${courseSection}`, 40, 53);
 
   // Student & Meta info
   doc.setTextColor(30, 41, 59);

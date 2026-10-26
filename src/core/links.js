@@ -71,9 +71,9 @@ export class LinkBuilder {
    * @param {object} student
    * @returns {Promise<{ url: string, exceedsUrlLimit: boolean, rawFileContent: string, length: number, generatedAccessCode: string|null }>}
    */
-  static async feedback(feedbackPayload, student) {
+  static async feedback(feedbackPayload, student, shareType = 'assignment_feedback') {
     const generatedAccessCode = await AccessCodes.ensureForStudent(student);
-    const result = await CryptoShareEngine.createSharePayload('assignment_feedback', feedbackPayload, AccessCodes.reportPassphrase(student));
+    const result = await CryptoShareEngine.createSharePayload(shareType, feedbackPayload, AccessCodes.reportPassphrase(student));
     return { ...result, generatedAccessCode };
   }
 

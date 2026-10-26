@@ -57,7 +57,7 @@ export async function renderHomeView(params, r, container) {
     ...decks.map(d => ({ ...d, _type: 'flashcards', _label: 'Deck', _icon: 'stack', _color: 'blue', _openUrl: `#/flashcards/study?id=${d.id}`, _editUrl: `#/flashcards/edit?id=${d.id}` })),
     ...timelines.map(t => ({ ...t, _type: 'timeline', _label: 'Timeline', _icon: 'bar-chart-steps', _color: 'violet', _openUrl: `#/timeline/view?id=${t.id}`, _editUrl: `#/timeline/view?id=${t.id}` })),
     ...videos.map(v => ({ ...v, _type: 'video', _label: 'Video', _icon: 'play-circle', _color: 'rose', _openUrl: `#/video/kiosk?id=${v.id}`, _editUrl: `#/video/edit?id=${v.id}` })),
-    ...assignments.map(a => ({ ...a, _type: 'assignments', _label: 'Assignment', _icon: 'ui-checks', _color: 'amber', _openUrl: `#/assignments/edit?id=${a.id}`, _editUrl: `#/assignments/edit?id=${a.id}` }))
+    ...assignments.map(a => ({ ...a, _type: 'assignments', _label: 'Assessment', _icon: 'ui-checks', _color: 'amber', _openUrl: `#/assessments/edit?id=${a.id}`, _editUrl: `#/assessments/edit?id=${a.id}` }))
   ]
     .filter(p => !activeClassId || p.class_id === activeClassId)
     .sort((a, b) => new Date(b.updated_at || 0) - new Date(a.updated_at || 0))
@@ -146,7 +146,7 @@ function renderContextBar(todayStr, activeClass) {
           </sl-button>
           <sl-menu>
             <sl-menu-item value="new-assignment">
-              <sl-icon slot="prefix" name="ui-checks"></sl-icon> Assignment
+              <sl-icon slot="prefix" name="ui-checks"></sl-icon> Assessment
             </sl-menu-item>
             <sl-menu-item value="new-video">
               <sl-icon slot="prefix" name="play-circle"></sl-icon> Video assessment
@@ -216,7 +216,7 @@ function renderAttentionSection(items) {
 
 function renderQuickActions() {
   const actions = [
-    { title: 'New Assignment', desc: 'Auto-graded practice', icon: 'ui-checks', color: 'amber', url: '#/assignments/edit' },
+    { title: 'New Assessment', desc: 'Auto-graded practice', icon: 'ui-checks', color: 'amber', url: '#/assessments/edit' },
     { title: 'New Video', desc: 'Checkpoint interactive video', icon: 'play-circle', color: 'rose', url: '#/video/edit' },
     { title: 'New Deck', desc: 'Spaced repetition flashcards', icon: 'stack', color: 'blue', url: '#/flashcards/edit' },
     { title: 'New Timeline', desc: 'Multi-scale historical events', icon: 'bar-chart-steps', color: 'violet', url: '#/timeline/view?new=1' },
@@ -370,7 +370,7 @@ function bindHomeEvents(container, courses, router) {
   // New dropdown
   container.querySelector('sl-dropdown')?.addEventListener('sl-select', (e) => {
     const val = e.detail.item.value;
-    if (val === 'new-assignment') router.navigate('#/assignments/edit');
+    if (val === 'new-assignment') router.navigate('#/assessments/edit');
     if (val === 'new-video') router.navigate('#/video/edit');
     if (val === 'new-flashcard') router.navigate('#/flashcards/edit');
     if (val === 'new-timeline') router.navigate('#/timeline/view?new=1');

@@ -54,10 +54,10 @@ export function computeHomeStats({
     },
     {
       id: 'publish_work',
-      label: 'Publish an assignment or video',
+      label: 'Publish an assessment or video',
       completed: hasPublished,
-      actionRoute: '#/assignments',
-      actionLabel: 'Create assignment'
+      actionRoute: '#/assessments',
+      actionLabel: 'Create assessment'
     },
     {
       id: 'make_backup',
@@ -95,13 +95,13 @@ export function computeHomeStats({
 
     for (const [assignmentId, subs] of grouped.entries()) {
       const asgn = assignments.find(a => a.id === assignmentId);
-      const title = asgn?.title || 'Assignment';
+      const title = asgn?.title || 'Assessment';
       attentionItems.push({
         type: 'submissions_to_review',
         badge: 'Review',
         badgeVariant: 'warning',
         text: `${subs.length} submission(s) to review for "${title}"`,
-        link: `#/assignments/submissions?id=${assignmentId}`
+        link: `#/assessments/submissions?id=${assignmentId}`
       });
     }
   }
@@ -159,7 +159,7 @@ export function computeHomeStats({
         badge: 'Due Soon',
         badgeVariant: 'neutral',
         text: `"${asgn.title}" due ${due}: ${subCount}/${rosterCount} handed in`,
-        link: `#/assignments/submissions?id=${asgn.id}`
+        link: `#/assessments/submissions?id=${asgn.id}`
       });
     }
   }

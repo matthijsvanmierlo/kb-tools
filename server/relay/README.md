@@ -134,12 +134,24 @@ The "Connect to a school server" dialog tells teachers when a relay is blocked b
 | `KB_RELAY_RETENTION_DAYS` | `180` | Delete submissions, drafts and sync chunks older than this (`0` keeps all) |
 | `KB_RELAY_TLS_CERT` / `KB_RELAY_TLS_KEY` | unset | PEM files; when both are set the relay serves HTTPS |
 | `KB_RELAY_SERVE_APP` | unset | `1` also serves the KennisBoost app (same origin as the relay) |
+| `KB_MEDIA_SIGNING_SECRET` | auto-generated | Secret key for HMAC-signed media upload URLs (persisted in DB) |
+| `KB_CDN_ENDPOINT` | unset | S3-compatible endpoint for media CDN offloading (Cloudflare R2, MinIO, S3) |
+| `KB_CDN_BUCKET` | unset | Bucket name for media assets |
+| `KB_CDN_ACCESS_KEY_ID` | unset | S3 Access Key ID |
+| `KB_CDN_SECRET_ACCESS_KEY` | unset | S3 Secret Access Key |
+| `KB_CDN_REGION` | `auto` | S3 region |
+| `KB_CDN_PUBLIC_URL` | unset | Public base URL for CDN media retrieval |
+| `KB_CDN_LOCAL_DIR` | unset | Local directory for storing media files when using direct FS storage |
 
 ## API Routes (`/api/v1`)
 
 | Method | Path | Auth | Body / Query | Description |
 |---|---|---|---|---|
 | GET | `/health` | None | — | Health check & capabilities |
+| POST | `/media/presign` | Teacher | `{ sha256, mime, ext, size }` | Request HMAC-signed upload URL for media asset |
+| POST | `/drops/:dropId/media/presign` | Drop secret | `{ sha256, mime, ext, size }` | Request HMAC-signed upload URL for student file attachment (max 25MB, drop quota enforced) |
+| PUT | `/media/upload?key=&exp=&sig=[&drop_id=]` | HMAC sig | Raw binary | Upload media asset (verifies signature, expiry, and body SHA-256 match) |
+| GET | `/media/file/:filename` | None | — | Download immutable media asset |
 | POST | `/payloads` | Teacher | `{ kind, ciphertext, expires_at, meta }` | Store encrypted short link payload (max 512KB) |
 | GET | `/payloads/:ref` | None | — | Retrieve encrypted lesson payload |
 | POST | `/drops` | Teacher | `{ assignment_id, publish_version, expires_at }` | Create submission drop box; returns `{ drop_id, drop_secret }` |

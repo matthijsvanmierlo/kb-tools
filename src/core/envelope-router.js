@@ -58,8 +58,24 @@ export function classifyText(text) {
             text: JSON.stringify(extracted)
           };
         }
+        if (extracted.kind === 'task_feedback' || extracted.type === 'task_feedback') {
+          return {
+            kind: 'task_feedback',
+            task_id: extracted.task?.id || extracted.task_id || null,
+            course_id: extracted.course?.id || null,
+            text: JSON.stringify(extracted)
+          };
+        }
         if (extracted.kbsub === 1 || extracted.epk) {
           return classifyText(JSON.stringify(extracted));
+        }
+        if (extracted.kind === 'kb-task' || extracted.task_id) {
+          return {
+            kind: 'task',
+            task_id: extracted.task_id,
+            publish_version: headerVersion(extracted.publish_version),
+            text: JSON.stringify(extracted)
+          };
         }
         if (extracted.kind === 'kb-assignment' || extracted.assignment_id) {
           return {
@@ -88,6 +104,14 @@ export function classifyText(text) {
           text: trimmed
         };
       }
+      if (header.kind === 'task' || headerId(header.task_id)) {
+        return {
+          kind: 'task',
+          task_id: headerId(header.task_id || header.id),
+          publish_version: headerVersion(header.publish_version),
+          text: trimmed
+        };
+      }
       if (headerId(header.assignment_id)) {
         return {
           kind: 'assignment',
@@ -111,6 +135,15 @@ export function classifyText(text) {
         return {
           kind: 'assignment_feedback',
           assignment_id: parsed.assignment?.id || null,
+          course_id: parsed.course?.id || null,
+          text: trimmed
+        };
+      }
+      // Task Feedback
+      if (parsed.kind === 'task_feedback' || parsed.type === 'task_feedback') {
+        return {
+          kind: 'task_feedback',
+          task_id: parsed.task?.id || parsed.task_id || null,
           course_id: parsed.course?.id || null,
           text: trimmed
         };

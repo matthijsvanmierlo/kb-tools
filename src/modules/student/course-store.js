@@ -137,6 +137,19 @@ export async function mergeCourseFeed(feedEnvelope, { accessCode, etag, relayUrl
               updated_at: payload.updated_at || new Date().toISOString()
             });
           }
+        } else if (kind === 'task') {
+          const taskTable = storage.table('tasks');
+          const existing = await taskTable.get(payload.id || sourceId).catch(() => null);
+          if (!existing) {
+            await taskTable.put({ ...payload, id: payload.id || sourceId });
+          } else {
+            await taskTable.put({
+              ...existing,
+              ...payload,
+              id: payload.id || sourceId,
+              updated_at: payload.updated_at || new Date().toISOString()
+            });
+          }
         }
       } catch (err) {
         console.warn('Failed to cache course item locally:', err);
