@@ -45,9 +45,9 @@ async function loadAssignmentsModule(...args) {
   return mod.renderAssignmentsView(...args);
 }
 
-async function loadTasksModule(route, params) {
+async function loadTasksModule(...args) {
   const mod = await import('./modules/tasks/index.js');
-  return mod.default(route, params, router);
+  return mod.default(...args);
 }
 
 async function loadStudentReportModule(...args) {
@@ -161,11 +161,11 @@ async function bootstrapApp() {
     router.register('#/assessments/submissions', loadAssignmentsModule);
     router.register('#/assignments', loadTasksModule);
     router.register('#/assignments/create', loadTasksModule);
+    router.register('#/assignments/edit', loadTasksModule);
     router.register('#/assignments/work', loadTasksModule);
+    router.register('#/assignments/take', loadTasksModule);
     router.register('#/assignments/review', loadTasksModule);
-    router.register('#/assignments/edit', loadAssignmentsModule);
-    router.register('#/assignments/take', loadAssignmentsModule);
-    router.register('#/assignments/submissions', loadAssignmentsModule);
+    router.register('#/assignments/submissions', loadTasksModule);
     router.register('#/inbox', loadInboxModule);
     router.register('#/report', loadStudentReportModule);
     router.register('#/feedback', loadFeedbackModule);
@@ -305,18 +305,20 @@ async function bootstrapApp() {
 
   } catch (err) {
     console.error('Fatal initialization error:', err);
-    toast.danger(`Application boot failed: ${err.message}`);
-    const container = document.getElementById('app-view-container');
-    if (container) {
-      container.innerHTML = `
-        <div class="p-8 max-w-xl mx-auto text-center space-y-4 bg-white rounded-2xl border border-red-200 shadow-sm mt-8">
-          <sl-icon name="exclamation-octagon" class="text-4xl text-red-500"></sl-icon>
-          <h2 class="text-xl font-bold text-slate-800">Application Boot Failed</h2>
-          <p class="text-sm text-slate-600">${Sanitizer.escapeHTML(err.message)}</p>
-          <sl-button variant="primary" id="btn-boot-reload">Reload Application</sl-button>
-        </div>
-      `;
-      container.querySelector('#btn-boot-reload')?.addEventListener('click', () => window.location.reload());
+    if (typeof document !== 'undefined') {
+      toast.danger(`Application boot failed: ${err.message}`);
+      const container = document.getElementById('app-view-container');
+      if (container) {
+        container.innerHTML = `
+          <div class="p-8 max-w-xl mx-auto text-center space-y-4 bg-white rounded-2xl border border-red-200 shadow-sm mt-8">
+            <sl-icon name="exclamation-octagon" class="text-4xl text-red-500"></sl-icon>
+            <h2 class="text-xl font-bold text-slate-800">Application Boot Failed</h2>
+            <p class="text-sm text-slate-600">${Sanitizer.escapeHTML(err.message)}</p>
+            <sl-button variant="primary" id="btn-boot-reload">Reload Application</sl-button>
+          </div>
+        `;
+        container.querySelector('#btn-boot-reload')?.addEventListener('click', () => window.location.reload());
+      }
     }
   }
 }

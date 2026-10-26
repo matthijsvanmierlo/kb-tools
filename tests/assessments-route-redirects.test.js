@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { Router, LEGACY_REDIRECTS } from '../src/router.js';
 import { storage } from '../src/core/storage.js';
 
-describe('Assessments Route Redirects & Shared Payload Activation', () => {
+describe('Assessments & Assignments Routing & Shared Payload Activation', () => {
   beforeEach(async () => {
     localStorage.clear();
     sessionStorage.clear();
@@ -11,29 +11,18 @@ describe('Assessments Route Redirects & Shared Payload Activation', () => {
     window.location.hash = '#/';
   });
 
-  it('defines the expected legacy redirects for assignments paths', () => {
-    expect(LEGACY_REDIRECTS['#/assignments/take']).toBe('#/assessments/take');
-    expect(LEGACY_REDIRECTS['#/assignments/submissions']).toBe('#/assessments/submissions');
-    expect(LEGACY_REDIRECTS['#/assignments/edit']).toBe('#/assessments/edit');
-  });
-
-  it('redirects legacy assignments routes preserving query parameters', async () => {
+  it('keeps assignments routes within the assignments module without redirecting to assessments', async () => {
     const router = new Router();
     const navSpy = vi.spyOn(router, 'navigate');
 
-    window.location.hash = '#/assignments/take?preview=1&sid=123';
+    window.location.hash = '#/assignments/create?id=task-123';
     await router.handleRoute();
-    expect(navSpy).toHaveBeenCalledWith('#/assessments/take?preview=1&sid=123');
+    expect(navSpy).not.toHaveBeenCalledWith(expect.stringContaining('#/assessments'));
 
     navSpy.mockClear();
-    window.location.hash = '#/assignments/submissions?id=asg-abc';
+    window.location.hash = '#/assignments/edit?id=task-123';
     await router.handleRoute();
-    expect(navSpy).toHaveBeenCalledWith('#/assessments/submissions?id=asg-abc');
-
-    navSpy.mockClear();
-    window.location.hash = '#/assignments/edit?id=asg-xyz';
-    await router.handleRoute();
-    expect(navSpy).toHaveBeenCalledWith('#/assessments/edit?id=asg-xyz');
+    expect(navSpy).not.toHaveBeenCalledWith(expect.stringContaining('#/assessments'));
   });
 
   it('preserves legacy gradebook roster view redirect', async () => {

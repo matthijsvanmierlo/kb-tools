@@ -19,14 +19,15 @@ export async function renderHomeView(params, r, container) {
   if (!container) return;
 
   // 1. Gather live storage data
-  const [courses, students, decks, timelines, videos, assignments, submissions] = await Promise.all([
+  const [courses, students, decks, timelines, videos, assignments, submissions, tasks] = await Promise.all([
     storage.table('gradebook_courses').toArray().catch(() => []),
     storage.table('gradebook_students').toArray().catch(() => []),
     storage.table('flashcards').toArray().catch(() => []),
     storage.table('timelines').toArray().catch(() => []),
     storage.table('video_assessments').toArray().catch(() => []),
     storage.table('assignments').toArray().catch(() => []),
-    storage.table('assignment_submissions').toArray().catch(() => [])
+    storage.table('assignment_submissions').toArray().catch(() => []),
+    storage.table('tasks').toArray().catch(() => [])
   ]);
 
   const quota = await storage.checkStorageQuota();
@@ -57,6 +58,7 @@ export async function renderHomeView(params, r, container) {
     ...decks.map(d => ({ ...d, _type: 'flashcards', _label: 'Deck', _icon: 'stack', _color: 'blue', _openUrl: `#/flashcards/study?id=${d.id}`, _editUrl: `#/flashcards/edit?id=${d.id}` })),
     ...timelines.map(t => ({ ...t, _type: 'timeline', _label: 'Timeline', _icon: 'bar-chart-steps', _color: 'violet', _openUrl: `#/timeline/view?id=${t.id}`, _editUrl: `#/timeline/view?id=${t.id}` })),
     ...videos.map(v => ({ ...v, _type: 'video', _label: 'Video', _icon: 'play-circle', _color: 'rose', _openUrl: `#/video/kiosk?id=${v.id}`, _editUrl: `#/video/edit?id=${v.id}` })),
+    ...tasks.map(t => ({ ...t, _type: 'tasks', _label: 'Assignment', _icon: 'journal-text', _color: 'indigo', _openUrl: `#/assignments/create?id=${t.id}`, _editUrl: `#/assignments/create?id=${t.id}` })),
     ...assignments.map(a => ({ ...a, _type: 'assignments', _label: 'Assessment', _icon: 'ui-checks', _color: 'amber', _openUrl: `#/assessments/edit?id=${a.id}`, _editUrl: `#/assessments/edit?id=${a.id}` }))
   ]
     .filter(p => !activeClassId || p.class_id === activeClassId)
@@ -145,7 +147,10 @@ function renderContextBar(todayStr, activeClass) {
             <sl-icon slot="prefix" name="plus-lg"></sl-icon> New
           </sl-button>
           <sl-menu>
-            <sl-menu-item value="new-assignment">
+            <sl-menu-item value="new-task">
+              <sl-icon slot="prefix" name="journal-text"></sl-icon> Assignment
+            </sl-menu-item>
+            <sl-menu-item value="new-assessment">
               <sl-icon slot="prefix" name="ui-checks"></sl-icon> Assessment
             </sl-menu-item>
             <sl-menu-item value="new-video">
@@ -216,6 +221,7 @@ function renderAttentionSection(items) {
 
 function renderQuickActions() {
   const actions = [
+    { title: 'New Assignment', desc: 'Text, code, drawing & files', icon: 'journal-text', color: 'indigo', url: '#/assignments/create' },
     { title: 'New Assessment', desc: 'Auto-graded practice', icon: 'ui-checks', color: 'amber', url: '#/assessments/edit' },
     { title: 'New Video', desc: 'Checkpoint interactive video', icon: 'play-circle', color: 'rose', url: '#/video/edit' },
     { title: 'New Deck', desc: 'Spaced repetition flashcards', icon: 'stack', color: 'blue', url: '#/flashcards/edit' },
@@ -370,7 +376,8 @@ function bindHomeEvents(container, courses, router) {
   // New dropdown
   container.querySelector('sl-dropdown')?.addEventListener('sl-select', (e) => {
     const val = e.detail.item.value;
-    if (val === 'new-assignment') router.navigate('#/assessments/edit');
+    if (val === 'new-task') router.navigate('#/assignments/create');
+    if (val === 'new-assessment' || val === 'new-assignment') router.navigate('#/assessments/edit');
     if (val === 'new-video') router.navigate('#/video/edit');
     if (val === 'new-flashcard') router.navigate('#/flashcards/edit');
     if (val === 'new-timeline') router.navigate('#/timeline/view?new=1');

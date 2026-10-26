@@ -23,12 +23,12 @@ export async function renderAssignmentsView(params, router, container) {
   await ensureSampleAssignment();
   const hash = window.location.hash || '#/assessments';
 
-  if (hash.startsWith('#/assessments/take') || hash.startsWith('#/assignments/take')) {
+  if (hash.startsWith('#/assessments/take')) {
     const { renderTakeView } = await import('./take.js');
     return renderTakeView(params, router, container);
   }
 
-  if (hash.startsWith('#/assessments/edit') || hash.startsWith('#/assignments/edit')) {
+  if (hash.startsWith('#/assessments/edit')) {
     let assignment = params.id ? await storage.table('assignments').get(params.id) : null;
     if (params.id && !assignment) {
       toast.warning('Assessment not found.');
@@ -45,7 +45,7 @@ export async function renderAssignmentsView(params, router, container) {
     return renderEditor(assignment, router, container);
   }
 
-  if (hash.startsWith('#/assessments/submissions') || hash.startsWith('#/assignments/submissions')) {
+  if (hash.startsWith('#/assessments/submissions')) {
     const assignment = params.id ? await storage.table('assignments').get(params.id) : null;
     if (!assignment) {
       toast.warning('Assessment not found.');

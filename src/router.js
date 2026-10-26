@@ -42,10 +42,11 @@ export const ROUTE_TITLES = {
   '#/assessments/submissions': 'Assessment Submissions',
   '#/assignments': 'Assignments',
   '#/assignments/create': 'Assignment Editor',
-  '#/assignments/work': 'Complete Assignment',
-  '#/assignments/review': 'Review Submissions',
   '#/assignments/edit': 'Assignment Editor',
+  '#/assignments/work': 'Complete Assignment',
   '#/assignments/take': 'Take Assignment',
+  '#/assignments/review': 'Review Submissions',
+  '#/assignments/submissions': 'Review Submissions',
   '#/inbox': 'Submission Inbox',
   '#/share': 'Share',
   '#/connect': 'Connect to School Server',
@@ -67,12 +68,7 @@ export function routeTitle(path) {
 }
 
 // Map legacy hash paths to their modern destinations.
-// NOTE: The new tasks (Assignments) module must use disjoint sub-paths
-// (create, work, review) so these redirects stay unconditional.
 export const LEGACY_REDIRECTS = {
-  '#/assignments/take': '#/assessments/take',
-  '#/assignments/submissions': '#/assessments/submissions',
-  '#/assignments/edit': '#/assessments/edit'
 };
 
 /**

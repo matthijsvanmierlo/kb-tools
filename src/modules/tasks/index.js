@@ -97,11 +97,29 @@ export async function renderTaskLibrary(container) {
  * Tasks router dispatch function.
  * Matches #/assignments, #/assignments/create, #/assignments/work, #/assignments/review
  */
-export default async function tasksModule(route, params = {}, router = null) {
-  const container = document.getElementById('main-content');
-  if (!container) return;
+export default async function tasksModule(routeOrParams, maybeParamsOrRouter = {}, maybeRouterOrContainer = null, maybeContainer = null) {
+  let route = '';
+  let params = {};
+  let router = null;
+  let container = null;
 
-  if (route === '#/assignments/create') {
+  if (typeof routeOrParams === 'string') {
+    route = routeOrParams;
+    params = maybeParamsOrRouter || {};
+    router = maybeRouterOrContainer;
+    container = maybeContainer;
+  } else {
+    params = routeOrParams || {};
+    router = maybeParamsOrRouter;
+    container = maybeRouterOrContainer;
+    const rawHash = (typeof window !== 'undefined' ? window.location.hash : '') || '#/assignments';
+    route = rawHash.split('?')[0].toLowerCase();
+  }
+
+  const mount = container || document.getElementById('main-content');
+  if (!mount) return;
+
+  if (route === '#/assignments/create' || route === '#/assignments/edit') {
     const { renderTaskEditor } = await import('./editor.js');
     const id = params.id;
     let task = null;
@@ -115,22 +133,22 @@ export default async function tasksModule(route, params = {}, router = null) {
         window.location.hash = `#/assignments/create?id=${task.id}`;
       }
     }
-    await renderTaskEditor(task, router || { navigate: (h) => { window.location.hash = h; } }, container);
+    await renderTaskEditor(task, router || { navigate: (h) => { window.location.hash = h; } }, mount);
     return;
   }
 
-  if (route === '#/assignments/work') {
+  if (route === '#/assignments/work' || route === '#/assignments/take') {
     const { renderTaskTake } = await import('./take.js');
-    await renderTaskTake(params, router, container);
+    await renderTaskTake(params, router, mount);
     return;
   }
 
-  if (route === '#/assignments/review') {
+  if (route === '#/assignments/review' || route === '#/assignments/submissions') {
     const { renderTaskSubmissions } = await import('./submissions.js');
-    await renderTaskSubmissions(params, router, container);
+    await renderTaskSubmissions(params, router, mount);
     return;
   }
 
   // Default: Library view (#/assignments)
-  await renderTaskLibrary(container);
+  await renderTaskLibrary(mount);
 }
