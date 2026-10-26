@@ -71,7 +71,8 @@ const ALLOWED_CLASS_RE = new RegExp('^(?:' + [
   'halfarrow-(?:left|right)', 'op-(?:symbol|limits)', '(?:large|small)-op', 'tag', 'eqn-num',
   'newline', 'rule', 'root', 'inner', 'fix', 'mult', 'amsrm', 'mainrm', 'boldsymbol', 'smash',
   'math[a-z]+', 'text(?:rm|it|bf|sf|tt|up|md|normal)', 'mspace', 'llap', 'rlap', 'clap', 'thinbox',
-  'katex-fallback', 'language-[a-z0-9_+-]+', 'task-list-item(?:-checkbox)?', 'contains-task-list'
+  'katex-fallback', 'language-[a-z0-9_+-]+', 'task-list-item(?:-checkbox)?', 'contains-task-list',
+  'kb-wikilink(?:-[a-z0-9_-]+)*'
 ].join('|') + ')$', 'i');
 
 // Inline style properties KaTeX emits. Positioning beyond `relative` is never allowed.
@@ -223,6 +224,42 @@ export class Sanitizer {
   }
 
   /**
+   * Parse [[type:title]] or [[title]] wikilinks into structured semantic anchors
+   * @param {string} text
+   * @returns {string}
+   */
+  static parseWikilinks(text) {
+    if (!text || typeof text !== 'string') return '';
+    // Format 1: [[type:Target Title]] e.g. [[flashcards:Cell Organelles]]
+    let out = text.replace(/\[\[([a-zA-Z0-9_-]+):([^\]\n]+)\]\]/g, (match, rawType, rawTitle) => {
+      const type = rawType.toLowerCase();
+      const title = rawTitle.trim();
+      let route = `#/search?q=${encodeURIComponent(title)}`;
+      if (type === 'flashcard' || type === 'flashcards' || type === 'deck') {
+        route = `#/flashcards?search=${encodeURIComponent(title)}`;
+      } else if (type === 'timeline') {
+        route = `#/timeline?search=${encodeURIComponent(title)}`;
+      } else if (type === 'video') {
+        route = `#/video?search=${encodeURIComponent(title)}`;
+      } else if (type === 'task' || type === 'assignment') {
+        route = `#/assignments?search=${encodeURIComponent(title)}`;
+      } else if (type === 'class' || type === 'course') {
+        route = `#/course?search=${encodeURIComponent(title)}`;
+      }
+      return `<a href="${route}" class="kb-wikilink kb-wikilink-${type}" title="${Sanitizer.escapeHtml(title)}">${Sanitizer.escapeHtml(title)}</a>`;
+    });
+
+    // Format 2: [[Target Title]]
+    out = out.replace(/\[\[([^\]\n]+)\]\]/g, (match, rawTitle) => {
+      const title = rawTitle.trim();
+      const route = `#/search?q=${encodeURIComponent(title)}`;
+      return `<a href="${route}" class="kb-wikilink kb-wikilink-general" title="${Sanitizer.escapeHtml(title)}">${Sanitizer.escapeHtml(title)}</a>`;
+    });
+
+    return out;
+  }
+
+  /**
    * Complete 3-stage rendering pipeline for STEM markdown
    * @param {string} rawInput
    * @returns {string} Sanitized HTML string
@@ -263,6 +300,9 @@ export class Sanitizer {
       mathTokens.push({ placeholder, expr: expr.trim(), displayMode: false });
       return placeholder;
     });
+
+    // Stage 1.5: Parse [[wikilinks]] while code blocks are still protected
+    tokenized = this.parseWikilinks(tokenized);
 
     // Restore protected code blocks before passing to markdown parser
     for (const token of codeTokens) {

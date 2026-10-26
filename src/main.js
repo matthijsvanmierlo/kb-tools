@@ -281,9 +281,11 @@ async function bootstrapApp() {
     });
     WelcomeRoleChooser.checkAndShow(router);
 
-    // 6. Initialize Command Palette (Ctrl+K & ?)
+    // 6. Initialize Command Palette (Ctrl+K & ?) and Universal Context Bar
     const { CommandPalette } = await import('./components/command-palette.js');
     CommandPalette.init();
+    const { ContextBar } = await import('./components/context-bar.js');
+    ContextBar.init();
 
     // Universal Import Content header buttons & notification handler
     const openUniversalImport = async () => {

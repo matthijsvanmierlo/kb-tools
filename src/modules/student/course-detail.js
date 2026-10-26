@@ -5,6 +5,7 @@ import { getStudentCourse, mergeCourseFeed } from './course-store.js';
 import { exportStudentSession } from './session-portability.js';
 import { getStudentRelayUrl, PublicFeedTransport } from '../../core/transport.js';
 import { deriveCourseFeedId } from '../../core/course-feed.js';
+import { AdaptiveEngine } from '../../core/adaptive-engine.js';
 
 const esc = (v) => Sanitizer.escapeHTML(v ?? '');
 
@@ -115,9 +116,12 @@ export async function renderStudentCourseDetailView(params, router, container) {
                   const kind = it.kind || it.type || 'assignment';
                   const sourceId = it.source_id || it.id;
                   const submission = ledgerMap.get(sourceId) || ledgerMap.get(it.id);
+                  const access = AdaptiveEngine.evaluateItemAccess(it, ledger, items);
 
                   let statusPill = '<span class="px-2 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-600">Not started</span>';
-                  if (submission) {
+                  if (!access.unlocked) {
+                    statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-800 border border-amber-200 flex items-center gap-1"><sl-icon name="lock-fill"></sl-icon> Requires: ${esc(access.missingItemTitle)} (≥${access.requiredScore}%)</span>`;
+                  } else if (submission) {
                     if (submission.percent !== undefined) {
                       statusPill = `<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">Completed (${Math.round(submission.percent)}%)</span>`;
                     } else {
@@ -172,9 +176,15 @@ export async function renderStudentCourseDetailView(params, router, container) {
                       </div>
 
                       <div class="flex items-center gap-2 self-end sm:self-auto flex-shrink-0">
-                        <sl-button size="small" variant="${submission ? 'default' : 'primary'}" href="${launchUrl}">
-                          ${submission ? 'Review / Retake' : 'Open Lesson'}
-                        </sl-button>
+                        ${!access.unlocked ? `
+                          <sl-button size="small" variant="default" disabled>
+                            <sl-icon slot="prefix" name="lock"></sl-icon> Locked
+                          </sl-button>
+                        ` : `
+                          <sl-button size="small" variant="${submission ? 'default' : 'primary'}" href="${launchUrl}">
+                            ${submission ? 'Review / Retake' : 'Open Lesson'}
+                          </sl-button>
+                        `}
                       </div>
                     </div>
                   `;

@@ -384,6 +384,11 @@ export class StorageManager {
       task_submissions: 'id, task_id, student_id, submitted_at, synced_at, updated_at, [task_id+student_id]'
     });
 
+    // v8: Local-only draft history & process telemetry (#10) - intentionally excluded from outbox replication
+    this.db.version(8).stores({
+      draft_history: '++id, [item_id+student_id], item_id, saved_at'
+    });
+
     // Initialize in-memory tables for ephemeral mode
     const tables = [
       'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
@@ -391,7 +396,7 @@ export class StorageManager {
       'gradebook_rubrics', 'assignments', 'assignment_submissions',
       'tasks', 'task_submissions',
       'student_courses', 'student_ledger', 'course_units', 'course_items', 'student_items',
-      'app_metadata', 'binary_blobs', 'outbox'
+      'app_metadata', 'binary_blobs', 'outbox', 'draft_history'
     ];
     for (const t of tables) {
       this.memoryStore.set(t, new Map());

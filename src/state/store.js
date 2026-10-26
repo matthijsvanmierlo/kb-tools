@@ -3,6 +3,8 @@
  */
 export class AppStore {
   constructor(initialState = {}) {
+    const initialClassFilter = typeof localStorage !== 'undefined' ? localStorage.getItem('kb_active_class_filter') : null;
+
     this._state = {
       currentRoute: '#/flashcards',
       activeDeckId: null,
@@ -11,7 +13,7 @@ export class AppStore {
       activeTimeline: null,
       activeVideoId: null,
       activeVideo: null,
-      activeCourseId: null,
+      activeCourseId: initialClassFilter || null,
       activeCourse: null,
       ephemeralData: null,
       storageQuota: { usage: 0, quota: 0, percent: 0 },
@@ -59,6 +61,43 @@ export class AppStore {
 
     for (const key of modifiedKeys) {
       this._notifyKey(key, this._state[key]);
+    }
+  }
+
+  /**
+   * Set active class/course globally across all views, breadcrumbs, and filters
+   * @param {string|object|null} courseOrId
+   * @param {object|null} [courseObject]
+   */
+  setActiveClass(courseOrId, courseObject = null) {
+    let courseId = null;
+    let course = null;
+
+    if (courseOrId && typeof courseOrId === 'object') {
+      courseId = courseOrId.id || courseOrId.course_id || null;
+      course = courseOrId;
+    } else {
+      courseId = courseOrId || null;
+      course = courseObject || null;
+    }
+
+    if (typeof localStorage !== 'undefined') {
+      if (courseId) {
+        localStorage.setItem('kb_active_class_filter', courseId);
+      } else {
+        localStorage.removeItem('kb_active_class_filter');
+      }
+    }
+
+    this.setState({
+      activeCourseId: courseId,
+      activeCourse: course || (courseId && this._state.activeCourse?.id === courseId ? this._state.activeCourse : null)
+    });
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('kb-class-filter-changed', {
+        detail: { classId: courseId, course }
+      }));
     }
   }
 

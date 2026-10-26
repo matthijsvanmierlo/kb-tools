@@ -42,7 +42,9 @@ export function createDatabase(filePath = ':memory:') {
       const pruneDrops = db.prepare('DELETE FROM drops WHERE expires_at IS NOT NULL AND expires_at < ?');
       const pRes = prunePayloads.run(now);
       const dRes = pruneDrops.run(now);
-      const result = { payloadsPruned: pRes.changes, dropsPruned: dRes.changes, submissionsPruned: 0, draftsPruned: 0, chunksPruned: 0 };
+      const pruneFeedback = db.prepare('DELETE FROM feedback_drops WHERE expires_at IS NOT NULL AND expires_at < ?');
+      const fbRes = pruneFeedback.run(now);
+      const result = { payloadsPruned: pRes.changes, dropsPruned: dRes.changes, feedbackPruned: fbRes.changes, submissionsPruned: 0, draftsPruned: 0, chunksPruned: 0 };
       if (retentionDays > 0) {
         const cutoff = new Date(Date.now() - retentionDays * 86400000).toISOString();
         result.submissionsPruned = db.prepare('DELETE FROM submissions WHERE received_at < ?').run(cutoff).changes;
@@ -250,6 +252,27 @@ export function createDatabase(filePath = ':memory:') {
       getStats(dropId) {
         const row = db.prepare('SELECT count(*) as count, coalesce(sum(size), 0) as total_size FROM drop_media WHERE drop_id = ?').get(dropId);
         return { count: Number(row?.count || 0), totalSize: Number(row?.total_size || 0) };
+      }
+    },
+
+    feedbackDrops: {
+      put({ dropId, ciphertext, expiresAt = null }) {
+        const now = new Date().toISOString();
+        db.prepare(`INSERT INTO feedback_drops (drop_id, ciphertext, created_at, expires_at) VALUES (?, ?, ?, ?)
+          ON CONFLICT (drop_id) DO UPDATE SET ciphertext = excluded.ciphertext, created_at = excluded.created_at, expires_at = excluded.expires_at`)
+          .run(dropId, ciphertext, now, expiresAt || null);
+        return { dropId, createdAt: now };
+      },
+      get(dropId) {
+        const row = db.prepare('SELECT * FROM feedback_drops WHERE drop_id = ?').get(dropId);
+        if (!row) return null;
+        if (row.expires_at && row.expires_at < new Date().toISOString()) {
+          return { expired: true };
+        }
+        return row;
+      },
+      delete(dropId) {
+        return db.prepare('DELETE FROM feedback_drops WHERE drop_id = ?').run(dropId).changes > 0;
       }
     },
 

@@ -43,11 +43,13 @@ export async function renderInboxView(params, router, container) {
       let status = 'Ready';
       let statusTone = 'emerald';
       let errorDetail = '';
+      let itemClassId = null;
 
       if (c.kind === 'assignment') {
         const asg = c.assignment_id ? await storage.table('assignments').get(c.assignment_id) : null;
         if (asg) {
           targetTitle = asg.title || 'Untitled Assessment';
+          itemClassId = asg.gradebook?.course_id || asg.class_id || null;
         } else {
           targetTitle = `Assessment (${c.assignment_id || 'unknown'})`;
           status = 'Assessment not found';
@@ -58,6 +60,7 @@ export async function renderInboxView(params, router, container) {
         const tsk = c.task_id ? await storage.table('tasks').get(c.task_id) : null;
         if (tsk) {
           targetTitle = tsk.title || 'Untitled Assignment';
+          itemClassId = tsk.gradebook?.course_id || tsk.class_id || null;
         } else {
           targetTitle = `Assignment (${c.task_id || 'unknown'})`;
           status = 'Assignment not found';
@@ -68,6 +71,7 @@ export async function renderInboxView(params, router, container) {
         const vid = c.assessment_id ? await storage.table('video_assessments').get(c.assessment_id) : null;
         if (vid) {
           targetTitle = vid.title || 'Untitled Video';
+          itemClassId = vid.class_id || null;
         } else {
           targetTitle = `Video (${c.assessment_id || 'unknown'})`;
           status = 'Video not found';
@@ -102,6 +106,7 @@ export async function renderInboxView(params, router, container) {
         classification: c,
         targetTitle,
         studentClaim,
+        classId: itemClassId,
         status,
         statusTone,
         errorDetail
@@ -152,6 +157,9 @@ export async function renderInboxView(params, router, container) {
             </sl-button>` : ''}
             <sl-button size="small" id="btn-paste-codes">
               <sl-icon slot="prefix" name="clipboard-plus"></sl-icon> Paste codes
+            </sl-button>
+            <sl-button size="small" id="btn-verify-receipt" variant="default" title="Verify student proof receipt (.kbreceipt)">
+              <sl-icon slot="prefix" name="patch-check"></sl-icon> Verify receipt
             </sl-button>
             <sl-button size="small" id="btn-browse-files">
               <sl-icon slot="prefix" name="upload"></sl-icon> Select files
@@ -209,7 +217,14 @@ export async function renderInboxView(params, router, container) {
                         </span>
                       </td>
                       <td class="px-4 py-3">
-                        <div class="font-medium text-slate-800">${esc(item.targetTitle)}</div>
+                        <div class="font-medium text-slate-800 flex items-center gap-1.5 flex-wrap">
+                          <span>${esc(item.targetTitle)}</span>
+                          ${item.classId && item.classId === store.getState('activeCourseId') ? `
+                            <span class="inline-flex items-center gap-1 text-[10px] text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.2 rounded font-medium" title="Matches currently selected active class">
+                              <sl-icon name="check2-circle"></sl-icon> Active Class
+                            </span>
+                          ` : ''}
+                        </div>
                         ${item.classification.publish_version ? `<div class="text-[11px] text-slate-400">Version ${esc(item.classification.publish_version)}</div>` : ''}
                       </td>
                       <td class="px-4 py-3 text-xs font-mono text-slate-600">${esc(item.studentClaim)}</td>
@@ -285,9 +300,14 @@ export async function renderInboxView(params, router, container) {
     const fileInput = container.querySelector('#inbox-file-input');
     const browseBtn = container.querySelector('#btn-browse-files');
     const pasteBtn = container.querySelector('#btn-paste-codes');
+    const verifyReceiptBtn = container.querySelector('#btn-verify-receipt');
     const checkServerBtn = container.querySelector('#btn-check-server');
     const clearBtn = container.querySelector('#btn-clear-staged');
     const importBtn = container.querySelector('#btn-import-all');
+
+    verifyReceiptBtn?.addEventListener('click', () => {
+      openVerifyReceiptDialog();
+    });
 
     checkServerBtn?.addEventListener('click', async () => {
       checkServerBtn.loading = true;
@@ -471,6 +491,99 @@ export async function renderInboxView(params, router, container) {
         text: part
       }));
       await classifyAndStage(items);
+    });
+
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target === dialog) dialog.remove();
+    });
+  };
+
+  const openVerifyReceiptDialog = () => {
+    const dialog = document.createElement('sl-dialog');
+    dialog.label = 'Verify Student Submission Receipt';
+    dialog.style.setProperty('--width', '680px');
+    dialog.innerHTML = `
+      <div class="space-y-4 text-xs">
+        <p class="text-slate-600">
+          Enter a student's verification token (<code>KBR1...</code>) or paste a <code>.kbreceipt</code> card, alongside the received <code>.kbsub</code> submission text.
+        </p>
+        <div class="space-y-2">
+          <label class="font-bold text-slate-700">1. Receipt Token or .kbreceipt JSON</label>
+          <sl-textarea id="input-receipt-token" rows="3" placeholder="KBR1.ey... or { &quot;kbreceipt&quot;: 1, ... }"></sl-textarea>
+        </div>
+        <div class="space-y-2">
+          <label class="font-bold text-slate-700">2. Submission Envelope (.kbsub)</label>
+          <sl-textarea id="input-receipt-envelope" rows="4" placeholder="KBSUB1.ey..."></sl-textarea>
+        </div>
+
+        <div id="receipt-verify-result" class="hidden rounded-xl p-4 border space-y-2">
+          <!-- Populated on verify -->
+        </div>
+      </div>
+      <div slot="footer" class="flex justify-between items-center gap-2">
+        <sl-button id="btn-close-verify">Close</sl-button>
+        <sl-button variant="primary" id="btn-do-verify">
+          <sl-icon slot="prefix" name="patch-check"></sl-icon> Check Integrity
+        </sl-button>
+      </div>
+    `;
+
+    document.body.appendChild(dialog);
+    dialog.show();
+
+    dialog.querySelector('#btn-close-verify').addEventListener('click', () => dialog.hide());
+    dialog.querySelector('#btn-do-verify').addEventListener('click', async () => {
+      const token = dialog.querySelector('#input-receipt-token').value.trim();
+      const envelope = dialog.querySelector('#input-receipt-envelope').value.trim();
+      const resContainer = dialog.querySelector('#receipt-verify-result');
+
+      if (!token || !envelope) {
+        toast.warning('Please enter both the receipt token and the submission envelope.');
+        return;
+      }
+
+      try {
+        const verify = await SubmissionCrypto.verifySubmissionReceipt({
+          receiptOrToken: token,
+          envelopeText: envelope
+        });
+
+        resContainer.classList.remove('hidden', 'bg-emerald-50', 'border-emerald-200', 'bg-rose-50', 'border-rose-200');
+
+        if (verify.valid && verify.matchesCiphertext) {
+          resContainer.classList.add('bg-emerald-50', 'border-emerald-200');
+          resContainer.innerHTML = `
+            <div class="flex items-center gap-2 text-emerald-800 font-bold text-sm">
+              <sl-icon name="check-circle-fill" class="text-emerald-600 text-lg"></sl-icon>
+              <span>Receipt Verified Authentic</span>
+            </div>
+            <div class="grid grid-cols-2 gap-2 text-slate-700 text-xs pt-1">
+              <div>Student ID: <strong>${esc(verify.studentId)}</strong></div>
+              <div>Receipt ID: <code class="font-mono">${esc(verify.receiptId)}</code></div>
+              <div>Submitted At: <span>${new Date(verify.submittedAt).toLocaleString()}</span></div>
+              <div>Timestamp Proof: <span class="font-semibold text-blue-700">${verify.relayVerified ? 'Relay Countersigned' : 'Student Device Attested'}</span></div>
+            </div>
+            <div class="text-[11px] text-emerald-700 pt-1 font-mono break-all">
+              SHA-256 Digest: ${esc(verify.ciphertextSha256)}
+            </div>
+          `;
+        } else {
+          resContainer.classList.add('bg-rose-50', 'border-rose-200');
+          resContainer.innerHTML = `
+            <div class="flex items-center gap-2 text-rose-800 font-bold text-sm">
+              <sl-icon name="x-circle-fill" class="text-rose-600 text-lg"></sl-icon>
+              <span>Verification Failed: Tampered or Mismatched Submission</span>
+            </div>
+            <p class="text-rose-700 text-xs">
+              The submission ciphertext does not match the SHA-256 cryptographic digest recorded on this receipt token. The file may have been modified after the receipt was issued.
+            </p>
+          `;
+        }
+      } catch (err) {
+        resContainer.classList.remove('hidden');
+        resContainer.classList.add('bg-rose-50', 'border-rose-200');
+        resContainer.innerHTML = `<div class="text-rose-700">Verification error: ${esc(err.message)}</div>`;
+      }
     });
 
     dialog.addEventListener('sl-after-hide', (e) => {

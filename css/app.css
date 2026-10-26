@@ -1177,3 +1177,44 @@ body[data-role-mode="student"] .kb-role-toggle-btn {
   color: #93c5fd;
   border-color: #1d4ed8;
 }
+
+/* Bi-Directional [[wikilink]] Chips (#7) */
+.kb-wikilink {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.1rem 0.45rem;
+  margin: 0 0.1rem;
+  border-radius: 0.375rem;
+  background-color: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  color: #1e40af;
+  font-weight: 500;
+  text-decoration: none;
+  font-size: 0.875em;
+  line-height: 1.25;
+  vertical-align: baseline;
+  transition: all 0.15s ease-in-out;
+}
+.kb-wikilink:hover {
+  background-color: #e0e7ff;
+  border-color: #93c5fd;
+  color: #1d4ed8;
+  text-decoration: none;
+}
+.kb-wikilink::before {
+  content: '🔗';
+  font-size: 0.8em;
+  opacity: 0.75;
+}
+.sl-theme-dark .kb-wikilink {
+  background-color: #1e293b;
+  border-color: #334155;
+  color: #93c5fd;
+}
+.sl-theme-dark .kb-wikilink:hover {
+  background-color: #312e81;
+  border-color: #6366f1;
+  color: #c7d2fe;
+}
+

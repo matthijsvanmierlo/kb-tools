@@ -56,7 +56,8 @@ export function classifyIncomingFile(name = '') {
   const lower = name.toLowerCase();
   if (HANDIN_EXTENSIONS.some(ext => lower.endsWith(ext))) return 'inbox';
   if (lower.endsWith('.kbfeedback')) return 'feedback';
-  if (lower.endsWith('.kbsession')) return 'session';
+  if (lower.endsWith('.kbclasspack')) return 'classpack';
+  if (lower.endsWith('.kbsession') || lower.endsWith('.kbsession.enc')) return 'session';
   return 'share';
 }
 
@@ -132,11 +133,33 @@ export async function openIncomingFiles(files, router) {
     try {
       const parsed = typeof text === 'object' ? text : JSON.parse(text);
       if (parsed && typeof parsed === 'object') {
-        if (parsed.kennisboost_student_session || file.name.toLowerCase().endsWith('.kbsession')) {
+        if (parsed.kennisboost_student_session || file.name.toLowerCase().endsWith('.kbsession') || file.name.toLowerCase().endsWith('.kbsession.enc')) {
           const { importStudentSession } = await import('../modules/student/session-portability.js');
           await importStudentSession(text);
           router.navigate('#/student');
           return;
+        }
+        if (parsed.kbclasspack || file.name.toLowerCase().endsWith('.kbclasspack')) {
+          const { FeedbackCapsule } = await import('./feedback-capsule.js');
+          const { StudentProfile } = await import('./student-profile.js');
+          const profile = StudentProfile.get();
+          // Find first available access code in student keychain
+          let code = '';
+          for (const cls of Object.values(profile.classes || {})) {
+            if (cls.access_code) { code = cls.access_code; break; }
+          }
+          if (!code) {
+            code = (window.prompt('Enter your student access code to decrypt your feedback from this class pack:') || '').trim();
+          }
+          const res = await FeedbackCapsule.unpackClassCapsule(parsed, code);
+          if (res.success) {
+            toast.success(`Unpacked your feedback! Score: ${res.feedback.points ?? 'Graded'}`);
+            router.navigate('#/student/gradebook');
+            return;
+          } else {
+            toast.danger('Could not decrypt feedback: ' + (res.error || 'No matching record for your code.'));
+            return;
+          }
         }
         if (parsed.course && (Array.isArray(parsed.items) || Array.isArray(parsed.units))) {
           const { mergeCourseFeed } = await import('../modules/student/course-store.js');

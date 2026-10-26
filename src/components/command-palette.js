@@ -2,8 +2,10 @@ import { storage } from '../core/storage.js';
 import { router } from '../router.js';
 import { Sanitizer } from '../core/sanitizer.js';
 import { ClassManager } from './class-manager.js';
+import { store } from '../state/store.js';
 import { sync } from '../core/sync.js';
 import { RoleMode } from '../state/role-mode.js';
+import { SearchEngine } from '../core/search-engine.js';
 
 /**
  * Universal Command Palette (Ctrl/Cmd + K) and Keyboard Shortcuts Help Modal (?)
@@ -62,7 +64,7 @@ export class CommandPalette {
     dialog.innerHTML = `
       <div class="space-y-3 p-1">
         <div class="relative">
-          <sl-input id="input-cmd-search" placeholder="Type a command or search decks, timelines, videos, classes..." autofocus>
+          <sl-input id="input-cmd-search" placeholder="Type a command, or /class, /goto, or search decks, rubrics..." autofocus>
             <sl-icon name="search" slot="prefix" class="text-blue-600"></sl-icon>
           </sl-input>
         </div>
@@ -150,11 +152,78 @@ export class CommandPalette {
     searchInput.setAttribute('aria-expanded', 'true');
     searchInput.setAttribute('aria-controls', 'kb-cmd-results');
 
-    const renderList = (filterText = '') => {
+    const renderList = async (filterText = '') => {
       const q = filterText.toLowerCase().trim();
-      const matched = allCommands.filter(c =>
-        !q || c.title.toLowerCase().includes(q) || (c.subtitle && c.subtitle.toLowerCase().includes(q)) || c.category.toLowerCase().includes(q)
-      );
+      let matched = [];
+
+      if (q.startsWith('/class')) {
+        const arg = q.slice(6).trim();
+        const classActions = [
+          {
+            category: 'Class Switch',
+            title: 'All Classes (No Filter)',
+            subtitle: 'Clear active class context filter',
+            icon: 'grid',
+            run: () => {
+              store.setActiveClass(null);
+            }
+          },
+          ...courses.map(c => ({
+            category: 'Class Switch',
+            title: c.name,
+            subtitle: c.section || 'Class Roster',
+            icon: 'mortarboard',
+            color: c.color || '#2563eb',
+            run: () => {
+              store.setActiveClass(c);
+            }
+          }))
+        ];
+        matched = classActions.filter(c =>
+          !arg || c.title.toLowerCase().includes(arg) || (c.subtitle && c.subtitle.toLowerCase().includes(arg))
+        );
+      } else if (q.startsWith('/goto')) {
+        const arg = q.slice(5).trim();
+        const activeCourse = store.getState('activeCourse');
+        const activeCourseId = store.getState('activeCourseId');
+        const destinations = [
+          { category: 'Go To', title: 'Gradebook', subtitle: activeCourse ? `Filtered to ${activeCourse.name}` : 'Multi-Class Grid', icon: 'journal-check', run: () => router.navigate(activeCourseId ? `#/gradebook?courseId=${activeCourseId}` : '#/gradebook') },
+          { category: 'Go To', title: 'Inbox', subtitle: 'Collect & Stage Student Submissions', icon: 'inbox', run: () => router.navigate('#/inbox') },
+          { category: 'Go To', title: 'Calendar', subtitle: 'Interactive Due Dates & Schedule', icon: 'calendar3', run: () => router.navigate('#/calendar') },
+          { category: 'Go To', title: 'Classes & Rosters', subtitle: 'Manage Students, Codes & Sections', icon: 'people', run: () => router.navigate('#/classes') },
+          { category: 'Go To', title: 'Course Units', subtitle: 'Curriculum Outline & Feed', icon: 'journal-bookmark', run: () => router.navigate(activeCourseId ? `#/course?id=${activeCourseId}` : '#/course') },
+          { category: 'Go To', title: 'Assessments', subtitle: 'Interactive Quizzes & Tests', icon: 'ui-checks', run: () => router.navigate('#/assessments') },
+          { category: 'Go To', title: 'Assignments', subtitle: 'Multimodal Tasks (Code, Vector, Essay)', icon: 'journal-text', run: () => router.navigate('#/assignments') },
+          { category: 'Go To', title: 'Flashcards', subtitle: 'Spaced Repetition & Study Player', icon: 'stack', run: () => router.navigate('#/flashcards') },
+          { category: 'Go To', title: 'Timeline', subtitle: 'Interactive Historical Timelines', icon: 'bar-chart-steps', run: () => router.navigate('#/timeline') },
+          { category: 'Go To', title: 'Video Lessons', subtitle: 'Interactive Video Checkpoints', icon: 'play-circle', run: () => router.navigate('#/video') },
+          { category: 'Go To', title: 'Student Hub', subtitle: 'Student Workspace & Course List', icon: 'house-door', run: () => router.navigate('#/student') }
+        ];
+        matched = destinations.filter(d =>
+          !arg || d.title.toLowerCase().includes(arg) || (d.subtitle && d.subtitle.toLowerCase().includes(arg))
+        );
+      } else {
+        matched = allCommands.filter(c =>
+          !q || c.title.toLowerCase().includes(q) || (c.subtitle && c.subtitle.toLowerCase().includes(q)) || c.category.toLowerCase().includes(q)
+        );
+
+        if (q.length >= 2) {
+          try {
+            const deepHits = await SearchEngine.search(q, { limit: 8 });
+            for (const hit of deepHits) {
+              if (!matched.some(m => m.title === hit.title)) {
+                matched.push({
+                  category: hit.category,
+                  title: hit.title,
+                  subtitle: hit.snippet || '',
+                  icon: hit.category === 'Flashcards' ? 'stack' : hit.category === 'Timelines' ? 'bar-chart-steps' : hit.category === 'Video Lessons' ? 'play-circle' : hit.category === 'Classes' ? 'mortarboard' : hit.category === 'Assessments' ? 'ui-checks' : hit.category === 'Assignments' ? 'journal-text' : 'search',
+                  run: () => router.navigate(hit.route)
+                });
+              }
+            }
+          } catch (_) {}
+        }
+      }
 
       if (matched.length === 0) {
         resultsContainer.innerHTML = `

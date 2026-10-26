@@ -165,6 +165,9 @@ export function createRelayFetchHandler(options = {}) {
     }
 
     if (request.method === 'OPTIONS') {
+      if (request.headers.get('Access-Control-Request-Private-Network')) {
+        corsHeaders['Access-Control-Allow-Private-Network'] = 'true';
+      }
       return new Response(null, { status: 204, headers: corsHeaders });
     }
 
@@ -687,7 +690,8 @@ export function createRelayFetchHandler(options = {}) {
           return error(400, 'Invalid submission format: envelope must start with KBSUB1.');
         }
 
-        const receiptId = createHash('sha256').update(trimmed).digest('hex').slice(0, 8).toUpperCase();
+        const ciphertextSha256 = createHash('sha256').update(trimmed).digest('hex');
+        const receiptId = ciphertextSha256.slice(0, 8).toUpperCase();
         const submissionId = randomBytes(16).toString('hex');
         try {
           const resEntry = await db.submissions.create({
@@ -696,9 +700,16 @@ export function createRelayFetchHandler(options = {}) {
             text: trimmed
           });
 
+          const signingSecret = await resolveSigningSecret();
+          const relayReceiptSig = createHmac('sha256', signingSecret)
+            .update(`${dropId}|${ciphertextSha256}|${resEntry.receivedAt}`)
+            .digest('hex');
+
           return json(201, {
             receipt_id: receiptId,
-            received_at: resEntry.receivedAt
+            received_at: resEntry.receivedAt,
+            ciphertext_sha256: ciphertextSha256,
+            relay_receipt_sig: relayReceiptSig
           });
         } catch (err) {
           if (err.code === 'QUOTA_EXCEEDED') {
@@ -804,6 +815,70 @@ export function createRelayFetchHandler(options = {}) {
           etag: feed.etag,
           updated_at: feed.updatedAt
         }, { 'ETag': `"${feed.etag}"` });
+      }
+
+      // -------------------------------------------------------------
+      // 10. Blind Dead-Drop Feedback Mailbox (KB-DROP-FB-001)
+      // -------------------------------------------------------------
+      const feedbackMatch = pathname.match(/^(?:\/api)?\/feedback\/([A-Za-z0-9_\-]+)$/);
+      if (feedbackMatch) {
+        const dropId = feedbackMatch[1];
+
+        // PUT /feedback/:dropId
+        if (request.method === 'PUT' || request.method === 'POST') {
+          const teacher = await authenticateTeacher();
+          if (!teacher) {
+            return error(401, 'Unauthorized: valid teacher token required');
+          }
+
+          const parsed = await readJson(MAX_PAYLOAD_SIZE);
+          if (!parsed) {
+            return error(400, 'Invalid JSON body');
+          }
+
+          const ciphertext = typeof parsed === 'string' ? parsed : (parsed.ciphertext || parsed.text);
+          if (!ciphertext) {
+            return error(400, 'Missing ciphertext in feedback payload');
+          }
+
+          const expiresAt = parsed.expires_at || new Date(Date.now() + 30 * 86400000).toISOString();
+          await db.feedbackDrops.put({ dropId, ciphertext, expiresAt });
+          return json(200, { ok: true, drop_id: dropId, expires_at: expiresAt });
+        }
+
+        // GET /feedback/:dropId
+        if (request.method === 'GET') {
+          if (!limiter.isAllowed(clientIp)) {
+            return error(429, 'Rate limit exceeded. Please wait a minute before querying feedback again.');
+          }
+
+          const row = await db.feedbackDrops.get(dropId);
+          if (!row) {
+            return error(404, 'Feedback drop not found');
+          }
+          if (row.expired) {
+            return error(410, 'Feedback drop expired');
+          }
+
+          return json(200, {
+            drop_id: dropId,
+            ciphertext: row.ciphertext,
+            created_at: row.created_at
+          });
+        }
+
+        // DELETE /feedback/:dropId
+        if (request.method === 'DELETE') {
+          const teacher = await authenticateTeacher();
+          if (!teacher) {
+            return error(401, 'Unauthorized: valid teacher token required');
+          }
+          const deleted = db.feedbackDrops.delete(dropId);
+          if (!deleted) {
+            return error(404, 'Feedback drop not found');
+          }
+          return new Response(null, { status: 204, headers: corsHeaders });
+        }
       }
 
       return error(404, 'Route not found');

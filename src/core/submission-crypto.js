@@ -306,6 +306,148 @@ export class SubmissionCrypto {
       return null;
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Verifiable Cryptographic Submission Receipts (#6)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Generate an unforgeable submission receipt for a student hand-in.
+   *
+   * @param {object} params
+   * @param {string} params.envelopeText - raw KBSUB envelope text or file content
+   * @param {string} params.studentId
+   * @param {string} params.assignmentId
+   * @param {string} [params.accessCode]
+   * @param {string} [params.submittedAt]
+   * @param {object} [params.relayReceipt] - Optional countersigned receipt from relay server
+   * @returns {Promise<object>}
+   */
+  static async createSubmissionReceipt({
+    envelopeText,
+    studentId,
+    assignmentId,
+    accessCode = '',
+    studentAccessCode = '',
+    submittedAt = null,
+    relayReceipt = null
+  }) {
+    const raw = String(envelopeText || '').trim();
+    if (!raw) throw new Error('EMPTY_SUBMISSION');
+
+    const effectiveCode = (studentAccessCode || accessCode || '').trim();
+    const ciphertextSha256 = await sha256Hex(raw);
+    const time = submittedAt || new Date().toISOString();
+    const sid = String(studentId || '').toUpperCase();
+    const asgId = String(assignmentId || '');
+
+    const receiptBody = {
+      assignment_id: asgId,
+      student_id: sid,
+      submitted_at: time,
+      ciphertext_sha256: ciphertextSha256
+    };
+
+    let proofSignature = null;
+    if (effectiveCode) {
+      const key = await this._hmacKey(effectiveCode, `kb-receipt|${asgId}|${sid}`);
+      const sig = await subtle().sign('HMAC', key, enc.encode(canonicalJSON(receiptBody)));
+      proofSignature = bytesToB64(sig);
+    }
+
+    const receiptId = ciphertextSha256.slice(0, 10).toUpperCase();
+
+    const receiptCard = {
+      kbreceipt: 1,
+      receipt_id: receiptId,
+      assignment_id: asgId,
+      student_id: sid,
+      submitted_at: time,
+      ciphertext_sha256: ciphertextSha256,
+      proof_signature: proofSignature,
+      relay_receipt: relayReceipt || null
+    };
+
+    const token = `KBR1.${bytesToB64(enc.encode(JSON.stringify(receiptCard)))}`;
+    receiptCard.token = token;
+
+    return receiptCard;
+  }
+
+  /**
+   * Verify an interactive receipt token or .kbreceipt against an envelope and student credentials.
+   *
+   * @param {object} params
+   * @param {string|object} params.receiptOrToken
+   * @param {string} params.envelopeText
+   * @param {string} [params.studentAccessCode]
+   * @returns {Promise<object>}
+   */
+  static async verifySubmissionReceipt({
+    receiptOrToken,
+    envelopeText,
+    studentAccessCode = ''
+  }) {
+    let card = receiptOrToken;
+    if (typeof receiptOrToken === 'string') {
+      const trimmed = receiptOrToken.trim();
+      if (trimmed.startsWith('KBR1.')) {
+        try {
+          card = JSON.parse(dec.decode(b64ToBytes(trimmed.slice(5).replace(/\s+/g, ''))));
+        } catch (_) {
+          return { valid: false, error: 'MALFORMED_RECEIPT_TOKEN' };
+        }
+      } else {
+        try {
+          card = JSON.parse(trimmed);
+        } catch (_) {
+          return { valid: false, error: 'INVALID_RECEIPT_JSON' };
+        }
+      }
+    }
+
+    if (!card || !card.ciphertext_sha256) {
+      return { valid: false, error: 'NOT_A_RECEIPT' };
+    }
+
+    const actualSha256 = await sha256Hex(String(envelopeText || '').trim());
+    const matchesCiphertext = card.ciphertext_sha256.toLowerCase() === actualSha256.toLowerCase();
+
+    let studentSignatureValid = false;
+    if (card.proof_signature && studentAccessCode) {
+      try {
+        const key = await this._hmacKey(studentAccessCode, `kb-receipt|${card.assignment_id}|${String(card.student_id).toUpperCase()}`);
+        const body = {
+          assignment_id: card.assignment_id,
+          student_id: String(card.student_id).toUpperCase(),
+          submitted_at: card.submitted_at,
+          ciphertext_sha256: card.ciphertext_sha256
+        };
+        studentSignatureValid = await subtle().verify(
+          'HMAC',
+          key,
+          b64ToBytes(card.proof_signature),
+          enc.encode(canonicalJSON(body))
+        );
+      } catch (_) {
+        studentSignatureValid = false;
+      }
+    }
+
+    const relayVerified = Boolean(card.relay_receipt && card.relay_receipt.relay_receipt_sig);
+
+    return {
+      valid: matchesCiphertext && (card.proof_signature ? studentSignatureValid : true),
+      matchesCiphertext,
+      studentSignatureValid,
+      relayVerified,
+      receiptId: card.receipt_id,
+      studentId: card.student_id,
+      assignmentId: card.assignment_id,
+      submittedAt: card.submitted_at,
+      ciphertextSha256: actualSha256
+    };
+  }
 }
 
 export default SubmissionCrypto;

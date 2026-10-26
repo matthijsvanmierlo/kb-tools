@@ -18,6 +18,7 @@ import {
   renderStandardsSection
 } from '../gradebook/grade-widgets.js';
 import { identityChip, syncTaskSubmissionsToGradebook } from './submissions.js';
+import { DraftHistoryTracker } from '../../core/draft-history.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 const num = (v, fallback = 0) => esc(Sanitizer.safeNumber(v, fallback));
@@ -80,6 +81,9 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
   const category = (course?.categories || []).find(c => c.id === task.gradebook?.category_id);
   const policy = category?.policy || {};
 
+  // Fetch local draft process telemetry if available
+  const telemetry = await DraftHistoryTracker.getProcessTelemetry(task.id, sub.student_id);
+
   // Extract content parts
   const content = sub.content || {};
   const textResponse = content.text_md || content.text || '';
@@ -113,6 +117,7 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
 
         <!-- Student Switcher & Save -->
         <div class="flex items-center gap-2 flex-shrink-0">
+          <span class="text-[11px] text-slate-400 font-mono hidden xl:inline">Hotkeys: [J] Next · [K] Prev · [⌘↵] Save</span>
           <div class="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg p-0.5 text-xs text-slate-600">
             <sl-button size="small" variant="text" id="btn-prev-student" ${currentIndex <= 0 ? 'disabled' : ''}>
               <sl-icon name="chevron-left"></sl-icon>
@@ -288,7 +293,68 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
               </div>
             </section>
 
-            <!-- 6. Overall Feedback Editor -->
+            <!-- 6. Work Process & Revision Telemetry -->
+            ${telemetry?.has_telemetry ? `
+              <details class="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs group" open>
+                <summary class="flex items-center justify-between cursor-pointer list-none select-none">
+                  <div class="flex items-center gap-2">
+                    <sl-icon name="clock-history" class="text-indigo-600"></sl-icon>
+                    <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider">Work Process Timeline</h3>
+                  </div>
+                  <span class="text-[11px] font-mono text-slate-500">${telemetry.checkpoint_count} saves · ~${telemetry.active_minutes}m</span>
+                </summary>
+                <div class="mt-3 pt-3 border-t border-slate-100 space-y-2.5 text-xs text-slate-600">
+                  <div class="grid grid-cols-2 gap-2 text-center">
+                    <div class="bg-slate-50 rounded-lg p-2 border border-slate-100">
+                      <div class="font-bold text-slate-800 text-sm">~${telemetry.active_minutes} min</div>
+                      <div class="text-[10px] text-slate-400 uppercase">Active Time</div>
+                    </div>
+                    <div class="bg-slate-50 rounded-lg p-2 border border-slate-100">
+                      <div class="font-bold text-slate-800 text-sm">${telemetry.checkpoint_count}</div>
+                      <div class="text-[10px] text-slate-400 uppercase">Revisions</div>
+                    </div>
+                  </div>
+                  ${telemetry.paste_count > 0 ? `
+                    <div class="flex items-center justify-between text-[11px] text-slate-500 px-1">
+                      <span>Paste Events: <strong>${telemetry.paste_count}</strong></span>
+                      <span>Max Paste: <strong>${telemetry.largest_paste} chars</strong></span>
+                    </div>
+                  ` : `
+                    <div class="text-[11px] text-emerald-600 px-1">Continuous typing (0 paste bursts detected)</div>
+                  `}
+                  <div class="text-[10px] text-slate-400 italic">
+                    Local revision milestones. No invasive surveillance or keyloggers.
+                  </div>
+                </div>
+              </details>
+            ` : ''}
+
+            <!-- 7. Voice Feedback Recorder -->
+            <section class="space-y-2 bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+              <div class="flex items-center justify-between">
+                <div class="flex items-center gap-1.5 text-xs font-bold text-slate-700 uppercase tracking-wider">
+                  <sl-icon name="mic" class="text-indigo-600"></sl-icon>
+                  <span>Voice Feedback</span>
+                </div>
+                <div id="voice-timer" class="text-[11px] font-mono text-rose-600 font-semibold hidden">00:00</div>
+              </div>
+              <div id="voice-recorder-controls" class="flex items-center gap-2">
+                <sl-button size="small" id="btn-record-voice" variant="default">
+                  <sl-icon slot="prefix" name="mic-fill"></sl-icon> Record Clip
+                </sl-button>
+                <sl-button size="small" id="btn-stop-voice" variant="danger" class="hidden">
+                  <sl-icon slot="prefix" name="stop-fill"></sl-icon> Stop Recording
+                </sl-button>
+                <sl-button size="small" id="btn-delete-voice" variant="text" class="text-rose-600 ${sub.review.audio_note ? '' : 'hidden'}">
+                  <sl-icon slot="prefix" name="trash"></sl-icon> Remove Clip
+                </sl-button>
+              </div>
+              <div id="voice-audio-preview" class="${sub.review.audio_note ? '' : 'hidden'}">
+                <audio controls src="${sub.review.audio_note || ''}" class="w-full h-8 mt-1.5"></audio>
+              </div>
+            </section>
+
+            <!-- 8. Overall Feedback Editor -->
             <section class="space-y-2">
               <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider">Teacher Feedback</h3>
               <div id="review-feedback-mount"></div>
@@ -736,4 +802,134 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
     const { renderTaskSubmissions } = await import('./submissions.js');
     await renderTaskSubmissions({ id: task.id }, router, container);
   });
+
+  // ---------------------------------------------------------------------------
+  // Voice Feedback Recorder (MediaRecorder API)
+  // ---------------------------------------------------------------------------
+  let mediaRecorder = null;
+  let audioChunks = [];
+  let timerInterval = null;
+  let secondsElapsed = 0;
+
+  const btnRecordVoice = container.querySelector('#btn-record-voice');
+  const btnStopVoice = container.querySelector('#btn-stop-voice');
+  const btnDeleteVoice = container.querySelector('#btn-delete-voice');
+  const voiceTimer = container.querySelector('#voice-timer');
+  const audioPreview = container.querySelector('#voice-audio-preview');
+
+  if (btnRecordVoice) {
+    btnRecordVoice.addEventListener('click', async () => {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          toast.warning('Audio recording is not supported in this browser.');
+          return;
+        }
+
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        audioChunks = [];
+        mediaRecorder = new MediaRecorder(stream);
+
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data.size > 0) audioChunks.push(e.data);
+        };
+
+        mediaRecorder.onstop = () => {
+          stream.getTracks().forEach(t => t.stop());
+          clearInterval(timerInterval);
+          voiceTimer.classList.add('hidden');
+          btnStopVoice.classList.add('hidden');
+          btnRecordVoice.classList.remove('hidden');
+
+          const mimeType = mediaRecorder.mimeType || 'audio/webm';
+          const audioBlob = new Blob(audioChunks, { type: mimeType });
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const dataUrl = reader.result;
+            sub.review.audio_note = dataUrl;
+            if (audioPreview) {
+              audioPreview.classList.remove('hidden');
+              const aud = audioPreview.querySelector('audio');
+              if (aud) aud.src = dataUrl;
+            }
+            btnDeleteVoice?.classList.remove('hidden');
+            toast.success('Voice note recorded!');
+          };
+          reader.readAsDataURL(audioBlob);
+        };
+
+        mediaRecorder.start();
+        secondsElapsed = 0;
+        voiceTimer.textContent = '00:00';
+        voiceTimer.classList.remove('hidden');
+        btnRecordVoice.classList.add('hidden');
+        btnStopVoice.classList.remove('hidden');
+
+        timerInterval = setInterval(() => {
+          secondsElapsed++;
+          const mins = String(Math.floor(secondsElapsed / 60)).padStart(2, '0');
+          const secs = String(secondsElapsed % 60).padStart(2, '0');
+          voiceTimer.textContent = `${mins}:${secs}`;
+          if (secondsElapsed >= 90) {
+            mediaRecorder.stop();
+          }
+        }, 1000);
+      } catch (err) {
+        console.error('Audio recording failed:', err);
+        toast.danger('Could not access microphone: ' + err.message);
+      }
+    });
+
+    btnStopVoice?.addEventListener('click', () => {
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        mediaRecorder.stop();
+      }
+    });
+
+    btnDeleteVoice?.addEventListener('click', () => {
+      sub.review.audio_note = null;
+      btnDeleteVoice.classList.add('hidden');
+      if (audioPreview) {
+        audioPreview.classList.add('hidden');
+        const aud = audioPreview.querySelector('audio');
+        if (aud) aud.src = '';
+      }
+      toast.info('Voice note removed.');
+    });
+  }
+
+  // ---------------------------------------------------------------------------
+  // SpeedGrader Hotkeys: J (Next), K (Prev), Cmd+Enter (Save & Next)
+  // ---------------------------------------------------------------------------
+  const keyHandler = (e) => {
+    if (!document.body.contains(container)) {
+      window.removeEventListener('keydown', keyHandler);
+      return;
+    }
+
+    const activeEl = document.activeElement;
+    const tag = (activeEl?.tagName || '').toLowerCase();
+    const isInput = tag === 'input' || tag === 'textarea' ||
+      activeEl?.isContentEditable ||
+      activeEl?.closest('.cm-editor') ||
+      activeEl?.closest('sl-input') ||
+      activeEl?.closest('sl-textarea');
+
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+      e.preventDefault();
+      saveAndNextBtn?.click();
+      return;
+    }
+
+    if (isInput) return;
+
+    if (e.key === 'j' || e.key === 'J' || e.key === 'ArrowRight') {
+      e.preventDefault();
+      container.querySelector('#btn-next-student')?.click();
+    } else if (e.key === 'k' || e.key === 'K' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      container.querySelector('#btn-prev-student')?.click();
+    }
+  };
+
+  window.addEventListener('keydown', keyHandler);
 }

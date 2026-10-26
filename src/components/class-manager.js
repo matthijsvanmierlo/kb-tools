@@ -1,4 +1,5 @@
 import { storage } from '../core/storage.js';
+import { store } from '../state/store.js';
 import { Sanitizer } from '../core/sanitizer.js';
 import { generateUUID } from '../utils/uuid.js';
 import { toast } from '../utils/toast.js';
@@ -16,26 +17,13 @@ export const CLASS_COLOR_PRESETS = [
   { name: 'Teal', color: '#0d9488', bg: '#f0fdfa', border: '#99f6e4', text: '#0f766e' }
 ];
 
-let activeClassFilterId = null;
-
 export class ClassManager {
   static getActiveFilter() {
-    if (activeClassFilterId === null && typeof localStorage !== 'undefined') {
-      activeClassFilterId = localStorage.getItem('kb_active_class_filter') || null;
-    }
-    return activeClassFilterId;
+    return store.getState('activeCourseId') || (typeof localStorage !== 'undefined' ? localStorage.getItem('kb_active_class_filter') : null);
   }
 
-  static setActiveFilter(classId) {
-    activeClassFilterId = classId || null;
-    if (typeof localStorage !== 'undefined') {
-      if (activeClassFilterId) {
-        localStorage.setItem('kb_active_class_filter', activeClassFilterId);
-      } else {
-        localStorage.removeItem('kb_active_class_filter');
-      }
-    }
-    window.dispatchEvent(new CustomEvent('kb-class-filter-changed', { detail: { classId: activeClassFilterId } }));
+  static setActiveFilter(classId, courseObj = null) {
+    store.setActiveClass(classId, courseObj);
   }
 
   static async getClasses({ includeArchived = false } = {}) {
@@ -159,7 +147,7 @@ export class ClassManager {
     if (course) {
       course.archived_at = new Date().toISOString();
       await storage.table('gradebook_courses').put(course);
-      if (activeClassFilterId === id) {
+      if (this.getActiveFilter() === id) {
         this.setActiveFilter(null);
       }
       window.dispatchEvent(new CustomEvent('kb-classes-updated'));
@@ -238,7 +226,7 @@ export class ClassManager {
 
     // 7. Delete course row
     await storage.table('gradebook_courses').delete(id);
-    if (activeClassFilterId === id) {
+    if (this.getActiveFilter() === id) {
       this.setActiveFilter(null);
     }
     window.dispatchEvent(new CustomEvent('kb-classes-updated'));

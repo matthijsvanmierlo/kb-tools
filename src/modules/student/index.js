@@ -11,7 +11,7 @@ import { StudentProfile } from '../../core/student-profile.js';
 import { StudentLedger } from './ledger.js';
 import { RoleMode } from '../../state/role-mode.js';
 import { openIncomingFiles } from '../../core/pwa.js';
-import { exportStudentSession, importStudentSession } from './session-portability.js';
+import { exportStudentSession, importStudentSession, wipeStudentKioskSession } from './session-portability.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -64,13 +64,16 @@ export async function renderStudentHubView(params, router, container) {
             <sl-button variant="default" href="#/student/gradebook" size="medium">
               <sl-icon slot="prefix" name="journal-check"></sl-icon> My Grades
             </sl-button>
-            <sl-button variant="text" class="text-white hover:text-blue-200" id="btn-export-hub-session">
-              <sl-icon slot="prefix" name="download"></sl-icon> Save Session (.kbsession)
+            <sl-button variant="default" class="bg-white/10 text-white hover:bg-white/20 border-white/30" id="btn-export-hub-session">
+              <sl-icon slot="prefix" name="shield-lock"></sl-icon> Save Keystore (.kbsession.enc)
             </sl-button>
-            <sl-button variant="text" class="text-white hover:text-blue-200" id="btn-import-hub-session">
-              <sl-icon slot="prefix" name="upload"></sl-icon> Resume Session
+            <sl-button variant="default" class="bg-white/10 text-white hover:bg-white/20 border-white/30" id="btn-import-hub-session">
+              <sl-icon slot="prefix" name="upload"></sl-icon> Resume Keystore
             </sl-button>
-            <input type="file" id="input-hub-session-file" accept=".kbsession,.json" class="hidden" />
+            <input type="file" id="input-hub-session-file" accept=".kbsession,.kbsession.enc,.json" class="hidden" />
+            <sl-button variant="default" class="bg-rose-500/20 text-rose-100 hover:bg-rose-500/40 border-rose-300/40" id="btn-wipe-hub-session" title="Securely wipe your session data before returning this shared Chromebook">
+              <sl-icon slot="prefix" name="box-arrow-right"></sl-icon> End Session &amp; Wipe Device
+            </sl-button>
             <sl-button variant="text" class="text-white hover:text-blue-200" id="btn-edit-student-profile">
               <sl-icon slot="prefix" name="person-gear"></sl-icon> Edit Identity
             </sl-button>
@@ -282,7 +285,12 @@ export async function renderStudentHubView(params, router, container) {
 
   // Export / Import session
   container.querySelector('#btn-export-hub-session')?.addEventListener('click', () => {
-    exportStudentSession(studentId);
+    exportStudentSession({ studentId, format: 'encrypted' });
+  });
+
+  container.querySelector('#btn-wipe-hub-session')?.addEventListener('click', async () => {
+    await wipeStudentKioskSession({ verifySaved: true });
+    renderStudentHubView(params, router, container);
   });
 
   const hubFileInput = container.querySelector('#input-hub-session-file');

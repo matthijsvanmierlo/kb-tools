@@ -13,6 +13,7 @@ import { createCodeEditor } from '../../components/code-editor.js';
 import { RichTextEditor } from '../../components/rich-text-editor.js';
 import { uploadStudentFile } from '../../utils/student-media.js';
 import { DrawBoardUI } from '../../components/draw-board-ui.js';
+import { DraftHistoryTracker } from '../../core/draft-history.js';
 import {
   prepareDrawingForSubmission,
   processUploadedCodeFile,
@@ -193,7 +194,7 @@ export async function renderTaskTake(params = {}, router = null, container = nul
 
   const draftKey = () => `kb_task_draft_${payload.task_id}_${String(state.student.id || 'anon').toUpperCase()}`;
 
-  const saveLocalDraft = () => {
+  const saveLocalDraft = (isPaste = false, pasteLength = 0) => {
     if (preview) return;
     const draft = {
       publish_version: payload.publish_version,
@@ -202,6 +203,17 @@ export async function renderTaskTake(params = {}, router = null, container = nul
       saved_at: new Date().toISOString()
     };
     safeStorage.set(draftKey(), draft);
+
+    // Record non-invasive local checkpoint (#10)
+    if (state.student?.id) {
+      DraftHistoryTracker.recordCheckpoint({
+        itemId: payload.task_id,
+        studentId: state.student.id,
+        content: state.content,
+        isPaste,
+        pasteLength
+      }).catch(() => {});
+    }
   };
 
   const loadLocalDraft = () => {
@@ -361,6 +373,11 @@ export async function renderTaskTake(params = {}, router = null, container = nul
               <span class="w-2 h-2 rounded-full bg-emerald-500" id="task-meter-dot"></span>
               <span id="task-meter-text">0 KB</span>
             </div>
+
+            <!-- Draft History & Rollback (#10) -->
+            <sl-button size="small" variant="default" id="task-history-btn" title="View draft timeline and restore checkpoints">
+              <sl-icon slot="prefix" name="clock-history"></sl-icon> History
+            </sl-button>
 
             <sl-button size="small" variant="primary" id="task-submit-btn">
               <sl-icon slot="prefix" name="send-check"></sl-icon> Hand In
@@ -613,6 +630,12 @@ export async function renderTaskTake(params = {}, router = null, container = nul
       renderAttachmentList();
     }
 
+    // History & Rollback button handler
+    const historyBtn = container.querySelector('#task-history-btn');
+    historyBtn?.addEventListener('click', async () => {
+      openDraftHistoryModal();
+    });
+
     // Submit button handler
     const submitBtn = container.querySelector('#task-submit-btn');
     submitBtn.addEventListener('click', () => {
@@ -781,6 +804,135 @@ export async function renderTaskTake(params = {}, router = null, container = nul
     } else {
       meterDot.classList.add('bg-rose-500');
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Draft History & Rollback Modal (#10)
+  // ---------------------------------------------------------------------------
+  async function openDraftHistoryModal() {
+    const checkpoints = await DraftHistoryTracker.getCheckpoints(payload.task_id, state.student.id);
+
+    const dialog = document.createElement('sl-dialog');
+    dialog.id = 'task-history-dialog';
+    dialog.label = 'Draft History & Rollback';
+    dialog.style.setProperty('--width', '640px');
+
+    if (!checkpoints.length) {
+      dialog.innerHTML = `
+        <div class="py-8 text-center text-slate-500 space-y-2">
+          <sl-icon name="clock-history" class="text-3xl text-slate-300 mx-auto block"></sl-icon>
+          <p class="font-medium">No previous checkpoints recorded yet.</p>
+          <p class="text-xs text-slate-400">Revisions are saved automatically every few seconds as you write or edit code.</p>
+        </div>
+        <div slot="footer" class="flex justify-end">
+          <sl-button id="btn-close-history">Close</sl-button>
+        </div>
+      `;
+    } else {
+      let selectedIdx = checkpoints.length - 1;
+
+      dialog.innerHTML = `
+        <div class="space-y-4 text-xs">
+          <p class="text-slate-600">
+            Select a previous revision from this work session to preview or restore it.
+          </p>
+
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <!-- Checkpoints list -->
+            <div class="sm:col-span-1 max-h-64 overflow-y-auto border border-slate-200 rounded-xl divide-y divide-slate-100 bg-slate-50" id="history-cp-list">
+              ${checkpoints.map((cp, idx) => {
+                const isSelected = idx === selectedIdx;
+                const time = new Date(cp.saved_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                return `
+                  <button type="button" class="w-full text-left p-2.5 hover:bg-white transition-colors history-cp-btn ${isSelected ? 'bg-white font-bold text-indigo-700 shadow-2xs' : 'text-slate-600'}" data-cp-idx="${idx}">
+                    <div class="flex items-center justify-between">
+                      <span>${esc(time)}</span>
+                      <span class="text-[10px] text-slate-400 font-mono">${cp.text_length || 0} ch</span>
+                    </div>
+                    ${cp.is_paste ? `<span class="text-[9px] text-amber-600 font-semibold">+ paste</span>` : ''}
+                  </button>
+                `;
+              }).reverse().join('')}
+            </div>
+
+            <!-- Preview panel -->
+            <div class="sm:col-span-2 border border-slate-200 rounded-xl p-3 bg-white max-h-64 overflow-y-auto space-y-2">
+              <div class="flex items-center justify-between border-b border-slate-100 pb-1.5">
+                <span class="font-semibold text-slate-700" id="history-preview-title">Checkpoint Preview</span>
+                <span class="text-[10px] text-slate-400" id="history-preview-time"></span>
+              </div>
+              <pre id="history-preview-content" class="text-xs font-mono text-slate-800 whitespace-pre-wrap break-all"></pre>
+            </div>
+          </div>
+        </div>
+
+        <div slot="footer" class="flex justify-between items-center gap-2">
+          <sl-button id="btn-close-history">Cancel</sl-button>
+          <sl-button variant="primary" id="btn-restore-history">
+            <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Restore This Revision
+          </sl-button>
+        </div>
+      `;
+    }
+
+    document.body.appendChild(dialog);
+    dialog.show();
+
+    const updatePreview = (idx) => {
+      const cp = checkpoints[idx];
+      if (!cp) return;
+      const previewTitle = dialog.querySelector('#history-preview-title');
+      const previewTime = dialog.querySelector('#history-preview-time');
+      const previewContent = dialog.querySelector('#history-preview-content');
+
+      if (previewTitle) previewTitle.textContent = `Revision #${idx + 1}`;
+      if (previewTime) previewTime.textContent = new Date(cp.saved_at).toLocaleTimeString();
+
+      let previewText = '';
+      if (typeof cp.content === 'string') previewText = cp.content;
+      else if (typeof cp.content === 'object') {
+        if (cp.content.text) previewText = cp.content.text;
+        else if (cp.content.code_files?.length) {
+          previewText = cp.content.code_files.map(f => `--- ${f.filename} ---\n${f.body || ''}`).join('\n\n');
+        }
+      }
+      if (previewContent) previewContent.textContent = previewText || '(Empty content)';
+    };
+
+    if (checkpoints.length) {
+      updatePreview(checkpoints.length - 1);
+
+      dialog.querySelectorAll('.history-cp-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          dialog.querySelectorAll('.history-cp-btn').forEach(b => b.classList.remove('bg-white', 'font-bold', 'text-indigo-700', 'shadow-2xs'));
+          btn.classList.add('bg-white', 'font-bold', 'text-indigo-700', 'shadow-2xs');
+          const idx = parseInt(btn.dataset.cpIdx, 10);
+          updatePreview(idx);
+          dialog.querySelector('#btn-restore-history').dataset.selectedIdx = String(idx);
+        });
+      });
+
+      dialog.querySelector('#btn-restore-history')?.addEventListener('click', () => {
+        const selIdx = parseInt(dialog.querySelector('#btn-restore-history').dataset.selectedIdx ?? (checkpoints.length - 1), 10);
+        const targetCp = checkpoints[selIdx];
+        if (targetCp && targetCp.content) {
+          if (typeof targetCp.content === 'object') {
+            state.content = JSON.parse(JSON.stringify(targetCp.content));
+          } else {
+            state.content.text = String(targetCp.content);
+          }
+          saveLocalDraft();
+          toast.success(`Draft restored to checkpoint from ${new Date(targetCp.saved_at).toLocaleTimeString()}!`);
+          dialog.hide();
+          renderWorkspace();
+        }
+      });
+    }
+
+    dialog.querySelector('#btn-close-history')?.addEventListener('click', () => dialog.hide());
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target === dialog) dialog.remove();
+    });
   }
 
   // ---------------------------------------------------------------------------

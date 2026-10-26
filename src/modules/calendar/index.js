@@ -4,6 +4,7 @@ import { toast } from '../../utils/toast.js';
 import { setDue } from '../../core/due-dates.js';
 import { loadCalendarEvents, generateIcsExport } from './model.js';
 import { ClassManager } from '../../components/class-manager.js';
+import { store } from '../../state/store.js';
 import { RoleMode } from '../../state/role-mode.js';
 
 /**
@@ -61,7 +62,16 @@ export function getEventIcon(kind) {
 export async function renderCalendarView(params, router, container) {
   let activeView = params?.view || 'month'; // 'month', 'week', 'agenda'
   let currentDate = new Date();
-  let filterCourseId = params?.courseId || '';
+  let filterCourseId = params?.courseId || store.getState('activeCourseId') || '';
+
+  const onFilterChange = (e) => {
+    const nextId = e.detail?.classId || '';
+    if (filterCourseId !== nextId) {
+      filterCourseId = nextId;
+      render();
+    }
+  };
+  window.addEventListener('kb-class-filter-changed', onFilterChange, { once: false });
 
   const render = async () => {
     const isStudent = RoleMode.get() === 'student';
@@ -183,6 +193,7 @@ export async function renderCalendarView(params, router, container) {
 
     container.querySelector('#sel-cal-course')?.addEventListener('sl-change', (e) => {
       filterCourseId = e.target.value;
+      store.setActiveClass(filterCourseId || null);
       render();
     });
 

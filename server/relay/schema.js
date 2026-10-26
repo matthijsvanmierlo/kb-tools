@@ -96,6 +96,13 @@ CREATE TABLE IF NOT EXISTS drop_media (
   FOREIGN KEY (drop_id) REFERENCES drops(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS feedback_drops (
+  drop_id TEXT PRIMARY KEY,
+  ciphertext TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_sync_chunks_ws ON sync_chunks(workspace_id, seq);
 CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at);
 CREATE INDEX IF NOT EXISTS idx_sync_chunks_created ON sync_chunks(created_at);
@@ -104,4 +111,5 @@ CREATE INDEX IF NOT EXISTS idx_drops_expires ON drops(expires_at);
 CREATE INDEX IF NOT EXISTS idx_submissions_drop ON submissions(drop_id, received_at);
 CREATE INDEX IF NOT EXISTS idx_course_feeds_updated ON course_feeds(updated_at);
 CREATE INDEX IF NOT EXISTS idx_drop_media_drop ON drop_media(drop_id);
+CREATE INDEX IF NOT EXISTS idx_feedback_drops_expires ON feedback_drops(expires_at);
 `;

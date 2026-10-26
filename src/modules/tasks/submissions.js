@@ -6,6 +6,7 @@ import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { RelayTransport } from '../../core/transport.js';
 import { evaluateTaskSubmission, IDENTITY_LABELS } from './pipeline.js';
 import { renderTaskReview } from './review.js';
+import { FeedbackCapsule } from '../../core/feedback-capsule.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -266,6 +267,21 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
               <sl-icon slot="prefix" name="cloud-download"></sl-icon> Pull from Relay
             </sl-button>
           ` : ''}
+          <sl-dropdown id="dropdown-feedback-capsule">
+            <sl-button size="small" slot="trigger" caret ${reviewedCount === 0 ? 'disabled' : ''}>
+              <sl-icon slot="prefix" name="capsule"></sl-icon> Distribute Feedback
+            </sl-button>
+            <sl-menu>
+              <sl-menu-item id="action-export-classpack">
+                <sl-icon slot="prefix" name="file-earmark-zip"></sl-icon> Export Capsule (.kbclasspack)
+              </sl-menu-item>
+              ${task.publish?.relay?.relay_url ? `
+                <sl-menu-item id="action-push-relay-feedback">
+                  <sl-icon slot="prefix" name="cloud-upload"></sl-icon> Push to Blind Relay
+                </sl-menu-item>
+              ` : ''}
+            </sl-menu>
+          </sl-dropdown>
           <sl-button size="small" variant="primary" id="btn-sync-gradebook" ${!courseId ? 'disabled' : ''}>
             <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Sync to Gradebook
           </sl-button>
@@ -397,6 +413,119 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
       }
     });
   }
+
+  // Export Class Capsule (.kbclasspack)
+  container.querySelector('#action-export-classpack')?.addEventListener('click', async () => {
+    const reviewedSubs = Array.from(latestSubsByStudent.values()).filter(s => !!s.review?.reviewed_at);
+    if (!reviewedSubs.length) {
+      toast.warning('No reviewed submissions to export.');
+      return;
+    }
+
+    const items = [];
+    const rosterById = new Map(roster.map(s => [String(s.student_id).toUpperCase(), s]));
+
+    for (const s of reviewedSubs) {
+      const student = rosterById.get(String(s.student_id).toUpperCase());
+      const accessCode = student?.access_code || s.access_code;
+      if (accessCode) {
+        items.push({
+          studentId: s.student_id,
+          studentAccessCode: accessCode,
+          feedback: {
+            task_id: task.id,
+            assignment_id: task.id,
+            student_id: s.student_id,
+            points: s.review.points,
+            status: s.review.status,
+            rubric_eval: s.review.rubric_eval,
+            standard_scores: s.review.standard_scores,
+            feedback: s.review.feedback,
+            audio_note: s.review.audio_note,
+            drawing_annotations: s.review.drawing_annotations,
+            reviewed_at: s.review.reviewed_at
+          }
+        });
+      }
+    }
+
+    if (!items.length) {
+      toast.danger('None of the reviewed students have an access code on the roster to encrypt feedback.');
+      return;
+    }
+
+    const pack = await FeedbackCapsule.createClassCapsulePack({
+      assignmentId: task.id,
+      classId: courseId || '',
+      title: task.title,
+      items
+    });
+
+    const blob = new Blob([JSON.stringify(pack, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `kennisboost-${task.id}-feedback.kbclasspack`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success(`Exported feedback capsule for ${items.length} student(s) (.kbclasspack)!`);
+  });
+
+  // Push Feedback to Blind Relay
+  container.querySelector('#action-push-relay-feedback')?.addEventListener('click', async () => {
+    const relayUrl = task.publish?.relay?.relay_url || task.publish?.relay?.base_url;
+    if (!relayUrl) {
+      toast.warning('No relay URL configured for this assignment.');
+      return;
+    }
+
+    const teacherToken = (await storage.getMetadata('relay_teacher_token')) || '';
+    if (!teacherToken) {
+      toast.warning('No relay teacher token found in settings.');
+      return;
+    }
+
+    const reviewedSubs = Array.from(latestSubsByStudent.values()).filter(s => !!s.review?.reviewed_at);
+    const rosterById = new Map(roster.map(s => [String(s.student_id).toUpperCase(), s]));
+    const items = [];
+
+    for (const s of reviewedSubs) {
+      const student = rosterById.get(String(s.student_id).toUpperCase());
+      const accessCode = student?.access_code || s.access_code;
+      if (accessCode) {
+        items.push({
+          studentAccessCode: accessCode,
+          feedback: {
+            task_id: task.id,
+            assignment_id: task.id,
+            student_id: s.student_id,
+            points: s.review.points,
+            status: s.review.status,
+            rubric_eval: s.review.rubric_eval,
+            standard_scores: s.review.standard_scores,
+            feedback: s.review.feedback,
+            audio_note: s.review.audio_note,
+            reviewed_at: s.review.reviewed_at
+          }
+        });
+      }
+    }
+
+    if (!items.length) {
+      toast.warning('No reviewed students with access codes found.');
+      return;
+    }
+
+    toast.info(`Publishing ${items.length} feedback drops to relay...`);
+    const res = await FeedbackCapsule.publishBatchToRelay({
+      relayUrl,
+      teacherToken,
+      assignmentId: task.id,
+      items
+    });
+
+    toast.success(`Published ${res.published} feedback drop(s) to relay! (${res.failed} failed)`);
+  });
 
   // Import Submissions Modal
   const importBtn = container.querySelector('#btn-import-subs');
