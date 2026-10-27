@@ -4,6 +4,7 @@ import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { Sanitizer } from '../../core/sanitizer.js';
 import { toast } from '../../utils/toast.js';
 import { buildStudentPayload, totalPoints } from './grading.js';
+export { buildStudentPayload };
 import { validateQuestion } from './question-types.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { syncContentClassLink } from '../gradebook/bridge.js';

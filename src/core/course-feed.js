@@ -3,7 +3,7 @@ import { CryptoShareEngine } from './crypto-share.js';
 import { computeCourseRevisionHash } from './course-revision.js';
 import { getDue } from './due-dates.js';
 import { SubmissionCrypto } from './submission-crypto.js';
-import { buildStudentPayload } from '../modules/assignments/publish.js';
+import { buildStudentPayload } from '../modules/assignments/grading.js';
 import { buildStudentTaskPayload } from '../modules/tasks/publish-core.js';
 
 /**
