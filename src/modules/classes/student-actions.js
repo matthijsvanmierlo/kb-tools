@@ -6,6 +6,7 @@ import { splitName, joinName } from '../../core/names.js';
 import { AccessCodes } from '../../core/access-codes.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { GradebookReportGenerator } from '../gradebook/report-generator.js';
+import { stringSimilarity } from '../../core/student-matcher.js';
 
 /**
  * Student Actions (KB-CLASS-003)
@@ -292,4 +293,234 @@ export async function openStudentDrawer({ student, course, assignments = [], gra
 
   drawer.querySelector('#btn-close-drawer')?.addEventListener('click', () => drawer.hide());
   drawer.addEventListener('sl-after-hide', (e) => { if (e.target === drawer) drawer.remove(); });
+}
+
+const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
+
+/**
+ * Merge a duplicate student into a primary student in a course:
+ * - Consolidates aliases, previous access codes, and contact info
+ * - Re-parents gradebook_grades, assignment_submissions, and task_submissions
+ * - Removes the duplicate record
+ */
+export async function mergeStudents({ courseId, primaryStudent, duplicateStudent }) {
+  if (!primaryStudent || !duplicateStudent || primaryStudent.id === duplicateStudent.id) {
+    throw new Error('Invalid students for merge.');
+  }
+
+  const primId = primaryStudent.student_id;
+  const dupId = duplicateStudent.student_id;
+
+  // 1. Merge Aliases
+  const aliases = new Set([
+    ...(Array.isArray(primaryStudent.aliases) ? primaryStudent.aliases : []),
+    ...(Array.isArray(duplicateStudent.aliases) ? duplicateStudent.aliases : []),
+    dupId
+  ]);
+  if (duplicateStudent.full_name && duplicateStudent.full_name !== primaryStudent.full_name) {
+    aliases.add(duplicateStudent.full_name);
+  }
+  aliases.delete(primId);
+  primaryStudent.aliases = Array.from(aliases);
+
+  // 2. Merge previous access code hashes
+  const prevHashes = new Set([
+    ...(Array.isArray(primaryStudent.previous_access_codes) ? primaryStudent.previous_access_codes : []),
+    ...(Array.isArray(duplicateStudent.previous_access_codes) ? duplicateStudent.previous_access_codes : [])
+  ]);
+  if (duplicateStudent.access_code_hash) prevHashes.add(duplicateStudent.access_code_hash);
+  primaryStudent.previous_access_codes = Array.from(prevHashes);
+
+  // 3. Merge fields
+  if (!primaryStudent.email && duplicateStudent.email) primaryStudent.email = duplicateStudent.email;
+  if (!primaryStudent.given_name && duplicateStudent.given_name) primaryStudent.given_name = duplicateStudent.given_name;
+  if (!primaryStudent.family_name && duplicateStudent.family_name) primaryStudent.family_name = duplicateStudent.family_name;
+  if (!primaryStudent.notes && duplicateStudent.notes) primaryStudent.notes = duplicateStudent.notes;
+  primaryStudent.updated_at = new Date().toISOString();
+
+  // 4. Re-parent gradebook_grades
+  const dupGrades = await storage.table('gradebook_grades')
+    .where('course_id').equals(courseId)
+    .toArray()
+    .then(grades => grades.filter(g => String(g.student_id).toUpperCase() === String(dupId).toUpperCase()));
+
+  for (const dg of dupGrades) {
+    const existingPrimGrade = await storage.table('gradebook_grades').get([primId, dg.assignment_id]);
+
+    if (!existingPrimGrade) {
+      await storage.table('gradebook_grades').delete([dg.student_id, dg.assignment_id]).catch(() => {});
+      if (dg.id) await storage.table('gradebook_grades').delete(dg.id).catch(() => {});
+      dg.student_id = primId;
+      dg.updated_at = new Date().toISOString();
+      await storage.table('gradebook_grades').put(dg);
+    } else {
+      // Keep higher score or newer
+      if (dg.raw_score !== null && (existingPrimGrade.raw_score === null || dg.raw_score > existingPrimGrade.raw_score)) {
+        existingPrimGrade.raw_score = dg.raw_score;
+        existingPrimGrade.status = dg.status;
+        existingPrimGrade.feedback = dg.feedback || existingPrimGrade.feedback;
+        existingPrimGrade.updated_at = new Date().toISOString();
+        await storage.table('gradebook_grades').put(existingPrimGrade);
+      }
+      await storage.table('gradebook_grades').delete([dg.student_id, dg.assignment_id]).catch(() => {});
+      if (dg.id) await storage.table('gradebook_grades').delete(dg.id).catch(() => {});
+    }
+  }
+
+  // 5. Re-parent assignment_submissions
+  const dupAsgSubs = await storage.table('assignment_submissions')
+    .where('student_id').equals(dupId)
+    .toArray();
+  for (const s of dupAsgSubs) {
+    s.student_id = primId;
+    s.student_name = primaryStudent.full_name || primaryStudent.name;
+    s.match_type = 'merged';
+    s.updated_at = new Date().toISOString();
+    await storage.table('assignment_submissions').put(s);
+  }
+
+  // 6. Re-parent task_submissions
+  const dupTaskSubs = await storage.table('task_submissions')
+    .where('student_id').equals(dupId)
+    .toArray();
+  for (const s of dupTaskSubs) {
+    s.student_id = primId;
+    s.student_name = primaryStudent.full_name || primaryStudent.name;
+    s.match_type = 'merged';
+    s.updated_at = new Date().toISOString();
+    await storage.table('task_submissions').put(s);
+  }
+
+  // 7. Update primary student & delete duplicate
+  await storage.table('gradebook_students').put(primaryStudent);
+  await storage.table('gradebook_students').delete(duplicateStudent.id);
+
+  return { primaryStudent, duplicateStudent };
+}
+
+/**
+ * Modal dialog for identifying and merging duplicate students in a course roster.
+ */
+export function openMergeDuplicatesModal(course, students = [], onMerged) {
+  // Find potential duplicate pairs
+  const candidatePairs = [];
+  for (let i = 0; i < students.length; i++) {
+    for (let j = i + 1; j < students.length; j++) {
+      const s1 = students[i];
+      const s2 = students[j];
+      const sim = stringSimilarity(s1.full_name, s2.full_name);
+      const emailMatch = s1.email && s2.email && s1.email.toLowerCase() === s2.email.toLowerCase();
+      if (sim >= 0.75 || emailMatch) {
+        candidatePairs.push({ s1, s2, sim, emailMatch });
+      }
+    }
+  }
+
+  const dialog = document.createElement('sl-dialog');
+  dialog.label = 'Merge Duplicate Students';
+  dialog.style.setProperty('--width', '640px');
+
+  let bodyHtml = `
+    <div class="space-y-4 text-sm">
+      <p class="text-xs text-slate-600 leading-relaxed">
+        Merging consolidates grades, assessment submissions, task submissions, access codes, and aliases into a single primary student record, then removes the duplicate record.
+      </p>
+  `;
+
+  if (candidatePairs.length) {
+    bodyHtml += `
+      <div class="space-y-2">
+        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500">Detected Potential Duplicates (${candidatePairs.length})</h4>
+        <div class="space-y-2 max-h-64 overflow-y-auto pr-1">
+          ${candidatePairs.map((p, idx) => `
+            <div class="p-3 rounded-xl border border-amber-200 bg-amber-50/50 flex items-center justify-between gap-3 text-xs">
+              <div class="min-w-0">
+                <div class="font-bold text-slate-900">${esc(p.s1.full_name)} <span class="font-mono text-slate-500">(${esc(p.s1.student_id)})</span></div>
+                <div class="font-bold text-slate-900 mt-1">${esc(p.s2.full_name)} <span class="font-mono text-slate-500">(${esc(p.s2.student_id)})</span></div>
+                <div class="text-[11px] text-amber-800 mt-1">${p.emailMatch ? 'Matching email address' : `${Math.round(p.sim * 100)}% name similarity`}</div>
+              </div>
+              <sl-button size="small" variant="primary" class="btn-merge-candidate" data-pair-idx="${idx}">
+                <sl-icon slot="prefix" name="link-45deg"></sl-icon> Merge
+              </sl-button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  } else {
+    bodyHtml += `
+      <div class="p-3 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-600">
+        No obvious duplicates detected by name similarity. You can select any two students manually below.
+      </div>
+    `;
+  }
+
+  bodyHtml += `
+      <div class="pt-2 border-t border-slate-200 space-y-3">
+        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500">Manual Student Merge</h4>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <sl-select id="select-primary-student" label="Keep (Primary Record)" placeholder="Choose primary student...">
+            ${students.map(s => `<sl-option value="${esc(s.id)}">${esc(s.full_name)} (${esc(s.student_id)})</sl-option>`).join('')}
+          </sl-select>
+          <sl-select id="select-duplicate-student" label="Merge &amp; Remove (Duplicate)" placeholder="Choose duplicate student...">
+            ${students.map(s => `<sl-option value="${esc(s.id)}">${esc(s.full_name)} (${esc(s.student_id)})</sl-option>`).join('')}
+          </sl-select>
+        </div>
+      </div>
+    </div>
+    <div slot="footer" class="flex justify-end gap-2">
+      <sl-button id="btn-merge-cancel">Cancel</sl-button>
+      <sl-button variant="primary" id="btn-merge-manual">Merge Selected</sl-button>
+    </div>
+  `;
+
+  dialog.innerHTML = bodyHtml;
+  document.body.appendChild(dialog);
+  dialog.show();
+
+  dialog.querySelector('#btn-merge-cancel')?.addEventListener('click', () => dialog.hide());
+  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+
+  const executeMerge = async (primaryStudent, duplicateStudent) => {
+    if (primaryStudent.id === duplicateStudent.id) {
+      toast.warning('Please select two different students.');
+      return;
+    }
+    const confirmed = await ConfirmDialog.show({
+      title: 'Confirm Student Merge',
+      message: `Merge "${Sanitizer.escapeHTML(duplicateStudent.full_name)}" into "${Sanitizer.escapeHTML(primaryStudent.full_name)}"? All grades, submissions, and codes will be moved to ${Sanitizer.escapeHTML(primaryStudent.full_name)} and the duplicate record will be removed.`,
+      confirmText: 'Merge Students'
+    });
+    if (!confirmed) return;
+
+    try {
+      await mergeStudents({ courseId: course.id, primaryStudent, duplicateStudent });
+      toast.success(`Successfully merged ${duplicateStudent.full_name} into ${primaryStudent.full_name}!`);
+      dialog.hide();
+      if (typeof onMerged === 'function') onMerged();
+    } catch (err) {
+      console.error(err);
+      toast.danger('Merge failed: ' + err.message);
+    }
+  };
+
+  dialog.querySelectorAll('.btn-merge-candidate').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const idx = parseInt(btn.dataset.pairIdx, 10);
+      const pair = candidatePairs[idx];
+      if (pair) executeMerge(pair.s1, pair.s2);
+    });
+  });
+
+  dialog.querySelector('#btn-merge-manual')?.addEventListener('click', () => {
+    const pId = dialog.querySelector('#select-primary-student')?.value;
+    const dId = dialog.querySelector('#select-duplicate-student')?.value;
+    const pStudent = students.find(s => s.id === pId);
+    const dStudent = students.find(s => s.id === dId);
+    if (!pStudent || !dStudent) {
+      toast.warning('Please choose both a primary and a duplicate student.');
+      return;
+    }
+    executeMerge(pStudent, dStudent);
+  });
 }

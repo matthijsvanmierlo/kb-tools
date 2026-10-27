@@ -27,14 +27,30 @@ export function buildStudentRecord(data, studentId, { courseIds = null, now = ne
   const inScope = (courseId) => !courseIds || courseIds.includes(courseId);
   const rows = (t) => data[t] || [];
 
-  const enrolments = rows('gradebook_students').filter(s => norm(s.student_id) === sid && inScope(s.course_id));
+  const allStudents = rows('gradebook_students');
+  const enrolments = allStudents.filter(s => {
+    if (!inScope(s.course_id)) return false;
+    if (norm(s.student_id) === sid) return true;
+    if (Array.isArray(s.aliases) && s.aliases.some(a => norm(a) === sid)) return true;
+    return false;
+  });
+
+  const sids = new Set([sid]);
+  for (const s of enrolments) {
+    if (s.student_id) sids.add(norm(s.student_id));
+    if (Array.isArray(s.aliases)) {
+      for (const a of s.aliases) if (a) sids.add(norm(a));
+    }
+  }
+
   const courses = new Map(rows('gradebook_courses').map(c => [c.id, c]));
   const columns = new Map(rows('gradebook_assignments').map(a => [a.id, a]));
   const assignments = new Map(rows('assignments').map(a => [a.id, a]));
+  const tasks = new Map(rows('tasks').map(t => [t.id, t]));
   const courseIdsOfStudent = new Set(enrolments.map(e => e.course_id));
 
   const grades = rows('gradebook_grades')
-    .filter(g => norm(g.student_id) === sid && courseIdsOfStudent.has(g.course_id))
+    .filter(g => sids.has(norm(g.student_id)) && courseIdsOfStudent.has(g.course_id))
     .map(g => {
       const col = columns.get(g.assignment_id) || {};
       const course = courses.get(g.course_id) || {};
@@ -56,7 +72,7 @@ export function buildStudentRecord(data, studentId, { courseIds = null, now = ne
     .sort((a, b) => String(a.course).localeCompare(String(b.course)) || String(a.due_date || '').localeCompare(String(b.due_date || '')));
 
   const submissions = rows('assignment_submissions')
-    .filter(s => norm(s.student_id) === sid)
+    .filter(s => sids.has(norm(s.student_id)))
     .filter(s => {
       const a = assignments.get(s.assignment_id);
       return !courseIds || (a && courseIds.includes(a.class_id));
@@ -77,6 +93,27 @@ export function buildStudentRecord(data, studentId, { courseIds = null, now = ne
     })
     .sort((a, b) => String(a.submitted_at || '').localeCompare(String(b.submitted_at || '')));
 
+  const taskSubmissions = rows('task_submissions')
+    .filter(s => sids.has(norm(s.student_id)))
+    .filter(s => {
+      const t = tasks.get(s.task_id);
+      return !courseIds || (t && courseIds.includes(t.class_id));
+    })
+    .map(s => {
+      const t = tasks.get(s.task_id) || {};
+      return {
+        task: t.title || s.task_id,
+        course: courses.get(t.class_id)?.name || null,
+        submitted_at: s.submitted_at || null,
+        days_late: s.days_late ?? null,
+        identity_check: s.identity || null,
+        points: s.points ?? null,
+        review: s.review || null,
+        answers: s.answers || s.body?.answers || null
+      };
+    })
+    .sort((a, b) => String(a.submitted_at || '').localeCompare(String(b.submitted_at || '')));
+
   const first = enrolments[0] || {};
   return {
     format: 'kennisboost-student-record',
@@ -87,6 +124,7 @@ export function buildStudentRecord(data, studentId, { courseIds = null, now = ne
       full_name: first.full_name || null,
       given_name: first.given_name || null,
       family_name: first.family_name || null,
+      aliases: [...sids].filter(id => id !== norm(first.student_id || studentId)),
       emails: [...new Set(enrolments.map(e => e.email).filter(Boolean))],
       sis_ids: [...new Set(enrolments.map(e => e.sis?.sourced_id).filter(Boolean))],
       classes: enrolments.map(e => {
@@ -96,6 +134,7 @@ export function buildStudentRecord(data, studentId, { courseIds = null, now = ne
     },
     grades,
     submissions,
+    task_submissions: taskSubmissions,
     notes: [
       'Access codes are not included: they are credentials, not records.',
       'Practice data (flashcard study progress) is not tied to students and is not included.'
@@ -117,13 +156,30 @@ export function studentIdsIn(data, courseIds = null) {
 export function recordToCsvFiles(record) {
   const gradeCols = ['course', 'assignment', 'category', 'due_date', 'score', 'max_score', 'status', 'feedback', 'recorded_at'];
   const subCols = ['assignment', 'course', 'submitted_at', 'days_late', 'identity_check', 'auto_earned', 'auto_possible'];
-  return {
+  const taskCols = ['task', 'course', 'submitted_at', 'days_late', 'identity_check', 'earned_points', 'max_points', 'review_status'];
+
+  const files = {
     'grades.csv': toCSV(record.grades.map(g => Object.fromEntries(gradeCols.map(c => [c, g[c] ?? '']))), gradeCols),
     'submissions.csv': toCSV(record.submissions.map(s => ({
       assignment: s.assignment, course: s.course ?? '', submitted_at: s.submitted_at ?? '', days_late: s.days_late ?? '',
       identity_check: s.identity_check ?? '', auto_earned: s.auto_score?.earned ?? '', auto_possible: s.auto_score?.possible ?? ''
     })), subCols)
   };
+
+  if (Array.isArray(record.task_submissions)) {
+    files['task_submissions.csv'] = toCSV(record.task_submissions.map(s => ({
+      task: s.task,
+      course: s.course ?? '',
+      submitted_at: s.submitted_at ?? '',
+      days_late: s.days_late ?? '',
+      identity_check: s.identity_check ? JSON.stringify(s.identity_check) : '',
+      earned_points: s.points?.earned ?? '',
+      max_points: s.points?.possible ?? '',
+      review_status: s.review?.status ?? ''
+    })), taskCols);
+  }
+
+  return files;
 }
 
 const safeName = (s) => String(s || 'student').replace(/[^A-Za-z0-9_.-]+/g, '_').slice(0, 60);
@@ -145,9 +201,10 @@ export async function buildRecordsZip(records, { JSZip, pdfFor = null, school = 
       `Student: ${r.student.full_name || ''} (${r.student.student_id})`,
       `Generated: ${r.generated_at}`,
       '',
-      'record.json      everything KennisBoost holds about this student (machine-readable)',
-      'grades.csv       gradebook entries',
-      'submissions.csv  handed-in assignments (answers are in record.json)',
+      'record.json          everything KennisBoost holds about this student (machine-readable)',
+      'grades.csv           gradebook entries',
+      'submissions.csv      handed-in assignments (answers are in record.json)',
+      'task_submissions.csv handed-in tasks and projects',
       ...r.notes
     ].join('\n'));
     if (pdfFor) {

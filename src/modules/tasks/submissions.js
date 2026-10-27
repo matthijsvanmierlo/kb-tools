@@ -3,10 +3,11 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { toast } from '../../utils/toast.js';
 import { GradebookBridge } from '../gradebook/bridge.js';
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
-import { RelayTransport } from '../../core/transport.js';
+import { RelayTransport, getTransport } from '../../core/transport.js';
 import { evaluateTaskSubmission, IDENTITY_LABELS } from './pipeline.js';
 import { renderTaskReview } from './review.js';
 import { FeedbackCapsule } from '../../core/feedback-capsule.js';
+import { StudentMatcher } from '../../core/student-matcher.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -78,6 +79,25 @@ export async function syncTaskSubmissionsToGradebook({ task, submissions = [], c
   }
 
   const rosterById = new Map(roster.map(s => [String(s.student_id).toUpperCase(), s]));
+
+  // Auto-enroll reviewed students into class roster if not present
+  for (const sub of submissions) {
+    const sid = String(sub.student_id).toUpperCase();
+    if (sub.is_latest !== false && sub.review?.reviewed_at && !rosterById.has(sid)) {
+      const newStudent = {
+        id: crypto.randomUUID(),
+        course_id: courseId,
+        student_id: sub.student_id,
+        full_name: sub.claimed_name || sub.student_name || sub.student_id,
+        access_code: sub.access_code || '',
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      await storage.table('gradebook_students').put(newStudent);
+      roster.push(newStudent);
+      rosterById.set(sid, newStudent);
+    }
+  }
 
   // Filter eligible submissions: latest, reviewed, student on roster
   const eligible = submissions.filter(s =>
@@ -243,6 +263,12 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
   const reviewedCount = Array.from(latestSubsByStudent.values()).filter(s => !!s.review?.reviewed_at).length;
   const missingCount = Math.max(0, totalEnrolled - submittedCount);
 
+  // Identify submissions from students not yet enrolled on this class roster
+  const unrosteredSubs = Array.from(latestSubsByStudent.values()).filter(sub => {
+    const sid = String(sub.student_id).toUpperCase();
+    return !roster.some(r => String(r.student_id).toUpperCase() === sid);
+  });
+
   container.innerHTML = `
     <div class="max-w-6xl mx-auto space-y-6 pb-20 pt-2">
       <!-- Header -->
@@ -307,6 +333,49 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
           <p class="text-2xl font-bold text-rose-600 mt-1">${missingCount}</p>
         </div>
       </div>
+
+      <!-- Unrostered Submissions (New / Self-Joined Students) -->
+      ${unrosteredSubs.length > 0 ? `
+        <div class="bg-amber-50/60 border border-amber-200 rounded-2xl p-5 space-y-3 shadow-xs">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <sl-icon name="person-plus" class="text-amber-700"></sl-icon>
+              <h2 class="text-xs font-bold text-amber-900 uppercase tracking-wider">Submissions from Students Not on Roster (${unrosteredSubs.length})</h2>
+            </div>
+            <span class="text-xs text-amber-700 hidden sm:inline">These students joined dynamically or submitted work with a new ID.</span>
+          </div>
+          <div class="divide-y divide-amber-100 bg-white rounded-xl border border-amber-200 overflow-hidden shadow-2xs">
+            ${unrosteredSubs.map(sub => `
+              <div class="p-3.5 flex items-center justify-between gap-3 hover:bg-amber-50/30 transition-colors">
+                <div class="flex items-center gap-3 min-w-0">
+                  <div class="w-8 h-8 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center text-xs font-bold uppercase flex-shrink-0">
+                    ${esc((sub.claimed_name || sub.student_name || 'S').slice(0, 2))}
+                  </div>
+                  <div class="min-w-0">
+                    <p class="text-sm font-semibold text-slate-900 truncate">${esc(sub.claimed_name || sub.student_name || 'Unknown Student')}</p>
+                    <p class="text-xs text-slate-500 font-mono">${esc(sub.student_id)}</p>
+                  </div>
+                </div>
+                <div class="flex items-center gap-2 flex-shrink-0">
+                  ${courseId && roster.length ? `
+                    <sl-button size="small" variant="default" class="btn-link-sub-student" data-sub-id="${esc(sub.id)}" data-sid="${esc(sub.student_id)}">
+                      <sl-icon slot="prefix" name="link-45deg"></sl-icon> Link to Existing Student
+                    </sl-button>
+                  ` : ''}
+                  ${courseId ? `
+                    <sl-button size="small" variant="default" class="btn-enroll-sub-student" data-sub-id="${esc(sub.id)}" data-sid="${esc(sub.student_id)}" data-name="${esc(sub.claimed_name || sub.student_name || sub.student_id)}">
+                      <sl-icon slot="prefix" name="person-plus"></sl-icon> Add as New Student
+                    </sl-button>
+                  ` : ''}
+                  <sl-button size="small" variant="primary" class="student-row" data-sid="${esc(sub.student_id)}" data-sub-id="${esc(sub.id)}">
+                    Review Work
+                  </sl-button>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
 
       <!-- Roster Submissions Table -->
       <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
@@ -388,6 +457,43 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
       } else {
         toast.info('Student has not submitted work yet.');
       }
+    });
+  });
+
+  // Link unrostered student button
+  container.querySelectorAll('.btn-link-sub-student').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const subId = btn.dataset.subId;
+      const sub = allSubmissions.find(s => s.id === subId);
+      if (!sub) return;
+      openLinkStudentModal(sub, roster, courseId, async () => {
+        await renderTaskSubmissions(params, router, container);
+      });
+    });
+  });
+
+  // Enroll unrostered student button
+  container.querySelectorAll('.btn-enroll-sub-student').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const sid = btn.dataset.sid;
+      const sname = btn.dataset.name;
+      if (!courseId) {
+        toast.warning('No class linked to this assignment.');
+        return;
+      }
+      const newStudent = {
+        id: crypto.randomUUID(),
+        course_id: courseId,
+        student_id: sid,
+        full_name: sname || sid,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString()
+      };
+      await storage.table('gradebook_students').put(newStudent);
+      toast.success(`Added ${newStudent.full_name} (${sid}) to class roster!`);
+      await renderTaskSubmissions(params, router, container);
     });
   });
 
@@ -473,15 +579,12 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
 
   // Push Feedback to Blind Relay
   container.querySelector('#action-push-relay-feedback')?.addEventListener('click', async () => {
-    const relayUrl = task.publish?.relay?.relay_url || task.publish?.relay?.base_url;
-    if (!relayUrl) {
-      toast.warning('No relay URL configured for this assignment.');
-      return;
-    }
-
-    const teacherToken = (await storage.getMetadata('relay_teacher_token')) || '';
-    if (!teacherToken) {
-      toast.warning('No relay teacher token found in settings.');
+    const syncConfig = (await storage.getMetadata('sync_config')) || {};
+    const transport = await getTransport();
+    const relayUrl = task.publish?.relay?.relay_url || task.publish?.relay?.base_url || syncConfig.baseUrl;
+    const teacherToken = syncConfig.token || '';
+    if (!relayUrl || !teacherToken) {
+      toast.warning('No school server connection or token found in settings. Go to Settings > Connect to a school server.');
       return;
     }
 
@@ -544,29 +647,49 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
       pullRelayBtn.loading = true;
       try {
         const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
-        const transport = new RelayTransport({ baseUrl: task.publish.relay.base_url });
-        const res = await transport.pullDrop(task.publish.relay.drop_id, task.publish.relay.drop_secret);
-        if (!res.ok) throw new Error(`Server returned HTTP ${res.status}`);
+        const transport = await getTransport();
+        if (!transport || !transport.baseUrl || !transport.token) {
+          throw new Error('Not connected to a school server. Check Settings > Connect to a school server.');
+        }
+        const dropId = task.publish?.relay?.drop_id;
+        if (!dropId) {
+          throw new Error('No drop ID found for this assignment. Re-publish the assignment to establish a drop box.');
+        }
 
-        const items = res.items || [];
+        const res = await transport.listDrop(dropId, { since: task.publish?.relay?.last_pulled_at });
+        const items = res?.items || [];
         let imported = 0;
         for (const item of items) {
           try {
+            const rawText = typeof item === 'string' ? item : (item.text || item.payload || '');
+            if (!rawText) continue;
             const sub = await evaluateTaskSubmission({
-              text: item.payload || item,
+              text: rawText,
               teacherPrivateKey: keys.privateJwk,
               task,
               roster
             });
             await recordTaskSubmission(sub);
             imported++;
-          } catch (_) {}
+          } catch (itemErr) {
+            console.warn('[task-submissions] Failed to evaluate submission item:', itemErr);
+          }
         }
 
-        toast.success(`Pulled ${imported} new submission(s) from relay!`);
-        await renderTaskSubmissions(params, router, container);
+        if (task.publish?.relay) {
+          task.publish.relay.last_pulled_at = new Date().toISOString();
+          await storage.table('tasks').put(task);
+        }
+
+        if (imported > 0) {
+          toast.success(`Pulled ${imported} new submission(s) from server!`);
+          await renderTaskSubmissions(params, router, container);
+        } else {
+          toast.info('No new submissions found on the server.');
+        }
       } catch (err) {
-        toast.error('Relay pull failed: ' + (err.message || String(err)));
+        console.error(err);
+        toast.danger('Server pull failed: ' + (err.message || String(err)));
       } finally {
         pullRelayBtn.loading = false;
       }
@@ -661,4 +784,62 @@ function openImportDialog(task, roster, onComplete) {
       confirmBtn.loading = false;
     }
   };
+}
+
+/**
+ * Dialog to link an unrostered or mismatched submission to an enrolled roster student.
+ */
+function openLinkStudentModal(sub, roster, courseId, onLinked) {
+  const dialog = document.createElement('sl-dialog');
+  dialog.label = 'Link Submission to Existing Student';
+  dialog.innerHTML = `
+    <div class="space-y-4 text-sm">
+      <p class="text-xs text-slate-600 leading-relaxed">
+        Link submission by <strong>${esc(sub.claimed_name || sub.student_name)}</strong> (submitted ID: <code class="font-mono bg-slate-100 px-1 py-0.5 rounded">${esc(sub.student_id)}</code>) to an enrolled roster student. The submitted ID will be saved as a recognized alias.
+      </p>
+      <sl-select id="select-roster-target" label="Enrolled Student" placeholder="Choose student from roster...">
+        ${roster.map(st => `
+          <sl-option value="${esc(st.id)}">${esc(st.full_name || st.name)} (${esc(st.student_id)})</sl-option>
+        `).join('')}
+      </sl-select>
+    </div>
+    <div slot="footer" class="flex justify-end gap-2">
+      <sl-button id="btn-cancel-link">Cancel</sl-button>
+      <sl-button variant="primary" id="btn-confirm-link">Link Student</sl-button>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+  dialog.show();
+
+  dialog.querySelector('#btn-cancel-link')?.addEventListener('click', () => dialog.hide());
+  dialog.querySelector('#btn-confirm-link')?.addEventListener('click', async () => {
+    const selectedId = dialog.querySelector('#select-roster-target')?.value;
+    const targetStudent = roster.find(st => st.id === selectedId);
+    if (!targetStudent) {
+      toast.warning('Please select a student from the roster.');
+      return;
+    }
+
+    try {
+      // 1. Save alias in IndexedDB gradebook_students
+      await StudentMatcher.saveAlias(storage, targetStudent.student_id, sub.student_id, courseId);
+
+      // 2. Re-key submission in task_submissions
+      const priorId = sub.student_id;
+      sub.student_id = targetStudent.student_id;
+      sub.student_name = targetStudent.full_name || targetStudent.name;
+      sub.match_type = 'alias';
+      sub.match_confidence = 1;
+      await storage.table('task_submissions').put(sub);
+
+      toast.success(`Linked submission to ${targetStudent.full_name || targetStudent.name} and saved "${priorId}" as an alias!`);
+      dialog.hide();
+      if (typeof onLinked === 'function') await onLinked();
+    } catch (err) {
+      console.error(err);
+      toast.danger('Failed to link student: ' + err.message);
+    }
+  });
+
+  dialog.addEventListener('sl-after-hide', () => dialog.remove());
 }

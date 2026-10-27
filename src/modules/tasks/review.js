@@ -137,6 +137,18 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
         </div>
       </header>
 
+      ${courseId && sub.identity === 'not_in_roster' ? `
+        <div class="bg-amber-50 border-b border-amber-200 px-5 py-2 flex items-center justify-between text-xs text-amber-900 z-10 flex-shrink-0">
+          <div class="flex items-center gap-2">
+            <sl-icon name="exclamation-circle" class="text-amber-700"></sl-icon>
+            <span>Student ID "${esc(sub.student_id)}" is not yet on this class roster.</span>
+          </div>
+          <sl-button size="small" id="btn-review-add-roster" variant="default">
+            <sl-icon slot="prefix" name="person-plus"></sl-icon> Add to Class Roster
+          </sl-button>
+        </div>
+      ` : ''}
+
       <!-- Main Dual Pane View -->
       <div class="flex-1 flex flex-col md:flex-row overflow-hidden">
         <!-- Left Pane: Student Submission Workspace -->
@@ -525,7 +537,7 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
         `;
         listMount.appendChild(item);
 
-        resolveMediaSrc(att.ref).then(srcUrl => {
+        resolveMediaSrc(att.ref || att.inline_data_b64 || att.dataUrl).then(srcUrl => {
           const dl = item.querySelector('.download-link');
           dl.href = srcUrl;
           if (!isImg && !isPdf) dl.download = att.name;
@@ -758,6 +770,25 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
       }
     });
   }
+
+  // Add to roster button
+  container.querySelector('#btn-review-add-roster')?.addEventListener('click', async () => {
+    if (!courseId) return;
+    const newStudent = {
+      id: crypto.randomUUID(),
+      course_id: courseId,
+      student_id: sub.student_id,
+      full_name: sub.claimed_name || sub.student_name || sub.student_id,
+      access_code: sub.access_code || '',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    await storage.table('gradebook_students').put(newStudent);
+    sub.identity = 'no_code_on_file';
+    await storage.table('task_submissions').put(sub);
+    toast.success(`Added ${newStudent.full_name} to class roster!`);
+    await renderTaskReview(task, sub, allSubmissions, router, container);
+  });
 
   const saveAndNextBtn = container.querySelector('#btn-save-and-next');
   if (saveAndNextBtn) {

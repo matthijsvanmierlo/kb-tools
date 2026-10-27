@@ -73,7 +73,7 @@ export function renderAppNav(container, role = RoleMode.get()) {
   // Secondary links on desktop
   for (const item of config.secondary) {
     html += `
-      <a href="${item.route}" data-route-link="${item.route}" class="kb-nav-link" title="${esc(item.label)}">
+      <a href="${item.route}" data-route-link="${item.route}" id="${item.id}" class="kb-nav-link relative" title="${esc(item.label)}">
         <sl-icon name="${item.icon}" aria-hidden="true"></sl-icon>
         <span>${esc(item.shortLabel || item.label)}</span>
       </a>`;
@@ -249,6 +249,46 @@ export function updateActiveNav(rawHash = window.location.hash || '#/') {
     } else {
       link.classList.remove('kb-nav-active');
       link.removeAttribute('aria-current');
+    }
+  }
+}
+
+/**
+ * Updates unreviewed/pending submission count badge in navigation.
+ * @param {number} count
+ */
+export function updateInboxBadge(count) {
+  const badgeClass = 'kb-inbox-badge-count';
+  const inboxLinks = document.querySelectorAll('a[data-route-link="#/inbox"]');
+  const moreBtn = document.getElementById('btn-kb-nav-more');
+
+  inboxLinks.forEach(link => {
+    let badge = link.querySelector(`.${badgeClass}`);
+    if (count > 0) {
+      if (!badge) {
+        badge = document.createElement('span');
+        badge.className = `${badgeClass} ml-1.5 px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-500 text-white`;
+        link.appendChild(badge);
+      }
+      badge.textContent = count > 99 ? '99+' : String(count);
+      badge.style.display = 'inline-block';
+    } else if (badge) {
+      badge.remove();
+    }
+  });
+
+  if (moreBtn) {
+    let dot = moreBtn.querySelector('.kb-inbox-more-dot');
+    if (count > 0) {
+      if (!dot) {
+        dot = document.createElement('span');
+        dot.className = 'kb-inbox-more-dot absolute top-1 right-2 w-2 h-2 rounded-full bg-amber-500 ring-2 ring-white';
+        moreBtn.classList.add('relative');
+        moreBtn.appendChild(dot);
+      }
+      dot.style.display = 'block';
+    } else if (dot) {
+      dot.remove();
     }
   }
 }

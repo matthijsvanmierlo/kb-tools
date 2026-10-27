@@ -30,7 +30,7 @@ function normalizeId(id) {
 }
 
 /** Compute bigram similarity between two normalized strings (0..1) */
-function stringSimilarity(s1, s2) {
+export function stringSimilarity(s1, s2) {
   const str1 = normalizeString(s1);
   const str2 = normalizeString(s2);
   if (!str1 || !str2) return 0;

@@ -8,6 +8,7 @@ import { exportRosterCSV } from '../../core/roster-import.js';
 import { downloadCSV } from '../../core/csv.js';
 import { RosterImportDialog } from '../../components/roster-import-dialog.js';
 import { GradebookReportGenerator } from './report-generator.js';
+import { openMergeDuplicatesModal } from '../classes/student-actions.js';
 
 /**
  * Render the dedicated Roster View inside Gradebook
@@ -149,6 +150,9 @@ export async function renderRosterView({
           <div class="flex items-center gap-2 flex-wrap">
             <sl-button size="small" variant="primary" id="btn-roster-add-student">
               <sl-icon slot="prefix" name="person-plus"></sl-icon> Add Student
+            </sl-button>
+            <sl-button size="small" variant="default" id="btn-roster-merge-dups">
+              <sl-icon slot="prefix" name="people"></sl-icon> Merge Duplicates
             </sl-button>
             <sl-button size="small" variant="default" id="btn-roster-import">
               <sl-icon slot="prefix" name="upload"></sl-icon> Import Roster...
@@ -356,6 +360,11 @@ export async function renderRosterView({
       if (onAddStudent) {
         onAddStudent();
       }
+    });
+
+    // Merge duplicates
+    container.querySelector('#btn-roster-merge-dups')?.addEventListener('click', () => {
+      openMergeDuplicatesModal(course, students, () => onRefresh());
     });
 
     // Import roster

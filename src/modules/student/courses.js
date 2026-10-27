@@ -11,6 +11,8 @@ import { mergeCourseFeed } from './course-store.js';
 const esc = (v) => Sanitizer.escapeHTML(v ?? '');
 
 export async function renderStudentCoursesView(params, router, container) {
+  let doEnrollWithCode = null;
+
   const render = async () => {
     const courses = await getStudentCourses();
     const items = await storage.table('student_items').toArray().catch(() => []);
@@ -114,14 +116,14 @@ export async function renderStudentCoursesView(params, router, container) {
       fileInput.value = '';
     });
 
-    const doEnrollWithCode = async (code, relayUrlOverride = null) => {
+    doEnrollWithCode = async (code, relayUrlOverride = null) => {
       const normalizedCode = String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
       if (normalizedCode.length < 4) {
         toast.warning('Please enter a valid access code.');
         return;
       }
 
-      // Try fetching from configured relay or search local courses
+      // 1. Try fetching from configured relay
       const relayUrl = relayUrlOverride || params?.relay || getStudentRelayUrl();
       if (relayUrl) {
         try {
@@ -129,13 +131,25 @@ export async function renderStudentCoursesView(params, router, container) {
           const transport = new PublicFeedTransport({ baseUrl: relayUrl });
           const feedRes = await transport.fetchCourseFeed(feedId);
           if (feedRes && feedRes.ciphertext) {
-            await mergeCourseFeed(feedRes.ciphertext, {
+            const merged = await mergeCourseFeed(feedRes.ciphertext, {
               accessCode: normalizedCode,
               etag: feedRes.etag,
               relayUrl
             });
+            const { StudentProfile } = await import('../../core/student-profile.js');
+            if (merged?.course?.id) {
+              await StudentProfile.saveClassAccessCode(merged.course.id, normalizedCode);
+            }
             toast.success('Successfully joined course and loaded course feed!');
-            render();
+            await render();
+            const prof = StudentProfile.resolveForPayload({ course_id: merged?.course?.id });
+            if (!prof.hasSavedIdentity && merged?.course) {
+              openClaimSeatDialog(merged.course, () => {
+                router.navigate(`#/student/course?id=${encodeURIComponent(merged.course.id)}`);
+              });
+            } else if (merged?.course?.id) {
+              router.navigate(`#/student/course?id=${encodeURIComponent(merged.course.id)}`);
+            }
             return;
           }
         } catch (err) {
@@ -143,16 +157,49 @@ export async function renderStudentCoursesView(params, router, container) {
         }
       }
 
-      // Local fallback: search existing teacher courses in same browser (shared device / demo)
-      const localCourse = await storage.table('gradebook_courses').where('access_code').equals(normalizedCode).first().catch(() => null);
+      // 2. Local fallback: search existing teacher courses by course access code
+      const allCourses = await storage.table('gradebook_courses').toArray().catch(() => []);
+      let localCourse = allCourses.find(c => {
+        const cCode = String(c.access_code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+        return cCode === normalizedCode || c.id === code;
+      });
+
+      // 3. Fallback: search by student's personalized access code in gradebook_students
+      if (!localCourse) {
+        const allStudents = await storage.table('gradebook_students').toArray().catch(() => []);
+        const studentRec = allStudents.find(s => {
+          const sCode = String(s.access_code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+          return sCode === normalizedCode;
+        });
+
+        if (studentRec && studentRec.course_id) {
+          localCourse = await storage.table('gradebook_courses').get(studentRec.course_id).catch(() => null);
+          if (localCourse) {
+            // Auto-populate student identity in profile
+            const { StudentProfile } = await import('../../core/student-profile.js');
+            await StudentProfile.saveIdentity({
+              studentId: studentRec.student_id,
+              fullName: studentRec.full_name,
+              email: studentRec.email || ''
+            });
+            await StudentProfile.saveClassAccessCode(localCourse.id, code);
+          }
+        }
+      }
+
       if (localCourse) {
         const [units, items] = await Promise.all([
           storage.table('course_units').where('course_id').equals(localCourse.id).toArray().catch(() => []),
           storage.table('course_items').where('course_id').equals(localCourse.id).toArray().catch(() => [])
         ]);
-        await mergeCourseFeed({ course: localCourse, units, items }, { accessCode: normalizedCode });
+        await mergeCourseFeed({ course: localCourse, units, items }, { accessCode: code });
+        const { StudentProfile } = await import('../../core/student-profile.js');
+        await StudentProfile.saveClassAccessCode(localCourse.id, code);
         toast.success(`Joined "${localCourse.name}"!`);
-        render();
+        await render();
+        if (router?.navigate) {
+          router.navigate(`#/student/course?id=${encodeURIComponent(localCourse.id)}`);
+        }
       } else {
         toast.warning(`Could not find a course matching code "${normalizedCode}". Make sure you typed it correctly or ask your teacher for the link.`);
       }
@@ -206,4 +253,59 @@ export async function renderStudentCoursesView(params, router, container) {
   if (params?.code) {
     await doEnrollWithCode(params.code, params.relay);
   }
+}
+
+function openClaimSeatDialog(course, onDone) {
+  const dialog = document.createElement('sl-dialog');
+  dialog.label = `Claim Your Seat in ${course.name || 'Course'}`;
+  dialog.innerHTML = `
+    <div class="space-y-4 text-sm">
+      <p class="text-xs text-slate-600 leading-relaxed">
+        To submit assignments and receive private feedback in <strong>${Sanitizer.escapeHTML(course.name || 'this class')}</strong>, enter your student information or personal Student Access Code.
+      </p>
+      <sl-input id="claim-student-code" label="Personal Student Access Code (optional)" placeholder="e.g. K7M2-QX9P">
+        <sl-icon slot="prefix" name="key"></sl-icon>
+      </sl-input>
+      <sl-input id="claim-student-name" label="Your Full Name" placeholder="e.g. Alex Rivera" required></sl-input>
+      <sl-input id="claim-student-id" label="Student ID / SIS ID" placeholder="e.g. S1042" required></sl-input>
+    </div>
+    <div slot="footer" class="flex justify-end gap-2">
+      <sl-button id="btn-claim-skip">Skip for Now</sl-button>
+      <sl-button variant="primary" id="btn-claim-save">Save &amp; Continue</sl-button>
+    </div>
+  `;
+  document.body.appendChild(dialog);
+  dialog.show();
+
+  dialog.querySelector('#btn-claim-skip')?.addEventListener('click', () => {
+    dialog.hide();
+    if (onDone) onDone();
+  });
+
+  dialog.querySelector('#btn-claim-save')?.addEventListener('click', async () => {
+    const code = dialog.querySelector('#claim-student-code')?.value?.trim();
+    const name = dialog.querySelector('#claim-student-name')?.value?.trim();
+    const sid = dialog.querySelector('#claim-student-id')?.value?.trim();
+
+    if (!name || !sid) {
+      toast.warning('Please enter your name and Student ID.');
+      return;
+    }
+
+    const { StudentProfile } = await import('../../core/student-profile.js');
+    await StudentProfile.saveIdentity({
+      studentId: sid,
+      fullName: name,
+      accessCode: code || undefined,
+      courseId: course.id,
+      courseName: course.name,
+      section: course.section
+    });
+
+    toast.success('Student seat claimed and saved to keychain!');
+    dialog.hide();
+    if (onDone) onDone();
+  });
+
+  dialog.addEventListener('sl-after-hide', () => dialog.remove());
 }

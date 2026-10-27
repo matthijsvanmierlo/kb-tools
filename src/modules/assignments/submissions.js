@@ -428,6 +428,9 @@ export async function renderSubmissions(assignment, router, container) {
             </div>
           </div>
           <div class="flex items-center gap-2 flex-wrap">
+            ${a.publish?.relay?.drop_id ? `
+              <sl-button size="small" variant="primary" id="sub-pull-relay"><sl-icon slot="prefix" name="cloud-arrow-down"></sl-icon> Pull from Server</sl-button>
+            ` : ''}
             <sl-button size="small" id="sub-scan-qr" variant="primary"><sl-icon slot="prefix" name="camera"></sl-icon> Scan QR</sl-button>
             <sl-button size="small" href="#/inbox"><sl-icon slot="prefix" name="inbox"></sl-icon> Open Inbox</sl-button>
             <sl-button size="small" id="sub-paste"><sl-icon slot="prefix" name="clipboard-plus"></sl-icon> Paste codes</sl-button>
@@ -1077,6 +1080,42 @@ export async function renderSubmissions(assignment, router, container) {
       const text = toCSV(rows, cols);
       downloadCSV(`${(a.title || 'assignment').replace(/[^a-z0-9_-]+/gi, '_')}_not_submitted.csv`, text);
       toast.success(`Exported ${rows.length} not-submitted students.`);
+    });
+
+    container.querySelector('#sub-pull-relay')?.addEventListener('click', async () => {
+      const btn = container.querySelector('#sub-pull-relay');
+      if (btn) btn.loading = true;
+      try {
+        const { getTransport } = await import('../../core/transport.js');
+        const transport = await getTransport();
+        if (!transport || !transport.baseUrl || !transport.token) {
+          throw new Error('Not connected to a school server. Check Settings > Connect to a school server.');
+        }
+        const dropId = a.publish?.relay?.drop_id;
+        if (!dropId) throw new Error('No drop ID found on this assessment.');
+
+        const res = await transport.listDrop(dropId, { since: a.publish?.relay?.last_pulled_at });
+        const items = res?.items || [];
+        const texts = [];
+        for (const item of items) {
+          const raw = typeof item === 'string' ? item : (item.text || item.payload || '');
+          if (raw) texts.push({ text: raw, source: 'Server Dropbox' });
+        }
+        if (a.publish?.relay) {
+          a.publish.relay.last_pulled_at = new Date().toISOString();
+          await storage.table('assignments').put(a);
+        }
+        if (texts.length) {
+          await importTexts(texts);
+        } else {
+          toast.info('No new submissions found on the server.');
+        }
+      } catch (err) {
+        console.error(err);
+        toast.danger('Failed to pull from server: ' + (err.message || String(err)));
+      } finally {
+        if (btn) btn.loading = false;
+      }
     });
 
     container.querySelector('#sub-scan-qr')?.addEventListener('click', async () => {

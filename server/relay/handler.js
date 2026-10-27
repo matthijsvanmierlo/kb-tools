@@ -7,7 +7,7 @@ export { RateLimiter, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, DRAFT_RATE_LIMIT_MAX
 export const VERSION = '1.0.0';
 export const DEFAULT_PORT = 3000;
 export const MAX_PAYLOAD_SIZE = 512 * 1024; // 512 KB
-export const MAX_SUBMISSION_SIZE = 256 * 1024; // 256 KB
+export const MAX_SUBMISSION_SIZE = 5 * 1024 * 1024; // 5 MB
 export const MAX_DRAFT_SIZE = 64 * 1024; // 64 KB
 export const MAX_SYNC_CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
 export const MAX_SYNC_SNAPSHOT_SIZE = 32 * 1024 * 1024; // 32 MB
@@ -738,6 +738,39 @@ export function createRelayFetchHandler(options = {}) {
         const since = url.searchParams.get('since') || undefined;
         const items = await db.submissions.list(dropId, { since });
         return json(200, { items });
+      }
+
+      // 6b. GET /drops/:dropId/stats
+      const dropStatsMatch = pathname.match(/^\/drops\/([A-Za-z0-9_\-]+)\/stats$/);
+      if (request.method === 'GET' && dropStatsMatch) {
+        const teacher = await authenticateTeacher();
+        if (!teacher) {
+          return error(401, 'Unauthorized: valid teacher token required');
+        }
+
+        const dropId = dropStatsMatch[1];
+        const drop = await db.drops.get(dropId);
+        if (!drop) {
+          return error(404, 'Drop box not found');
+        }
+        if (drop.teacher_id !== teacher.id) {
+          return error(403, 'Forbidden: you do not own this drop box');
+        }
+
+        const mediaStats = (typeof db.dropMedia?.getStats === 'function')
+          ? db.dropMedia.getStats(dropId)
+          : { count: 0, totalSize: 0 };
+        const subList = (typeof db.submissions?.list === 'function')
+          ? await db.submissions.list(dropId)
+          : [];
+
+        return json(200, {
+          drop_id: dropId,
+          submissions_count: subList.length,
+          media_count: mediaStats.count || 0,
+          media_bytes: mediaStats.totalSize || 0,
+          expires_at: drop.expires_at || null
+        });
       }
 
       // 7. DELETE /drops/:dropId

@@ -8,6 +8,7 @@ import { checkTaskAccessCode, createTaskSubmission } from './pipeline.js';
 import { buildStudentTaskPayload } from './publish-core.js';
 import { RelayTransport } from '../../core/transport.js';
 import { StudentLedger } from '../student/ledger.js';
+import { StudentProfile } from '../../core/student-profile.js';
 import { downloadClickableHtmlFile } from '../../core/html-launcher.js';
 import { createCodeEditor } from '../../components/code-editor.js';
 import { RichTextEditor } from '../../components/rich-text-editor.js';
@@ -222,11 +223,12 @@ export async function renderTaskTake(params = {}, router = null, container = nul
     return draft;
   };
 
-  // Auto-fill student from student_profile if exists
+  // Auto-fill student from StudentProfile if exists
   try {
-    const profile = await storage.getMetadata('student_profile');
-    if (profile?.student_id && !state.student.id) state.student.id = profile.student_id;
-    if (profile?.name && !state.student.name) state.student.name = profile.name;
+    const profile = StudentProfile.resolveForPayload(payload, params);
+    if (profile.student_id && !state.student.id) state.student.id = profile.student_id;
+    if (profile.full_name && !state.student.name) state.student.name = profile.full_name;
+    if (profile.access_code && !state.student.code) state.student.code = profile.access_code;
   } catch (_) {}
 
   // ---------------------------------------------------------------------------
@@ -297,6 +299,34 @@ export async function renderTaskTake(params = {}, router = null, container = nul
     const errorBox = container.querySelector('#task-start-error');
     const errorText = container.querySelector('#task-start-error-text');
 
+    const tryUnlockWithCode = async (code) => {
+      if (!code || !payload.roster_cards) return;
+      try {
+        const unlocked = await SubmissionCrypto.unlockRosterCard(payload.task_id, payload.roster_cards, code);
+        if (unlocked) {
+          if (nameInput && (!nameInput.value || !state.student.name)) {
+            nameInput.value = unlocked.name || '';
+            state.student.name = unlocked.name || '';
+          }
+          if (idInput && (!idInput.value || !state.student.id)) {
+            idInput.value = unlocked.sid || '';
+            state.student.id = unlocked.sid || '';
+          }
+        }
+      } catch (_) {}
+    };
+
+    if (state.student.code && (!state.student.name || !state.student.id)) {
+      tryUnlockWithCode(state.student.code);
+    }
+
+    codeInput?.addEventListener('sl-input', (e) => {
+      const val = (e.target.value || '').trim();
+      if (val.length >= 6) {
+        tryUnlockWithCode(val);
+      }
+    });
+
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       errorBox.classList.add('hidden');
@@ -329,6 +359,17 @@ export async function renderTaskTake(params = {}, router = null, container = nul
       state.student.name = name;
       state.student.id = sid;
       state.student.code = code;
+
+      // Persist to StudentProfile keychain
+      StudentProfile.saveIdentity({
+        studentId: sid,
+        fullName: name,
+        accessCode: code,
+        courseId: payload.course_id,
+        courseName: payload.course_meta?.course_name,
+        section: payload.course_meta?.section,
+        teacherFingerprint: payload.teacher_key?.fingerprint
+      }).catch(() => {});
 
       // Check if previous draft exists
       const priorDraft = loadLocalDraft();
@@ -579,13 +620,39 @@ export async function renderTaskTake(params = {}, router = null, container = nul
           saveLocalDraft();
           toast.success(`Attached "${file.name}"`);
         } catch (err) {
+          // If <= 4MB, fall back to inline base64 attachment for offline / no-CDN relay hand-in
+          if (file.size <= 4 * 1024 * 1024) {
+            try {
+              const reader = new FileReader();
+              const b64Promise = new Promise((resolve, reject) => {
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = reject;
+                reader.readAsDataURL(file);
+              });
+              const inlineData = await b64Promise;
+              state.content.attachments.push({
+                id: generateUUID(),
+                name: file.name,
+                size: file.size,
+                mime: file.type || 'application/octet-stream',
+                ref: null,
+                inline_data_b64: inlineData
+              });
+              lastFailedFile = null;
+              renderAttachmentList();
+              updateSizeMeter();
+              saveLocalDraft();
+              toast.warning(`Server media upload not available; attached "${file.name}" inline.`);
+              return;
+            } catch (_) {}
+          }
           console.error(err);
           lastFailedFile = file;
           retryMsg.textContent = !navigator.onLine
             ? 'You are offline. Reconnect to internet and click Retry.'
             : `Upload failed: ${err.message || 'Network error'}`;
           retryWrap.classList.remove('hidden');
-          toast.error('File upload failed');
+          toast.error('File upload failed: ' + (err.message || ''));
         } finally {
           uploadBtn.loading = false;
           progressWrap.classList.add('hidden');
@@ -1020,14 +1087,17 @@ export async function renderTaskTake(params = {}, router = null, container = nul
           const submissionContent = await getPreparedContent(false);
           const { submission, envelopeText } = await createTaskSubmission(
             payload,
-            { id: state.student.id, name: state.student.name },
+            { id: state.student.id, name: state.student.name, code: state.student.code },
             submissionContent
           );
 
           const transport = new RelayTransport({ baseUrl: payload.relay.base_url });
-          const res = await transport.submitToDrop(payload.relay.drop_id, envelopeText, payload.relay.drop_secret);
-          if (!res.ok) {
-            throw new Error(`Server returned HTTP ${res.status}`);
+          const res = await transport.submitToDrop(payload.relay.drop_id, envelopeText, { dropSecret: payload.relay.drop_secret });
+          if (!res || !res.receiptId) {
+            throw new Error('Relay server did not return a valid receipt');
+          }
+          if (res.receiptId) {
+            submission.id = res.receiptId;
           }
 
           // Record in Student Ledger
@@ -1063,7 +1133,7 @@ export async function renderTaskTake(params = {}, router = null, container = nul
         const submissionContent = await getPreparedContent(true);
         const { submission, envelopeText } = await createTaskSubmission(
           payload,
-          { id: state.student.id, name: state.student.name },
+          { id: state.student.id, name: state.student.name, code: state.student.code },
           submissionContent
         );
 
@@ -1106,12 +1176,17 @@ export async function renderTaskTake(params = {}, router = null, container = nul
         const submissionContent = await getPreparedContent(true);
         const { submission, envelopeText } = await createTaskSubmission(
           payload,
-          { id: state.student.id, name: state.student.name },
+          { id: state.student.id, name: state.student.name, code: state.student.code },
           submissionContent
         );
 
         const filename = `${state.student.id || 'student'}_${(payload.title || 'Assignment').replace(/[^a-z0-9_-]/gi, '_')}.kbsub.html`;
-        downloadClickableHtmlFile(envelopeText, `${payload.title} - ${state.student.name}`, filename);
+        downloadClickableHtmlFile({
+          title: `${payload.title} - ${state.student.name}`,
+          payloadType: 'submission',
+          payload: envelopeText,
+          shareUrl: ''
+        }, filename);
 
         await StudentLedger.recordSubmission({
           assignmentId: payload.task_id,

@@ -305,6 +305,29 @@ async function bootstrapApp() {
     // 8. Execute initial route
     await router.handleRoute();
 
+    // 9. Sync unreviewed submissions badge in navigation
+    const syncInboxBadge = async () => {
+      try {
+        if (RoleMode.get() !== 'teacher') {
+          const { updateInboxBadge } = await import('./components/app-nav.js');
+          updateInboxBadge(0);
+          return;
+        }
+        const [subRows, taskRows] = await Promise.all([
+          storage.table('assignment_submissions').getAll().catch(() => []),
+          storage.table('task_submissions').getAll().catch(() => [])
+        ]);
+        const pendingSubs = subRows.filter(s => s.needs_review || (s.auto && !s.manual && s.has_manual_questions)).length;
+        const pendingTasks = taskRows.filter(t => !t.review || t.review.status === 'submitted' || t.review.status === 'revised').length;
+        const { updateInboxBadge } = await import('./components/app-nav.js');
+        updateInboxBadge(pendingSubs + pendingTasks);
+      } catch (_) {}
+    };
+    syncInboxBadge();
+    window.addEventListener('hashchange', () => setTimeout(syncInboxBadge, 300));
+    window.addEventListener('kb-role-mode-changed', syncInboxBadge);
+    window.addEventListener('kb-content-imported', syncInboxBadge);
+
   } catch (err) {
     console.error('Fatal initialization error:', err);
     if (typeof document !== 'undefined') {
@@ -380,7 +403,8 @@ function bindStorageControls() {
     const tables = [
       'gradebook_courses', 'gradebook_students', 'gradebook_assignments',
       'gradebook_grades', 'gradebook_rubrics', 'assignments',
-      'assignment_submissions', 'tasks', 'task_submissions', 'flashcards', 'timelines', 'video_assessments'
+      'assignment_submissions', 'tasks', 'task_submissions', 'flashcards', 'timelines', 'video_assessments',
+      'course_units', 'course_items', 'student_courses', 'student_ledger', 'calendar_events', 'lesson_plans'
     ];
     const tableCounts = {};
     for (const t of tables) {
@@ -443,7 +467,9 @@ const RESTORE_LABELS = {
   flashcards: 'Flashcard decks', timelines: 'Timelines', video_assessments: 'Video lessons',
   gradebook_courses: 'Classes', gradebook_students: 'Students', gradebook_assignments: 'Gradebook assignments',
   gradebook_grades: 'Grades', gradebook_rubrics: 'Rubrics', assignments: 'Assessments',
-  assignment_submissions: 'Assessment submissions', tasks: 'Assignments', task_submissions: 'Assignment submissions',
+  assignment_submissions: 'Assessment submissions', tasks: 'Assignments / Tasks', task_submissions: 'Task submissions',
+  course_units: 'Course units', course_items: 'Course items', student_courses: 'Enrolled student courses',
+  student_ledger: 'Student grades ledger', calendar_events: 'Calendar events', lesson_plans: 'Lesson plans',
   media: 'Images & audio clips'
 };
 

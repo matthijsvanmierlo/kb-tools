@@ -115,6 +115,13 @@ export class StudentProfile {
   }
 
   /**
+   * Convenience helper to attach an access code to a specific enrolled course.
+   */
+  static async saveClassAccessCode(courseId, accessCode) {
+    return this.saveIdentity({ courseId, accessCode });
+  }
+
+  /**
    * Given an incoming assignment or video payload + share params, resolve the best matching
    * student name, student ID, and access code.
    *

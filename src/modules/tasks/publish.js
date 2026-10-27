@@ -8,6 +8,7 @@ import { getTransport, isCdnUploadConfigured } from '../../core/transport.js';
 import { replication } from '../../core/replication/manager.js';
 import { downloadClickableHtmlFile } from '../../core/html-launcher.js';
 import { HandinInstructions } from '../../components/handin-instructions.js';
+import { LinkBuilder } from '../../core/links.js';
 
 const randomSalt = () => Array.from(crypto.getRandomValues(new Uint8Array(12))).map(b => b.toString(16).padStart(2, '0')).join('');
 
@@ -269,26 +270,22 @@ export async function openTaskPublishDialog(task, { onPublished } = {}) {
       const published = await publishTask(task, roster, { handinEmail: email, transport });
       currentPublished = published;
 
-      const engine = new CryptoShareEngine();
-      let shareUrl = '';
+      const share = await CryptoShareEngine.createSharePayload('task', published.payload);
+      let shareUrl = share.url;
 
-      if (hasShortLinks) {
+      if (hasShortLinks && transport?.capabilities?.hostPayload) {
         try {
-          const res = await engine.createHostedShareLink({
-            type: 'task',
-            payload: published.payload
-          }, transport);
-          shareUrl = res.url;
+          const wrapped = await CryptoShareEngine.wrapForHosting(share.rawFileContent);
+          const pub = await transport.publishPayload({
+            kind: 'task',
+            ciphertext: wrapped.ciphertext,
+            expiresAt: new Date(Date.now() + 180 * 86400000).toISOString(),
+            meta: { title: task.title }
+          });
+          shareUrl = LinkBuilder.hosted(pub.ref, wrapped.key);
         } catch (e) {
           console.warn('Hosted link failed, falling back to full hash fragment:', e);
         }
-      }
-
-      if (!shareUrl) {
-        shareUrl = await engine.createShareLink({
-          type: 'task',
-          payload: published.payload
-        });
       }
 
       currentShareUrl = shareUrl;
@@ -299,17 +296,16 @@ export async function openTaskPublishDialog(task, { onPublished } = {}) {
 
       // Hand-in sheet component
       const handinContainer = dialog.querySelector('#task-pub-handin-container');
-      handinContainer.innerHTML = '';
-      const instructions = new HandinInstructions({
-        url: shareUrl,
-        title: task.title,
-        dueDate: task.settings?.due_date,
-        dueTime: task.settings?.due_time,
-        dropSecret: published.task.publish?.relay?.drop_secret,
-        dropId: published.task.publish?.relay?.drop_id,
-        relayUrl: published.task.publish?.relay?.base_url
-      });
-      handinContainer.appendChild(instructions.render());
+      if (handinContainer) {
+        handinContainer.innerHTML = '';
+        handinContainer.appendChild(HandinInstructions.render({
+          assignment: published.task,
+          link: shareUrl,
+          dueDate: task.settings?.due_date,
+          dueTime: task.settings?.due_time,
+          teacherEmail: email
+        }));
+      }
 
       toast.success('Assignment published!');
       if (typeof onPublished === 'function') {
@@ -337,12 +333,8 @@ export async function openTaskPublishDialog(task, { onPublished } = {}) {
 
   dlShareBtn.addEventListener('click', async () => {
     if (!currentPublished) return;
-    const engine = new CryptoShareEngine();
-    const envelope = await engine.buildExportEnvelope({
-      type: 'task',
-      payload: currentPublished.payload
-    });
-    const blob = new Blob([JSON.stringify(envelope, null, 2)], { type: 'application/json' });
+    const share = await CryptoShareEngine.createSharePayload('task', currentPublished.payload);
+    const blob = new Blob([share.rawFileContent], { type: 'application/json' });
     const filename = `${(task.title || 'Assignment').replace(/[^a-z0-9_-]/gi, '_')}.kbshare`;
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -352,8 +344,13 @@ export async function openTaskPublishDialog(task, { onPublished } = {}) {
   });
 
   dlHtmlBtn.addEventListener('click', async () => {
-    if (!currentShareUrl) return;
+    if (!currentPublished || !currentShareUrl) return;
     const filename = `${(task.title || 'Assignment').replace(/[^a-z0-9_-]/gi, '_')}.html`;
-    downloadClickableHtmlFile(currentShareUrl, task.title || 'Assignment', filename);
+    downloadClickableHtmlFile({
+      title: task.title || 'Assignment',
+      payloadType: 'task',
+      payload: currentPublished.payload,
+      shareUrl: currentShareUrl
+    }, filename);
   });
 }

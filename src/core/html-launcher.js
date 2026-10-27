@@ -290,6 +290,12 @@ ${serialized}
 
           if (payloadType === 'assignment') {
             targetUrl = targetUrl.replace(/#.*$/, '') + '#/assessments/take';
+          } else if (payloadType === 'task') {
+            targetUrl = targetUrl.replace(/#.*$/, '') + '#/assignments/work';
+          } else if (payloadType === 'task_feedback') {
+            targetUrl = targetUrl.replace(/#.*$/, '') + '#/feedback';
+          } else if (payloadType === 'course_feed') {
+            targetUrl = targetUrl.replace(/#.*$/, '') + '#/student/courses';
           } else if (payloadType === 'feedback') {
             targetUrl = targetUrl.replace(/#.*$/, '') + '#/student/gradebook';
           } else if (payloadType === 'submission') {

@@ -79,8 +79,8 @@ export async function computeCourseRevisionHash(courseId) {
 
     const descriptor = {
       course: course ? { id: course.id, name: course.name, updated_at: course.updated_at } : null,
-      units: units.map(u => ({ id: u.id, title: u.title, order: u.order, updated_at: u.updated_at })),
-      items: items.map(i => ({ id: i.id, title: i.title, order: i.order, content_hash: i.content_hash, updated_at: i.updated_at }))
+      units: units.map(u => ({ id: u.id, title: u.title, color: u.color || null, description: u.description || null, order: u.order, updated_at: u.updated_at })),
+      items: items.map(i => ({ id: i.id, unit_id: i.unit_id || null, kind: i.kind || i.type || null, title: i.title, order: i.order, content_hash: i.content_hash, updated_at: i.updated_at }))
     };
 
     return await contentHash(descriptor);

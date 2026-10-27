@@ -96,17 +96,21 @@ export async function renderStudentCourseDetailView(params, router, container) {
         ` : (units.length > 0 ? units : [{ id: null, title: 'Course Lessons' }]).map((u, uIdx) => {
           const unitItems = u.id ? items.filter(it => it.unit_id === u.id) : items;
           if (unitItems.length === 0 && !u.id) return '';
+          const uColor = u.color ? Sanitizer.safeColor(u.color) : null;
 
           return `
-            <section class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            <section class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden ${uColor ? 'border-l-4' : ''}" style="${uColor ? `border-left-color: ${uColor};` : ''}">
               <div class="bg-slate-50/80 border-b border-slate-200 px-5 py-3 flex items-center justify-between">
-                <div class="flex items-center gap-2.5">
-                  <span class="w-6 h-6 rounded-full bg-slate-200 text-slate-700 font-semibold text-xs flex items-center justify-center">
+                <div class="flex items-center gap-2.5 min-w-0">
+                  <span class="w-6 h-6 rounded-full font-semibold text-xs flex items-center justify-center flex-shrink-0" style="${uColor ? `background-color: ${uColor}20; color: ${uColor};` : 'background-color: #e2e8f0; color: #334155;'}">
                     ${uIdx + 1}
                   </span>
-                  <h3 class="text-sm font-bold text-slate-900">${esc(u.title || 'Course Outline')}</h3>
+                  <div class="min-w-0">
+                    <h3 class="text-sm font-bold text-slate-900 truncate">${esc(u.title || 'Course Outline')}</h3>
+                    ${u.description ? `<p class="text-xs text-slate-500 truncate">${esc(u.description)}</p>` : ''}
+                  </div>
                 </div>
-                <span class="text-xs text-slate-500">${unitItems.length} item${unitItems.length === 1 ? '' : 's'}</span>
+                <span class="text-xs text-slate-500 flex-shrink-0">${unitItems.length} item${unitItems.length === 1 ? '' : 's'}</span>
               </div>
 
               <div class="divide-y divide-slate-100 p-2">

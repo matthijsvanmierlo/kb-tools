@@ -445,6 +445,15 @@ export async function renderTakeView(params, router, container) {
       } else {
         state.screen = 'question';
       }
+      if (!isPractice && state.student.id && state.student.id !== 'self_study') {
+        StudentProfile.saveIdentity({
+          studentId: state.student.id,
+          fullName: state.student.name,
+          accessCode: state.student.code,
+          courseId: payload.class_id,
+          teacherFingerprint: payload.teacher_key?.fingerprint
+        }).catch(() => {});
+      }
       render();
     }
 
