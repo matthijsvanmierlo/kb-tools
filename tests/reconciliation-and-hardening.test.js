@@ -304,3 +304,62 @@ describe('Pillar 3: Class Linking & Roster Staleness Guarantees', () => {
     expect(hashRotated).not.toBe(hash1);
   });
 });
+
+describe('Pillar 4: Module Graph & Service Worker Precache Coherence', () => {
+  it('keeps sw-assets.js strictly in sync with the repository source files', async () => {
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+    const { buildSwAssets } = await import('../scripts/sw-manifest.mjs');
+
+    const expected = buildSwAssets();
+    const actual = fs.readFileSync(path.join(process.cwd(), 'sw-assets.js'), 'utf8');
+    expect(actual).toBe(expected);
+  });
+
+  it('verifies all static and relative imports across src resolve with zero missing exports', async () => {
+    const { execFileSync } = await import('node:child_process');
+    const fs = await import('node:fs');
+    const path = await import('node:path');
+
+    function walkJs(dir) {
+      let out = [];
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) out.push(...walkJs(full));
+        else if (e.name.endsWith('.js')) out.push(full);
+      }
+      return out;
+    }
+
+    const allSrc = walkJs(path.join(process.cwd(), 'src'));
+    expect(allSrc.length).toBeGreaterThanOrEqual(150);
+
+    const os = await import('node:os');
+    const tmpOut = fs.mkdtempSync(path.join(os.tmpdir(), 'kb-esbuild-'));
+
+    const esbuildBin = path.join(process.cwd(), 'node_modules/esbuild/bin/esbuild');
+    try {
+      const stdout = execFileSync(esbuildBin, [
+        ...allSrc,
+        '--bundle',
+        `--outdir=${tmpOut}`,
+        '--packages=external',
+        '--format=esm',
+        '--log-level=warning'
+      ], { encoding: 'utf8' });
+
+      expect(stdout.trim()).toBe('');
+    } finally {
+      fs.rmSync(tmpOut, { recursive: true, force: true });
+    }
+  });
+
+  it('guarantees buildStudentPayload is exported for backwards and forwards compatibility', async () => {
+    const gradingMod = await import('../src/modules/assignments/grading.js');
+    const publishMod = await import('../src/modules/assignments/publish.js');
+
+    expect(typeof gradingMod.buildStudentPayload).toBe('function');
+    expect(typeof publishMod.buildStudentPayload).toBe('function');
+    expect(publishMod.buildStudentPayload).toBe(gradingMod.buildStudentPayload);
+  });
+});

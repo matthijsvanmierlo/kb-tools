@@ -299,8 +299,32 @@ export function registerServiceWorker() {
     window.location.reload();
   });
 
+  const isLocalHost = typeof window !== 'undefined' &&
+    ['localhost', '127.0.0.1', '::1', ''].includes(window.location.hostname);
+
+  const applyUpdate = (worker) => {
+    try {
+      worker.postMessage('SKIP_WAITING');
+    } catch (err) {
+      console.warn('SKIP_WAITING postMessage error:', err);
+    }
+    setTimeout(() => {
+      if (!reloading) {
+        reloading = true;
+        window.location.reload();
+      }
+    }, 400);
+  };
+
   const offerUpdate = (worker) => {
     if (!worker || !navigator.serviceWorker.controller) return; // first install: nothing to update
+
+    // On local dev environments, automatically activate waiting workers to prevent stale cache traps
+    if (isLocalHost) {
+      applyUpdate(worker);
+      return;
+    }
+
     const alert = Object.assign(document.createElement('sl-alert'), {
       variant: 'primary',
       closable: true,
@@ -315,23 +339,13 @@ export function registerServiceWorker() {
     reloadBtn?.addEventListener('click', () => {
       reloadBtn.loading = true;
       reloadBtn.disabled = true;
-      try {
-        worker.postMessage('SKIP_WAITING');
-      } catch (err) {
-        console.warn('SKIP_WAITING postMessage error:', err);
-      }
-      setTimeout(() => {
-        if (!reloading) {
-          reloading = true;
-          window.location.reload();
-        }
-      }, 600);
+      applyUpdate(worker);
     });
     document.body.append(alert);
     alert.toast?.();
   };
 
-  navigator.serviceWorker.register('./sw.js').then((reg) => {
+  navigator.serviceWorker.register('./sw.js', { updateViaCache: 'none' }).then((reg) => {
     if (reg.waiting) offerUpdate(reg.waiting);
     reg.addEventListener('updatefound', () => {
       const worker = reg.installing;
@@ -339,6 +353,8 @@ export function registerServiceWorker() {
         if (worker.state === 'installed') offerUpdate(worker);
       });
     });
+    // Check for service worker updates immediately on startup
+    reg.update().catch(() => {});
   }).catch(err => {
     console.debug('ServiceWorker registration skipped/failed:', err);
   });

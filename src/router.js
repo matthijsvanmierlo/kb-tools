@@ -256,14 +256,62 @@ export class Router {
         }
       } catch (err) {
         console.error(`Route error in ${path}:`, err);
+
+        // Self-healing recovery if stale Service Worker cache served outdated ES modules
+        const isModuleLoadError = err instanceof SyntaxError ||
+          /does not provide an export|Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed/i.test(err?.message || '');
+
+        const recoveryKey = `kb_recovery_${path}`;
+        if (isModuleLoadError && typeof sessionStorage !== 'undefined' && !sessionStorage.getItem(recoveryKey)) {
+          sessionStorage.setItem(recoveryKey, '1');
+          try {
+            if ('serviceWorker' in navigator) {
+              const reg = await navigator.serviceWorker.getRegistration();
+              if (reg?.waiting) {
+                reg.waiting.postMessage('SKIP_WAITING');
+              }
+              await reg?.update().catch(() => {});
+            }
+            if ('caches' in window) {
+              const keys = await caches.keys();
+              await Promise.all(
+                keys.filter((k) => k.startsWith('kennisboost-') && k !== 'kennisboost-share-inbox').map((k) => caches.delete(k))
+              );
+            }
+          } catch (_) {}
+          window.location.reload();
+          return;
+        }
+
         container.innerHTML = `
           <div class="p-8 max-w-xl mx-auto text-center space-y-4 bg-white rounded-2xl border border-slate-200 shadow-sm mt-8">
             <sl-icon name="exclamation-octagon" class="text-4xl text-red-500"></sl-icon>
             <h2 class="text-xl font-bold text-slate-800">Error Loading View</h2>
             <p class="text-sm text-slate-600">${Sanitizer.escapeHTML(err.message)}</p>
-            <sl-button variant="primary" href="#/">Return Home</sl-button>
+            <div class="flex items-center justify-center gap-3">
+              <sl-button variant="primary" href="#/">Return Home</sl-button>
+              <sl-button id="kb-cache-recover-btn" variant="default">
+                <sl-icon slot="prefix" name="arrow-clockwise"></sl-icon> Clear Cache & Reload
+              </sl-button>
+            </div>
           </div>
         `;
+        container.querySelector('#kb-cache-recover-btn')?.addEventListener('click', async () => {
+          try {
+            if ('serviceWorker' in navigator) {
+              const reg = await navigator.serviceWorker.getRegistration();
+              if (reg?.waiting) reg.waiting.postMessage('SKIP_WAITING');
+              await reg?.update().catch(() => {});
+            }
+            if ('caches' in window) {
+              const keys = await caches.keys();
+              await Promise.all(
+                keys.filter((k) => k.startsWith('kennisboost-') && k !== 'kennisboost-share-inbox').map((k) => caches.delete(k))
+              );
+            }
+          } catch (_) {}
+          window.location.reload();
+        });
       }
     }
 
