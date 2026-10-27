@@ -125,8 +125,15 @@ export async function updateDataSafetyChip() {
   if (!chip) return null;
   const state = computeDataSafety(await gatherDataSafety());
   const l = LEVELS[state.level];
-  chip.className = `inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full border ${l.cls}`;
-  chip.innerHTML = `<sl-icon name="${l.icon}"></sl-icon><span class="hidden sm:inline">${esc(l.label)}</span>`;
+  const parentPill = chip.closest('.kb-data-sync-pill');
+  if (parentPill) {
+    parentPill.dataset.safetyLevel = state.level;
+    chip.className = 'inline-flex items-center gap-1.5 text-xs font-medium';
+  } else {
+    chip.className = `inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full border ${l.cls}`;
+  }
+  const iconColor = state.level === 'ok' ? 'text-emerald-600' : state.level === 'attention' ? 'text-amber-500' : 'text-rose-600';
+  chip.innerHTML = `<sl-icon name="${l.icon}" class="${iconColor}"></sl-icon><span class="hidden sm:inline">${esc(l.label)}</span>`;
   chip.title = l.label;
   chip.setAttribute('aria-label', `${l.label}. Open data safety details.`);
   return state;

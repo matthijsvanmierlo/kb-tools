@@ -361,6 +361,10 @@ function bindStorageControls() {
     const { openDataSafetyDialog } = await import('./components/data-safety.js');
     openDataSafetyDialog();
   });
+  document.getElementById('menu-btn-import-content')?.addEventListener('click', async () => {
+    const { UniversalImportDialog } = await import('./components/universal-import-dialog.js');
+    UniversalImportDialog.open();
+  });
 
   btnExportBackup?.addEventListener('click', async () => {
     await sync.exportManualBackup();
@@ -765,7 +769,6 @@ export async function updateRelayStatusIndicator() {
 
 function bindHelpControls() {
   const helpMenu = document.getElementById('kb-help-menu');
-  const workspaceMenu = document.getElementById('kb-workspace-menu-list');
   const installPwaItem = document.getElementById('kb-menu-install-pwa');
 
   const updatePwaInstallVisibility = (canInstall) => {
@@ -801,19 +804,10 @@ function bindHelpControls() {
       await removeDemoData();
       toast.info('Sample data removed.');
       router.handleRoute();
-    } else if (val === 'import-content') {
-      const { UniversalImportDialog } = await import('./components/universal-import-dialog.js');
-      UniversalImportDialog.open();
     }
   };
 
   helpMenu?.addEventListener('sl-select', (e) => handleHelpSelection(e.detail.item.value));
-  workspaceMenu?.addEventListener('sl-select', (e) => {
-    const val = e.detail.item.value;
-    if (val && !val.startsWith('theme-')) {
-      handleHelpSelection(val);
-    }
-  });
 }
 
 const THEME_ICONS = { light: 'sun', dark: 'moon-stars', system: 'circle-half', projector: 'projector' };
@@ -834,9 +828,8 @@ function initThemeSwitcher() {
     if (current === 'projector') html.classList.add('kb-theme-projector');
 
     if (themeIcon) themeIcon.name = THEME_ICONS[current];
-    document.querySelectorAll('#kb-theme-menu sl-menu-item, #kb-workspace-menu-list sl-menu-item[value^="theme-"]').forEach(item => {
-      const itemTheme = item.value.replace(/^theme-/, '');
-      item.checked = itemTheme === current;
+    themeMenu?.querySelectorAll('sl-menu-item').forEach(item => {
+      item.checked = item.value === current;
     });
     window.dispatchEvent(new CustomEvent('kb-theme-changed', { detail: { theme: current, isDark } }));
 
@@ -864,12 +857,6 @@ function initThemeSwitcher() {
   };
 
   themeMenu?.addEventListener('sl-select', (e) => onThemeSelect(e.detail.item.value));
-  document.getElementById('kb-workspace-menu-list')?.addEventListener('sl-select', (e) => {
-    const val = e.detail.item.value;
-    if (val && val.startsWith('theme-')) {
-      onThemeSelect(val);
-    }
-  });
 }
 
 // Bootstrap when DOM is ready
