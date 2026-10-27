@@ -71,103 +71,35 @@
       <!-- Primary Navigation (rendered dynamically by app-nav.js) -->
       <nav class="kb-nav" id="kb-app-nav" aria-label="Main navigation"></nav>
 
-      <!-- Global Class Selector & Action Dock -->
+      <!-- Global Action Dock (Calm 3-Zone Consolidation) -->
       <div class="kb-header-actions">
-        <!-- Role Toggle (Teacher ⇄ Student) -->
-        <button type="button" id="btn-toggle-role-mode" class="kb-role-toggle-btn" aria-label="Switch between Teacher and Student view" title="Switch role view">
-          <sl-icon name="arrow-repeat"></sl-icon>
-          <span id="label-active-role">Teacher</span>
-        </button>
-
-        <div id="kb-nav-class-selector" class="hidden lg:block"></div>
-
+        <!-- 1. Search & Command Palette Trigger -->
         <button type="button" id="btn-open-cmd-palette" class="kb-search-trigger hidden sm:inline-flex" title="Search and commands (Ctrl+K)" aria-label="Open command palette">
           <sl-icon name="search" aria-hidden="true"></sl-icon>
           <span class="hidden xl:inline">Search</span>
           <kbd class="kb-kbd">Ctrl K</kbd>
         </button>
-        <button type="button" id="btn-open-cmd-palette-mobile" class="kb-icon-btn sm:hidden" aria-label="Open command palette">
+        <button type="button" id="btn-open-cmd-palette-mobile" class="kb-icon-btn sm:hidden" aria-label="Open command palette" title="Search">
           <sl-icon name="search"></sl-icon>
         </button>
 
-        <!-- Import Content Action -->
-        <button type="button" id="btn-header-import-content" class="kb-search-trigger hidden sm:inline-flex items-center gap-1.5" title="Import content (.kbshare, CSV, JSON)" aria-label="Import content">
-          <sl-icon name="cloud-download" class="text-blue-600" aria-hidden="true"></sl-icon>
-          <span>Import</span>
-        </button>
-        <button type="button" id="btn-header-import-content-mobile" class="kb-icon-btn sm:hidden" aria-label="Import content" title="Import content">
-          <sl-icon name="cloud-download"></sl-icon>
-        </button>
-
-        <!-- Help Dropdown -->
-        <sl-dropdown placement="bottom-end" distance="6" class="kb-guide-link">
-          <button slot="trigger" type="button" class="kb-icon-btn" aria-label="Help and resources" title="Help">
-            <sl-icon name="question-circle"></sl-icon>
-          </button>
-          <sl-menu id="kb-help-menu">
-            <sl-menu-label>Help &amp; Resources</sl-menu-label>
-            <sl-menu-item value="guide">
-              <sl-icon slot="prefix" name="book"></sl-icon>
-              Teacher guide
-            </sl-menu-item>
-            <sl-menu-item value="about">
-              <sl-icon slot="prefix" name="info-circle"></sl-icon>
-              About KennisBoost
-            </sl-menu-item>
-            <sl-menu-item value="philosophy">
-              <sl-icon slot="prefix" name="shield-check"></sl-icon>
-              Local-first philosophy
-            </sl-menu-item>
-            <sl-menu-item value="install-pwa" id="kb-menu-install-pwa" class="hidden">
-              <sl-icon slot="prefix" name="download"></sl-icon>
-              Install Desktop App (Enable File Double-Click)
-            </sl-menu-item>
-            <sl-menu-item value="shortcuts">
-              <sl-icon slot="prefix" name="keyboard"></sl-icon>
-              Keyboard shortcuts
-              <span slot="suffix" class="kb-kbd">?</span>
-            </sl-menu-item>
-            <sl-divider></sl-divider>
-            <sl-menu-item value="load-sample">
-              <sl-icon slot="prefix" name="box-arrow-in-down"></sl-icon>
-              Load sample workspace
-            </sl-menu-item>
-            <sl-menu-item value="remove-sample">
-              <sl-icon slot="prefix" name="trash"></sl-icon>
-              Remove sample data
-            </sl-menu-item>
-          </sl-menu>
-        </sl-dropdown>
-
-        <!-- Theme Switcher -->
-        <sl-dropdown placement="bottom-end" distance="6">
-          <button slot="trigger" type="button" class="kb-icon-btn" aria-label="Change theme" title="Theme">
-            <sl-icon id="icon-active-theme" name="circle-half"></sl-icon>
-          </button>
-          <sl-menu id="kb-theme-menu">
-            <sl-menu-item type="checkbox" value="light">
-              <sl-icon slot="prefix" name="sun"></sl-icon> Light
-            </sl-menu-item>
-            <sl-menu-item type="checkbox" value="dark">
-              <sl-icon slot="prefix" name="moon-stars"></sl-icon> Dark
-            </sl-menu-item>
-            <sl-menu-item type="checkbox" value="system">
-              <sl-icon slot="prefix" name="circle-half"></sl-icon> Match system
-            </sl-menu-item>
-            <sl-divider></sl-divider>
-            <sl-menu-item type="checkbox" value="projector">
-              <sl-icon slot="prefix" name="projector"></sl-icon> High-contrast projector
-            </sl-menu-item>
-          </sl-menu>
-        </sl-dropdown>
-
-        <!-- Storage / Backup Menu -->
+        <!-- 2. Unified Data Safety, Backup & Sync Menu -->
         <sl-dropdown class="kb-storage-menu" placement="bottom-end" distance="6">
-          <button slot="trigger" type="button" class="kb-icon-btn" aria-label="Backup and storage options" title="Backup &amp; storage">
-            <sl-icon name="hdd-stack"></sl-icon>
+          <button slot="trigger" type="button" class="kb-data-sync-pill" aria-label="Backup and storage options" title="Backup &amp; storage">
+            <span id="kb-data-safety-chip" class="inline-flex items-center gap-1.5" aria-label="Data safety">
+              <sl-icon name="shield"></sl-icon>
+              <span class="hidden md:inline text-xs font-medium">Data safe</span>
+            </span>
+            <span id="sync-status-indicator" class="inline-flex items-center text-xs"></span>
+            <sl-icon name="chevron-down" class="text-[10px] text-slate-400"></sl-icon>
           </button>
-          <sl-menu>
-            <sl-menu-label>Backup &amp; storage</sl-menu-label>
+          <sl-menu id="kb-storage-menu-list">
+            <sl-menu-label>Data Safety &amp; Backup</sl-menu-label>
+            <sl-menu-item value="open-data-safety" id="menu-btn-open-data-safety">
+              <sl-icon slot="prefix" name="shield-check" class="text-emerald-600"></sl-icon>
+              Data safety checkup&hellip;
+            </sl-menu-item>
+            <sl-divider></sl-divider>
             <sl-menu-item id="menu-btn-configure-sync">
               <sl-icon slot="prefix" name="arrow-repeat"></sl-icon>
               Backup location&hellip;
@@ -210,43 +142,81 @@
           </sl-menu>
         </sl-dropdown>
 
-        <!-- Data safety summary (components/data-safety.js) -->
-        <button type="button" id="kb-data-safety-chip" class="inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full border border-slate-200 text-slate-500" aria-label="Data safety">
-          <sl-icon name="shield"></sl-icon>
-        </button>
-
-        <!-- Sync / Relay status indicator -->
-        <span id="sync-status-indicator" class="inline-flex items-center text-xs text-slate-500"></span>
-
-        <!-- More options dropdown (<1024px) -->
-        <sl-dropdown placement="bottom-end" distance="6" id="kb-header-more">
-          <button slot="trigger" type="button" class="kb-icon-btn" aria-label="More options" title="More options">
-            <sl-icon name="three-dots-vertical"></sl-icon>
+        <!-- 3. Role Mode Switcher & Workspace Preferences -->
+        <div class="flex items-center gap-1.5">
+          <!-- 1-Click Role Toggle Pill -->
+          <button type="button" id="btn-toggle-role-mode" class="kb-role-toggle-btn" aria-label="Switch between Teacher and Student view" title="Switch role view">
+            <sl-icon name="arrow-repeat"></sl-icon>
+            <span id="label-active-role">Teacher</span>
           </button>
-          <sl-menu id="kb-header-more-menu">
-            <sl-menu-item value="import">
-              <sl-icon slot="prefix" name="cloud-download"></sl-icon>
-              Import content&hellip;
-            </sl-menu-item>
-            <sl-menu-item value="backup">
-              <sl-icon slot="prefix" name="hdd-stack"></sl-icon>
-              Backup &amp; storage&hellip;
-            </sl-menu-item>
-            <sl-menu-item value="safety">
-              <sl-icon slot="prefix" name="shield"></sl-icon>
-              Data safety status
-            </sl-menu-item>
-            <sl-menu-item value="theme">
-              <sl-icon slot="prefix" name="circle-half"></sl-icon>
-              Change theme
-            </sl-menu-item>
-            <sl-menu-item value="help">
-              <sl-icon slot="prefix" name="question-circle"></sl-icon>
-              Help &amp; resources
-            </sl-menu-item>
-          </sl-menu>
-        </sl-dropdown>
 
+          <!-- Workspace Preferences (Theme, Guides, Resources) -->
+          <sl-dropdown placement="bottom-end" distance="6" class="kb-workspace-dropdown">
+            <button slot="trigger" type="button" class="kb-icon-btn is-outlined" aria-label="Workspace preferences and help" title="Preferences &amp; Help">
+              <sl-icon id="icon-active-theme" name="circle-half"></sl-icon>
+            </button>
+            <sl-menu id="kb-workspace-menu-list">
+              <sl-menu-label>Appearance</sl-menu-label>
+              <sl-menu-item type="checkbox" value="theme-light">
+                <sl-icon slot="prefix" name="sun"></sl-icon> Light theme
+              </sl-menu-item>
+              <sl-menu-item type="checkbox" value="theme-dark">
+                <sl-icon slot="prefix" name="moon-stars"></sl-icon> Dark theme
+              </sl-menu-item>
+              <sl-menu-item type="checkbox" value="theme-system">
+                <sl-icon slot="prefix" name="circle-half"></sl-icon> Match system
+              </sl-menu-item>
+              <sl-menu-item type="checkbox" value="theme-projector">
+                <sl-icon slot="prefix" name="projector"></sl-icon> High-contrast projector
+              </sl-menu-item>
+              <sl-divider></sl-divider>
+              <sl-menu-label>Tools &amp; Content</sl-menu-label>
+              <sl-menu-item value="import-content">
+                <sl-icon slot="prefix" name="cloud-download" class="text-blue-600"></sl-icon>
+                Import content (.kbshare, CSV)&hellip;
+              </sl-menu-item>
+              <sl-menu-item value="load-sample">
+                <sl-icon slot="prefix" name="box-arrow-in-down"></sl-icon>
+                Load sample workspace
+              </sl-menu-item>
+              <sl-menu-item value="remove-sample">
+                <sl-icon slot="prefix" name="trash"></sl-icon>
+                Remove sample data
+              </sl-menu-item>
+              <sl-divider></sl-divider>
+              <sl-menu-label>Help &amp; Resources</sl-menu-label>
+              <sl-menu-item value="guide">
+                <sl-icon slot="prefix" name="book"></sl-icon>
+                Teacher guide
+              </sl-menu-item>
+              <sl-menu-item value="about">
+                <sl-icon slot="prefix" name="info-circle"></sl-icon>
+                About KennisBoost
+              </sl-menu-item>
+              <sl-menu-item value="philosophy">
+                <sl-icon slot="prefix" name="shield-check"></sl-icon>
+                Local-first philosophy
+              </sl-menu-item>
+              <sl-menu-item value="install-pwa" id="kb-menu-install-pwa" class="hidden">
+                <sl-icon slot="prefix" name="download"></sl-icon>
+                Install Desktop App
+              </sl-menu-item>
+              <sl-menu-item value="shortcuts">
+                <sl-icon slot="prefix" name="keyboard"></sl-icon>
+                Keyboard shortcuts
+                <span slot="suffix" class="kb-kbd">?</span>
+              </sl-menu-item>
+            </sl-menu>
+          </sl-dropdown>
+        </div>
+
+        <!-- Hidden utility hooks for programmatic triggers & compatibility -->
+        <button type="button" id="btn-header-import-content" class="hidden" aria-hidden="true"></button>
+        <button type="button" id="btn-header-import-content-mobile" class="hidden" aria-hidden="true"></button>
+        <div id="kb-nav-class-selector" class="hidden" aria-hidden="true"></div>
+        <sl-menu id="kb-theme-menu" class="hidden" aria-hidden="true"></sl-menu>
+        <sl-menu id="kb-help-menu" class="hidden" aria-hidden="true"></sl-menu>
+        <sl-dropdown id="kb-header-more" class="hidden" aria-hidden="true"><button slot="trigger" type="button"></button><sl-menu id="kb-header-more-menu"></sl-menu></sl-dropdown>
         <input type="file" id="input-backup-file" accept=".json" class="hidden" aria-hidden="true" />
       </div>
     </div>

@@ -357,6 +357,10 @@ function bindStorageControls() {
 
   btnConfigureSync?.addEventListener('click', () => openBackupLocation('setup'));
   document.getElementById('menu-btn-restore-location')?.addEventListener('click', () => openBackupLocation('restore'));
+  document.getElementById('menu-btn-open-data-safety')?.addEventListener('click', async () => {
+    const { openDataSafetyDialog } = await import('./components/data-safety.js');
+    openDataSafetyDialog();
+  });
 
   btnExportBackup?.addEventListener('click', async () => {
     await sync.exportManualBackup();
@@ -761,6 +765,7 @@ export async function updateRelayStatusIndicator() {
 
 function bindHelpControls() {
   const helpMenu = document.getElementById('kb-help-menu');
+  const workspaceMenu = document.getElementById('kb-workspace-menu-list');
   const installPwaItem = document.getElementById('kb-menu-install-pwa');
 
   const updatePwaInstallVisibility = (canInstall) => {
@@ -775,8 +780,7 @@ function bindHelpControls() {
     updatePwaInstallVisibility(Boolean(e.detail));
   });
 
-  helpMenu?.addEventListener('sl-select', async (e) => {
-    const val = e.detail.item.value;
+  const handleHelpSelection = async (val) => {
     if (val === 'guide') {
       router.navigate('#/guide');
     } else if (val === 'about') {
@@ -797,6 +801,17 @@ function bindHelpControls() {
       await removeDemoData();
       toast.info('Sample data removed.');
       router.handleRoute();
+    } else if (val === 'import-content') {
+      const { UniversalImportDialog } = await import('./components/universal-import-dialog.js');
+      UniversalImportDialog.open();
+    }
+  };
+
+  helpMenu?.addEventListener('sl-select', (e) => handleHelpSelection(e.detail.item.value));
+  workspaceMenu?.addEventListener('sl-select', (e) => {
+    const val = e.detail.item.value;
+    if (val && !val.startsWith('theme-')) {
+      handleHelpSelection(val);
     }
   });
 }
@@ -819,8 +834,9 @@ function initThemeSwitcher() {
     if (current === 'projector') html.classList.add('kb-theme-projector');
 
     if (themeIcon) themeIcon.name = THEME_ICONS[current];
-    themeMenu?.querySelectorAll('sl-menu-item').forEach(item => {
-      item.checked = item.value === current;
+    document.querySelectorAll('#kb-theme-menu sl-menu-item, #kb-workspace-menu-list sl-menu-item[value^="theme-"]').forEach(item => {
+      const itemTheme = item.value.replace(/^theme-/, '');
+      item.checked = itemTheme === current;
     });
     window.dispatchEvent(new CustomEvent('kb-theme-changed', { detail: { theme: current, isDark } }));
 
@@ -839,11 +855,19 @@ function initThemeSwitcher() {
     if (current === 'system') applyTheme('system');
   });
 
-  themeMenu?.addEventListener('sl-select', (e) => {
-    const selected = e.detail.item.value;
-    if (selected) {
-      applyTheme(selected);
-      toast.info(`Theme: ${THEME_LABELS[selected]}`);
+  const onThemeSelect = (selected) => {
+    const themeKey = selected.replace(/^theme-/, '');
+    if (THEME_ICONS[themeKey]) {
+      applyTheme(themeKey);
+      toast.info(`Theme: ${THEME_LABELS[themeKey]}`);
+    }
+  };
+
+  themeMenu?.addEventListener('sl-select', (e) => onThemeSelect(e.detail.item.value));
+  document.getElementById('kb-workspace-menu-list')?.addEventListener('sl-select', (e) => {
+    const val = e.detail.item.value;
+    if (val && val.startsWith('theme-')) {
+      onThemeSelect(val);
     }
   });
 }

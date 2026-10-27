@@ -29,6 +29,9 @@ export const NAV_CONFIG = {
         { id: 'nav-fc', route: '#/flashcards', label: 'Flashcards', icon: 'stack' },
         { id: 'nav-tl', route: '#/timeline', label: 'Timeline', icon: 'bar-chart-steps' },
         { id: 'nav-vid', route: '#/video', label: 'Video', icon: 'play-circle' }
+      ],
+      extraItems: [
+        { id: 'nav-import-content', action: 'import', label: 'Import Content (.kbshare, CSV, JSON)…', icon: 'cloud-download' }
       ]
     }
   },
@@ -47,6 +50,9 @@ export const NAV_CONFIG = {
         { id: 'nav-study-fc', route: '#/flashcards', label: 'Flashcards', icon: 'stack' },
         { id: 'nav-study-tl', route: '#/timeline', label: 'Timeline', icon: 'bar-chart-steps' },
         { id: 'nav-study-vid', route: '#/video', label: 'Video', icon: 'play-circle' }
+      ],
+      extraItems: [
+        { id: 'nav-student-import', action: 'import', label: 'Import / Open Activity (.kbshare, QR)…', icon: 'cloud-download' }
       ]
     }
   }
@@ -85,7 +91,7 @@ export function renderAppNav(container, role = RoleMode.get()) {
       <sl-dropdown placement="bottom-end" distance="6" class="kb-nav-dropdown">
         <button slot="trigger" type="button" class="kb-nav-link kb-nav-dropdown-btn" aria-label="${esc(config.dropdown.label)} menu">
           <sl-icon name="${config.dropdown.icon}" aria-hidden="true"></sl-icon>
-          <span>${esc(config.dropdown.label)}</span>
+          <span class="kb-dropdown-label">${esc(config.dropdown.label)}</span>
           <sl-icon name="chevron-down" class="text-xs ml-0.5 opacity-70"></sl-icon>
         </button>
         <sl-menu class="kb-nav-dropdown-menu">
@@ -95,6 +101,15 @@ export function renderAppNav(container, role = RoleMode.get()) {
               ${esc(it.label)}
             </sl-menu-item>
           `).join('')}
+          ${config.dropdown.extraItems && config.dropdown.extraItems.length > 0 ? `
+            <sl-divider></sl-divider>
+            ${config.dropdown.extraItems.map(it => `
+              <sl-menu-item value="action:${it.action}">
+                <sl-icon slot="prefix" name="${it.icon}" class="text-blue-600"></sl-icon>
+                <span class="font-medium">${esc(it.label)}</span>
+              </sl-menu-item>
+            `).join('')}
+          ` : ''}
         </sl-menu>
       </sl-dropdown>`;
   }
@@ -122,10 +137,13 @@ export function renderAppNav(container, role = RoleMode.get()) {
 
   // Wire dropdown click to router navigation
   container.querySelectorAll('.kb-nav-dropdown-menu').forEach(menu => {
-    menu.addEventListener('sl-select', (e) => {
-      const targetRoute = e.detail.item.value;
-      if (targetRoute) {
-        window.location.hash = targetRoute;
+    menu.addEventListener('sl-select', async (e) => {
+      const val = e.detail.item.value;
+      if (val === 'action:import') {
+        const { UniversalImportDialog } = await import('./universal-import-dialog.js');
+        UniversalImportDialog.open();
+      } else if (val) {
+        window.location.hash = val;
       }
     });
   });
@@ -188,6 +206,12 @@ function ensureMoreDrawer(role) {
           <span>${esc(it.label)}</span>
         </a>
       `).join('')}
+      ${config.dropdown.extraItems ? config.dropdown.extraItems.map(it => `
+        <button type="button" data-action="${it.action}" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-btn text-left cursor-pointer">
+          <sl-icon name="${it.icon}" class="text-xl text-blue-600"></sl-icon>
+          <span>${esc(it.label)}</span>
+        </button>
+      `).join('') : ''}
     </div>`;
   }
 
@@ -199,6 +223,18 @@ function ensureMoreDrawer(role) {
   drawer.querySelectorAll('.kb-drawer-link').forEach(link => {
     link.addEventListener('click', () => {
       drawer.hide();
+    });
+  });
+
+  // Action buttons inside drawer
+  drawer.querySelectorAll('.kb-drawer-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      drawer.hide();
+      const action = btn.dataset.action;
+      if (action === 'import') {
+        const { UniversalImportDialog } = await import('./universal-import-dialog.js');
+        UniversalImportDialog.open();
+      }
     });
   });
 }
@@ -249,6 +285,24 @@ export function updateActiveNav(rawHash = window.location.hash || '#/') {
     } else {
       link.classList.remove('kb-nav-active');
       link.removeAttribute('aria-current');
+    }
+  }
+
+  // Handle dropdown active state if viewing a tool inside Create / Study
+  const dropdownBtn = nav.querySelector('.kb-nav-dropdown-btn');
+  if (dropdownBtn) {
+    const role = RoleMode.get();
+    const config = NAV_CONFIG[role] || NAV_CONFIG.teacher;
+    const isDropdownItemActive = config.dropdown?.items?.some(it => {
+      return cleanHash === it.route || cleanHash.startsWith(it.route + '/') || cleanHash.startsWith(it.route + '?');
+    });
+
+    if (isDropdownItemActive) {
+      dropdownBtn.classList.add('kb-nav-active');
+      dropdownBtn.setAttribute('aria-current', 'page');
+    } else {
+      dropdownBtn.classList.remove('kb-nav-active');
+      dropdownBtn.removeAttribute('aria-current');
     }
   }
 }

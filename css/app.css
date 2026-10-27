@@ -549,6 +549,31 @@ code, kbd, samp, pre {
   flex-shrink: 0;
 }
 
+.kb-data-sync-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  height: 36px;
+  padding: 0 0.5rem;
+  border-radius: 10px;
+  border: 1px solid var(--kb-border);
+  background: var(--kb-surface);
+  color: var(--kb-text-muted);
+  font-size: 0.8125rem;
+  cursor: pointer;
+  transition: border-color var(--kb-dur-fast) var(--kb-ease), color var(--kb-dur-fast) var(--kb-ease), background-color var(--kb-dur-fast) var(--kb-ease);
+}
+
+.kb-data-sync-pill:hover {
+  border-color: var(--kb-border-strong);
+  color: var(--kb-text);
+  background: var(--kb-surface-subtle);
+}
+
+.kb-workspace-dropdown {
+  flex-shrink: 0;
+}
+
 @media (min-width: 768px) {
   .kb-header-actions { margin-left: 0; }
 }

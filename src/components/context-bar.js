@@ -114,6 +114,10 @@ export class ContextBar {
                   <sl-icon slot="prefix" name="plus-lg" class="text-blue-600"></sl-icon>
                   <span class="text-blue-600 font-medium">Create New Class&hellip;</span>
                 </sl-menu-item>
+                <sl-menu-item value="__manage_classes__">
+                  <sl-icon slot="prefix" name="gear"></sl-icon>
+                  <span>Manage Classes &amp; Rosters&hellip;</span>
+                </sl-menu-item>
               ` : ''}
             </sl-menu>
           </sl-dropdown>
@@ -136,21 +140,14 @@ export class ContextBar {
           </nav>
         </div>
 
-        <!-- Right: Context Quick Links (scoped to active class) -->
+        <!-- Right: Context Summary & Class Management -->
         ${role === 'teacher' && activeCourse ? `
-          <div class="flex items-center gap-1.5 flex-shrink-0">
-            <a href="#/gradebook?courseId=${esc(activeCourse.id)}" class="kb-context-pill px-2 py-0.5 rounded-md hover:bg-slate-100 text-slate-600 font-medium transition-colors flex items-center gap-1" title="Open Gradebook for ${esc(activeCourse.name)}">
-              <sl-icon name="journal-check" class="text-xs text-blue-600"></sl-icon>
-              <span class="hidden md:inline">Gradebook</span>
-            </a>
-            <a href="#/course?id=${esc(activeCourse.id)}" class="kb-context-pill px-2 py-0.5 rounded-md hover:bg-slate-100 text-slate-600 font-medium transition-colors flex items-center gap-1" title="Course Units & Feed">
-              <sl-icon name="journal-bookmark" class="text-xs text-indigo-600"></sl-icon>
-              <span class="hidden md:inline">Course</span>
-            </a>
-            <a href="#/classes?courseId=${esc(activeCourse.id)}" class="kb-context-pill px-2 py-0.5 rounded-md hover:bg-slate-100 text-slate-600 font-medium transition-colors flex items-center gap-1" title="Roster & Student Codes">
-              <sl-icon name="people" class="text-xs text-emerald-600"></sl-icon>
-              <span class="hidden md:inline">Roster</span>
-            </a>
+          <div class="flex items-center gap-2 flex-shrink-0">
+            ${activeCourse.academic_year ? `<span class="hidden md:inline px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-mono text-[11px] border border-slate-200">${esc(activeCourse.academic_year)}</span>` : ''}
+            <button type="button" id="btn-context-manage-class" class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-medium transition-colors shadow-2xs" title="Manage ${esc(activeCourse.name)} settings and roster">
+              <sl-icon name="gear" class="text-xs text-slate-500"></sl-icon>
+              <span>Manage Class</span>
+            </button>
           </div>
         ` : ''}
       </div>
@@ -173,6 +170,11 @@ export class ContextBar {
           return;
         }
 
+        if (val === '__manage_classes__') {
+          ClassManager.openClassManagerModal(() => this.render());
+          return;
+        }
+
         if (val === '__all__') {
           store.setActiveClass(null);
         } else {
@@ -180,6 +182,20 @@ export class ContextBar {
           store.setActiveClass(selected || val);
         }
         this.render();
+      });
+    }
+
+    const btnManage = this._container.querySelector('#btn-context-manage-class');
+    if (btnManage && activeCourse) {
+      btnManage.addEventListener('click', async () => {
+        const { openCourseSettingsDialog } = await import('../modules/gradebook/course-settings.js');
+        openCourseSettingsDialog({
+          course: activeCourse,
+          onSave: async (updated) => {
+            await ClassManager.saveClass(updated);
+            this.render();
+          }
+        });
       });
     }
   }
