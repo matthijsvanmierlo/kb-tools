@@ -31,7 +31,9 @@ export async function mergeCourseFeed(feedEnvelope, { accessCode, etag, relayUrl
   const courseRecord = {
     ...(existingCourse || {}),
     id: course.id,
+    course_id: course.id,
     name: course.name,
+    course_name: course.name,
     section: course.section || '',
     academic_year: course.academic_year || '',
     color: course.color || '#2563eb',
@@ -43,6 +45,17 @@ export async function mergeCourseFeed(feedEnvelope, { accessCode, etag, relayUrl
     updated_at: new Date().toISOString()
   };
   await coursesTable.put(courseRecord);
+
+  // Sync to StudentProfile keychain
+  try {
+    const { StudentProfile } = await import('../../core/student-profile.js');
+    await StudentProfile.saveIdentity({
+      courseId: course.id,
+      courseName: course.name,
+      section: course.section || '',
+      accessCode: courseRecord.access_code
+    });
+  } catch (_) {}
 
   // 2. Delete stale items no longer present in incoming feed
   const itemsTable = storage.table('student_items');
@@ -191,5 +204,179 @@ export async function getStudentCourse(courseId) {
   } catch (err) {
     console.warn('Failed to load student course context:', err);
     return null;
+  }
+}
+
+/**
+ * Upsert a student course record ensuring consistent schema across the entire app
+ */
+export async function upsertStudentCourse(courseMeta) {
+  if (!courseMeta) return null;
+  const courseId = courseMeta.id || courseMeta.course_id;
+  if (!courseId) return null;
+
+  const coursesTable = storage.table('student_courses');
+  const existing = await coursesTable.get(courseId).catch(() => null);
+
+  const courseName = courseMeta.name || courseMeta.course_name || existing?.name || existing?.course_name || 'Enrolled Course';
+
+  const record = {
+    ...(existing || {}),
+    id: courseId,
+    course_id: courseId,
+    name: courseName,
+    course_name: courseName,
+    section: courseMeta.section || existing?.section || '',
+    academic_year: courseMeta.academic_year || existing?.academic_year || '',
+    color: courseMeta.color || existing?.color || '#2563eb',
+    access_code: courseMeta.access_code || existing?.access_code || '',
+    relay_url: courseMeta.relay_url || existing?.relay_url || null,
+    teacher_name: courseMeta.teacher_name || existing?.teacher_name || '',
+    teacher_fingerprint: courseMeta.teacher_fingerprint || existing?.teacher_fingerprint || '',
+    units: courseMeta.units || existing?.units || [],
+    updated_at: new Date().toISOString()
+  };
+
+  await coursesTable.put(record);
+
+  // Synchronize to StudentProfile.classes
+  try {
+    const { StudentProfile } = await import('../../core/student-profile.js');
+    await StudentProfile.saveIdentity({
+      courseId,
+      courseName,
+      section: record.section,
+      accessCode: record.access_code,
+      teacherFingerprint: record.teacher_fingerprint
+    });
+  } catch (_) {}
+
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent('kb-student-feed-updated', { detail: { courseId, course: record } }));
+  }
+
+  return record;
+}
+
+/**
+ * Join course by 6-character access code or course ID
+ */
+export async function joinCourseByCode(code, relayUrl = null) {
+  if (!code || typeof code !== 'string') throw new Error('Course code is required');
+  const cleanCode = code.trim().toUpperCase();
+
+  // 1. First, check if there's a matching course in local gradebook_courses (same device / kiosk / demo / local server)
+  try {
+    const localCourses = await storage.table('gradebook_courses').toArray().catch(() => []);
+    const localMatch = localCourses.find(c => (c.access_code && c.access_code.trim().toUpperCase() === cleanCode) || c.id === code.trim());
+    if (localMatch) {
+      const { buildCourseFeed } = await import('../../core/course-feed.js');
+      const feed = await buildCourseFeed(localMatch.id, { relayUrl: relayUrl || localMatch.relay_url || null });
+      return await mergeCourseFeed(feed.raw_payload, { accessCode: cleanCode, relayUrl });
+    }
+  } catch (err) {
+    console.warn('Local course lookup check failed:', err);
+  }
+
+  // 2. Second, if relayUrl is provided or configured in transport, query public course feed from relay
+  try {
+    const { getTransport, PublicFeedTransport } = await import('../../core/transport.js');
+    const { deriveCourseFeedId } = await import('../../core/course-feed.js');
+    const transport = await getTransport();
+    const effectiveBaseUrl = relayUrl || transport?.baseUrl;
+    if (effectiveBaseUrl) {
+      const feedTransport = new PublicFeedTransport({ baseUrl: effectiveBaseUrl, token: transport?.token || null });
+      const feedId = await deriveCourseFeedId(cleanCode);
+      const res = await feedTransport.getCourseFeed(feedId);
+      if (res && res.feed) {
+        return await mergeCourseFeed(res.feed, { accessCode: cleanCode, etag: res.etag, relayUrl: effectiveBaseUrl });
+      }
+    }
+  } catch (err) {
+    console.warn('Remote feed lookup by access code failed:', err);
+  }
+
+  // 3. Fallback: create placeholder enrolled course so class appears immediately in student hub & keychain
+  return await upsertStudentCourse({
+    id: 'course_' + cleanCode.toLowerCase(),
+    name: `Course (${cleanCode})`,
+    access_code: cleanCode,
+    relay_url: relayUrl || null
+  });
+}
+
+/**
+ * Reconcile student_courses with StudentProfile.classes and student_items
+ */
+export async function reconcileStudentCoursesWithProfile() {
+  try {
+    const { StudentProfile } = await import('../../core/student-profile.js');
+    const profile = StudentProfile.get();
+    const coursesTable = storage.table('student_courses');
+    const existingCourses = await coursesTable.toArray().catch(() => []);
+    const existingMap = new Map(existingCourses.map(c => [c.id || c.course_id, c]));
+
+    // Check profile.classes
+    const classList = profile?.classes
+      ? (Array.isArray(profile.classes) ? profile.classes : Object.values(profile.classes))
+      : [];
+    for (const cls of classList) {
+      const cId = cls.course_id || cls.courseId;
+      if (!cId) continue;
+      const existing = existingMap.get(cId);
+      const cName = cls.course_name || cls.courseName || 'Enrolled Class';
+      if (!existing) {
+        await upsertStudentCourse({
+          id: cId,
+          name: cName,
+          course_name: cName,
+          section: cls.section || '',
+          access_code: cls.access_code || cls.accessCode || '',
+          teacher_fingerprint: cls.teacher_fingerprint || cls.teacherFingerprint || ''
+        });
+      } else {
+        let changed = false;
+        if (!existing.name && (existing.course_name || cName)) {
+          existing.name = existing.course_name || cName;
+          changed = true;
+        }
+        if (!existing.course_name && (existing.name || cName)) {
+          existing.course_name = existing.name || cName;
+          changed = true;
+        }
+        if (changed) {
+          await coursesTable.put(existing);
+        }
+      }
+    }
+
+    // Check student_items for any courses missing from student_courses
+    const items = await storage.table('student_items').toArray().catch(() => []);
+    const orphanedCourseIds = new Set();
+    for (const it of items) {
+      if (it.course_id && !existingMap.has(it.course_id)) {
+        orphanedCourseIds.add(it.course_id);
+      }
+    }
+    for (const cid of orphanedCourseIds) {
+      await upsertStudentCourse({
+        id: cid,
+        name: 'Shared Course',
+        course_name: 'Shared Course'
+      });
+    }
+
+    // Fix any student_courses that have name but not course_name, or vice-versa
+    for (const c of existingCourses) {
+      if (c.name && !c.course_name) {
+        c.course_name = c.name;
+        await coursesTable.put(c);
+      } else if (c.course_name && !c.name) {
+        c.name = c.course_name;
+        await coursesTable.put(c);
+      }
+    }
+  } catch (err) {
+    console.warn('Reconcile student courses failed:', err);
   }
 }

@@ -17,24 +17,30 @@ const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
 export async function renderStudentHubView(params, router, container) {
   // Auto-enroll and navigate if accessed via QR / join link (#/student?code=...&relay=...)
-  if (params?.code) {
-    const rawCode = String(params.code).trim().toUpperCase();
-    if (rawCode) {
-      try {
-        const { storage } = await import('../../core/storage.js');
-        const saved = (await storage.getMetadata('student_saved_class_codes')) || [];
-        if (!saved.includes(rawCode)) {
-          saved.push(rawCode);
-          await storage.setMetadata('student_saved_class_codes', saved);
-        }
-      } catch (err) {
-        console.warn('Error saving class code from params:', err);
+  const hashSearch = typeof window !== 'undefined' ? new URLSearchParams(window.location.hash.split('?')[1] || '') : new URLSearchParams();
+  const rawCode = String(params?.code || params?.join || hashSearch.get('code') || hashSearch.get('join') || '').trim().toUpperCase();
+  const rawRelay = params?.relay || hashSearch.get('relay') || '';
+
+  if (rawCode) {
+    try {
+      const { storage } = await import('../../core/storage.js');
+      const saved = (await storage.getMetadata('student_saved_class_codes')) || [];
+      if (!saved.includes(rawCode)) {
+        saved.push(rawCode);
+        await storage.setMetadata('student_saved_class_codes', saved);
       }
-      const relayParam = params.relay ? `&relay=${encodeURIComponent(params.relay)}` : '';
-      router.navigate(`#/student/courses?code=${encodeURIComponent(rawCode)}${relayParam}`);
-      return;
+    } catch (err) {
+      console.warn('Error saving class code from params:', err);
     }
+    const relayParam = rawRelay ? `&relay=${encodeURIComponent(rawRelay)}` : '';
+    router.navigate(`#/student/courses?code=${encodeURIComponent(rawCode)}${relayParam}`);
+    return;
   }
+
+  try {
+    const { reconcileStudentCoursesWithProfile } = await import('./course-store.js');
+    await reconcileStudentCoursesWithProfile();
+  } catch (_) {}
 
   const profile = StudentProfile.get();
   const courses = await StudentLedger.getStudentCourses();
@@ -406,13 +412,26 @@ function openAddCodeDialog(onSaved) {
     const cName = dialog.querySelector('#input-course-name').value.trim();
     const code = dialog.querySelector('#input-access-code').value.trim();
 
+    try {
+      const { joinCourseByCode, upsertStudentCourse } = await import('./course-store.js');
+      if (code) {
+        await joinCourseByCode(code).catch(() => {});
+      } else if (cName) {
+        await upsertStudentCourse({
+          id: 'course_' + cName.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
+          name: cName,
+          course_name: cName
+        });
+      }
+    } catch (_) {}
+
     await StudentProfile.saveIdentity({
       courseName: cName,
       accessCode: code
     });
 
     dialog.hide();
-    toast.success('Access code added to keychain.');
+    toast.success('Class and access code saved.');
     if (onSaved) onSaved();
   });
 }

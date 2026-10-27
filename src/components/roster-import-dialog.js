@@ -22,10 +22,9 @@ export class RosterImportDialog {
     dialog.style.setProperty('--width', '680px');
     dialog.className = 'kb-roster-import-dialog';
 
-    const existingStudents = await storage.table('gradebook_students')
-      .where('course_id')
-      .equals(course.id)
-      .toArray();
+    const allStudents = await storage.table('gradebook_students').toArray().catch(() => []);
+    const existingStudents = allStudents.filter(s => s.course_id === course.id);
+    const otherClassStudents = allStudents.filter(s => s.course_id !== course.id);
 
     // State
     let step = 1; // 1: Source, 2: Mapping & Preview, 3: Merge Plan, 4: Complete
@@ -376,7 +375,7 @@ export class RosterImportDialog {
         }
 
         const normalized = normalizeRows(rawRows, columnMapping);
-        mergePlan = planMerge(existingStudents, normalized, { updateExisting, allowAccessCodeOverwrite });
+        mergePlan = planMerge(existingStudents, normalized, { updateExisting, allowAccessCodeOverwrite, otherClassStudents });
         step = 3;
         render();
       });
@@ -494,14 +493,14 @@ export class RosterImportDialog {
       dialog.querySelector('#chk-update-existing')?.addEventListener('change', (e) => {
         updateExisting = e.target.checked;
         const normalized = normalizeRows(rawRows, columnMapping);
-        mergePlan = planMerge(existingStudents, normalized, { updateExisting, allowAccessCodeOverwrite });
+        mergePlan = planMerge(existingStudents, normalized, { updateExisting, allowAccessCodeOverwrite, otherClassStudents });
         render();
       });
 
       dialog.querySelector('#chk-allow-codes')?.addEventListener('change', (e) => {
         allowAccessCodeOverwrite = e.target.checked;
         const normalized = normalizeRows(rawRows, columnMapping);
-        mergePlan = planMerge(existingStudents, normalized, { updateExisting, allowAccessCodeOverwrite });
+        mergePlan = planMerge(existingStudents, normalized, { updateExisting, allowAccessCodeOverwrite, otherClassStudents });
         render();
       });
 

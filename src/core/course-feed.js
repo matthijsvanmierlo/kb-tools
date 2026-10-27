@@ -48,7 +48,7 @@ export async function buildCourseFeed(courseId, opts = {}) {
               teacherKeys: keys,
               salt: asgSalt,
               roster: { withCode: rosterWithCode },
-              courseMeta: { id: course.id, name: course.name, section: course.section },
+              courseMeta: { id: course.id, course_id: course.id, name: course.name, course_name: course.name, section: course.section, access_code: course.access_code },
               relay: rawAsg.publish?.relay || null
             });
           }
@@ -61,7 +61,7 @@ export async function buildCourseFeed(courseId, opts = {}) {
               publish: { version: rawTask.publish?.version || 1, salt: taskSalt }
             }, {
               teacherKeys: keys,
-              courseMeta: { id: course.id, name: course.name, section: course.section },
+              courseMeta: { id: course.id, course_id: course.id, name: course.name, course_name: course.name, section: course.section, access_code: course.access_code },
               relay: rawTask.publish?.relay || null
             });
           }

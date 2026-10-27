@@ -18,6 +18,7 @@ import { feedbackSummary, buildStudentPayload, answerToText } from './grading.js
 import { CryptoShareEngine } from '../../core/crypto-share.js';
 import { replication } from '../../core/replication/manager.js';
 import { StudentMatcher } from '../../core/student-matcher.js';
+import { AccessCodes } from '../../core/access-codes.js';
 
 /**
  * Submissions Inbox (KB-ASSIGN-006)
@@ -370,6 +371,23 @@ export async function renderSubmissions(assignment, router, container) {
     } else {
       mainContentHtml = `
         <div class="space-y-3">
+          ${strangers.length > 0 && courseId ? `
+            <div class="p-4 rounded-2xl bg-amber-50 border border-amber-200 text-amber-950 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+              <div class="flex items-start gap-2.5">
+                <sl-icon name="person-exclamation" class="text-amber-600 text-xl flex-shrink-0 mt-0.5"></sl-icon>
+                <div>
+                  <div class="font-bold text-sm text-amber-900">${strangers.length} submission${strangers.length === 1 ? '' : 's'} from students not on your class roster</div>
+                  <div class="text-xs text-amber-800">Add them to the roster to include their grades in gradebook sync.</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-2 flex-wrap flex-shrink-0">
+                <sl-button size="small" variant="primary" id="btn-enroll-all-strangers">
+                  <sl-icon slot="prefix" name="person-plus"></sl-icon> Add All to Roster
+                </sl-button>
+              </div>
+            </div>
+          ` : ''}
+
           <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-3">
             <div class="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs">
               <button type="button" class="px-3 py-1.5 rounded-lg font-medium ${filterMode === 'all' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'}" id="btn-filter-all">
@@ -732,21 +750,36 @@ export async function renderSubmissions(assignment, router, container) {
 
     drawer.querySelector('#review-add-roster')?.addEventListener('click', async () => {
       if (!courseId) return;
+      const crossMatch = await StudentMatcher.findExistingStudentAcrossClasses({
+        studentId: sub.student_id,
+        fullName: sub.claimed_name || sub.student_name,
+        currentCourseId: courseId
+      });
+      const generatedCode = sub.access_code || crossMatch.canonicalCandidate?.access_code || AccessCodes.generateCode();
       const newStudent = {
         id: crypto.randomUUID(),
         course_id: courseId,
         student_id: sub.student_id,
-        full_name: sub.claimed_name || sub.student_name || sub.student_id,
+        full_name: sub.claimed_name || sub.student_name || crossMatch.canonicalCandidate?.full_name || sub.student_id,
+        email: crossMatch.canonicalCandidate?.email || undefined,
+        access_code: generatedCode,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
       await storage.table('gradebook_students').put(newStudent);
-      sub.student_name = newStudent.full_name;
-      sub.identity = 'no_code_on_file';
-      sub.updated_at = new Date().toISOString();
-      await storage.table('assignment_submissions').put(sub);
+
+      // Reconcile all submissions from this student in this assignment
+      const allSubmissionsFromStudent = submissions.filter(s => String(s.student_id).toUpperCase() === String(sub.student_id).toUpperCase());
+      for (const s of allSubmissionsFromStudent) {
+        s.student_name = newStudent.full_name;
+        s.identity = newStudent.access_code ? 'verified' : 'no_code_on_file';
+        s.suggested_student = null;
+        s.updated_at = new Date().toISOString();
+        await storage.table('assignment_submissions').put(s);
+      }
+
       drawer.hide();
-      toast.success(`Added ${newStudent.full_name} to class roster.`);
+      toast.success(`Enrolled ${newStudent.full_name} into roster.`);
       await load();
       render();
     });
@@ -790,7 +823,34 @@ export async function renderSubmissions(assignment, router, container) {
 
   async function syncToGradebook(list) {
     if (!course) { toast.warning('Link a class first.'); return; }
-    const rosterById = new Map(roster.map(s => [String(s.student_id).toUpperCase(), s]));
+    let rosterById = new Map(roster.map(s => [String(s.student_id).toUpperCase(), s]));
+
+    // Auto-enroll unrostered students with submissions into class roster
+    for (const sub of list) {
+      const sid = String(sub.student_id).toUpperCase();
+      if (sub.is_latest !== false && !rosterById.has(sid)) {
+        const crossMatch = await StudentMatcher.findExistingStudentAcrossClasses({
+          studentId: sub.student_id,
+          fullName: sub.claimed_name || sub.student_name,
+          currentCourseId: course.id
+        });
+        const generatedCode = sub.access_code || crossMatch.canonicalCandidate?.access_code || AccessCodes.generateCode();
+        const newStudent = {
+          id: crypto.randomUUID(),
+          course_id: course.id,
+          student_id: sub.student_id,
+          full_name: sub.claimed_name || sub.student_name || crossMatch.canonicalCandidate?.full_name || sub.student_id,
+          email: crossMatch.canonicalCandidate?.email || undefined,
+          access_code: generatedCode,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        await storage.table('gradebook_students').put(newStudent);
+        roster.push(newStudent);
+        rosterById.set(sid, newStudent);
+      }
+    }
+
     const eligible = list.filter(s => s.is_latest !== false && rosterById.has(String(s.student_id).toUpperCase()));
     if (!eligible.length) { toast.info('Nothing to sync.'); return; }
     try {
@@ -1011,6 +1071,58 @@ export async function renderSubmissions(assignment, router, container) {
     container.querySelector('#btn-filter-all')?.addEventListener('click', () => { filterMode = 'all'; render(); });
     container.querySelector('#btn-filter-submitted')?.addEventListener('click', () => { filterMode = 'submitted'; render(); });
     container.querySelector('#btn-filter-not-submitted')?.addEventListener('click', () => { filterMode = 'not_submitted'; render(); });
+
+    container.querySelector('#btn-enroll-all-strangers')?.addEventListener('click', async () => {
+      const btn = container.querySelector('#btn-enroll-all-strangers');
+      if (btn) btn.loading = true;
+      try {
+        const latest = submissions.filter(s => s.is_latest !== false);
+        const rosterIds = new Set(roster.map(s => String(s.student_id).toUpperCase()));
+        const unrostered = latest.filter(s => !rosterIds.has(String(s.student_id).toUpperCase()));
+        let count = 0;
+        for (const sub of unrostered) {
+          const sid = String(sub.student_id).toUpperCase();
+          if (!rosterIds.has(sid)) {
+            const crossMatch = await StudentMatcher.findExistingStudentAcrossClasses({
+              studentId: sub.student_id,
+              fullName: sub.claimed_name || sub.student_name,
+              currentCourseId: course.id
+            });
+            const generatedCode = sub.access_code || crossMatch.canonicalCandidate?.access_code || AccessCodes.generateCode();
+            const newStudent = {
+              id: crypto.randomUUID(),
+              course_id: course.id,
+              student_id: sub.student_id,
+              full_name: sub.claimed_name || sub.student_name || crossMatch.canonicalCandidate?.full_name || sub.student_id,
+              email: crossMatch.canonicalCandidate?.email || undefined,
+              access_code: generatedCode,
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            };
+            await storage.table('gradebook_students').put(newStudent);
+            roster.push(newStudent);
+            rosterIds.add(sid);
+
+            const studentSubs = submissions.filter(s => String(s.student_id).toUpperCase() === sid);
+            for (const s of studentSubs) {
+              s.student_name = newStudent.full_name;
+              s.identity = newStudent.access_code ? 'verified' : 'no_code_on_file';
+              s.suggested_student = null;
+              s.updated_at = new Date().toISOString();
+              await storage.table('assignment_submissions').put(s);
+            }
+            count++;
+          }
+        }
+        toast.success(`Enrolled ${count} student${count === 1 ? '' : 's'} into roster!`);
+        await load();
+        render();
+      } catch (err) {
+        toast.danger('Could not enroll students: ' + err.message);
+      } finally {
+        if (btn) btn.loading = false;
+      }
+    });
 
     container.querySelector('#tab-mode-students')?.addEventListener('click', () => { viewMode = 'students'; render(); });
     container.querySelector('#tab-mode-speedgrader')?.addEventListener('click', () => { viewMode = 'speedgrader'; render(); });

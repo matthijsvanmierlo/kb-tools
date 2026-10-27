@@ -22,6 +22,7 @@ import { openPublishDialog } from '../assignments/publish.js';
 import { openVideoShareDialog } from '../video/share-video.js';
 import { renderStandardsView } from './standards-view.js';
 import { renderRosterView } from './roster-view.js';
+import { openAddStudentModal } from '../classes/student-actions.js';
 import { RosterImportDialog } from '../../components/roster-import-dialog.js';
 import { ClassSetupWizard } from '../../components/class-setup-wizard.js';
 import { AccessCodes } from '../../core/access-codes.js';
@@ -1191,61 +1192,6 @@ function openSelectAssignmentForKBRModal(assignments, onSelected) {
   });
 
   dialog.querySelector('#btn-cancel-kbr-sel')?.addEventListener('click', () => dialog.remove());
-}
-
-function openAddStudentModal(course, onSave) {
-  const dialog = document.createElement('sl-dialog');
-  dialog.label = 'Add Student to Roster';
-  dialog.innerHTML = `
-    <div class="space-y-3 py-1 text-sm">
-      <div class="grid grid-cols-2 gap-2">
-        <sl-input id="input-st-given" label="First Name" placeholder="Jane"></sl-input>
-        <sl-input id="input-st-family" label="Last Name" placeholder="Doe"></sl-input>
-      </div>
-      <sl-input id="input-st-name" label="Student Full Name" placeholder="e.g. Jane Doe" required></sl-input>
-      <sl-input id="input-st-id" label="Student ID / SIS ID" placeholder="e.g. S106" required></sl-input>
-      <sl-input id="input-st-email" label="Student Email (Optional)" type="email" placeholder="jane.doe@school.edu"></sl-input>
-    </div>
-    <div slot="footer" class="flex justify-end gap-2">
-      <sl-button variant="default" id="btn-cancel-st">Cancel</sl-button>
-      <sl-button variant="primary" id="btn-save-st">Add Student</sl-button>
-    </div>
-  `;
-  document.body.appendChild(dialog);
-  dialog.show();
-
-  dialog.querySelector('#btn-save-st')?.addEventListener('click', () => {
-    const given = dialog.querySelector('#input-st-given')?.value?.trim();
-    const family = dialog.querySelector('#input-st-family')?.value?.trim();
-    let fullName = dialog.querySelector('#input-st-name')?.value?.trim();
-    if (!fullName && (given || family)) {
-      fullName = joinName(given, family);
-    }
-    const studentId = dialog.querySelector('#input-st-id')?.value?.trim();
-    const email = dialog.querySelector('#input-st-email')?.value?.trim();
-
-    if (!fullName || !studentId) {
-      toast.warning('Name and Student ID are required.');
-      return;
-    }
-
-    dialog.hide();
-    const now = new Date().toISOString();
-    onSave({
-      id: generateUUID(),
-      course_id: course.id,
-      student_id: studentId,
-      full_name: fullName,
-      given_name: given || undefined,
-      family_name: family || undefined,
-      email: email || undefined,
-      created_at: now,
-      updated_at: now
-    });
-  });
-
-  dialog.querySelector('#btn-cancel-st')?.addEventListener('click', () => dialog.hide());
-  dialog.addEventListener('sl-after-hide', (e) => { if (e.target === dialog) dialog.remove(); });
 }
 
 function openSelectStudentModal(students, onSelected) {

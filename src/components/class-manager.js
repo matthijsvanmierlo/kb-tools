@@ -5,6 +5,7 @@ import { generateUUID } from '../utils/uuid.js';
 import { toast } from '../utils/toast.js';
 import { ConfirmDialog } from '../utils/dialogs.js';
 import { defaultAcademicYear } from '../core/academic-year.js';
+import { AccessCodes } from '../core/access-codes.js';
 
 export const CLASS_COLOR_PRESETS = [
   { name: 'Blue', color: '#2563eb', bg: '#eff6ff', border: '#bfdbfe', text: '#1d4ed8' },
@@ -57,6 +58,7 @@ export class ClassManager {
       section: courseData.section || 'Section 1',
       academic_year: courseData.academic_year || defaultAcademicYear(),
       color: courseData.color || '#2563eb',
+      access_code: courseData.access_code || existing?.access_code || AccessCodes.generateCode(6),
       grading_scale: courseData.grading_scale || template?.grading_scale || existing?.grading_scale || 'traditional',
       archived_at: courseData.archived_at !== undefined ? courseData.archived_at : (existing?.archived_at || null),
       is_demo: courseData.is_demo !== undefined ? courseData.is_demo : (existing?.is_demo || false),
@@ -85,6 +87,7 @@ export class ClassManager {
       id: generateUUID(),
       name: course.name,
       section: newSectionName || (course.section ? `${course.section} (Copy)` : 'Section 2'),
+      access_code: AccessCodes.generateCode(6),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       archived_at: null
@@ -126,6 +129,7 @@ export class ClassManager {
       name: course.name,
       section: course.section || 'Period 1',
       academic_year: nextYear,
+      access_code: AccessCodes.generateCode(6),
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
       archived_at: null

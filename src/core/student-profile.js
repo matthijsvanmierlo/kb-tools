@@ -58,6 +58,10 @@ export class StudentProfile {
     };
   }
 
+  static getProfile() {
+    return this.get();
+  }
+
   /**
    * Save or update student identity and access code for a class (or default).
    */
@@ -118,7 +122,14 @@ export class StudentProfile {
    * Convenience helper to attach an access code to a specific enrolled course.
    */
   static async saveClassAccessCode(courseId, accessCode) {
-    return this.saveIdentity({ courseId, accessCode });
+    const profile = this.get();
+    const existing = Object.values(profile?.classes || {}).find(c => c.course_id === courseId);
+    return this.saveIdentity({
+      courseId,
+      accessCode,
+      courseName: existing?.course_name || undefined,
+      section: existing?.section || undefined
+    });
   }
 
   /**

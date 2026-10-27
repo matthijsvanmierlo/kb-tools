@@ -10,6 +10,18 @@ await import('../../vendor/shoelace/shoelace-autoloader.js');
 // The autoloader only defines a component once it sees the tag in the DOM. Components the app
 // creates in code and immediately calls methods on (dialog.show(), alert.toast()) are defined
 // up front so those calls never hit an un-upgraded element.
-['dialog', 'drawer', 'alert', 'button'].forEach((name) => {
-  import(`../../vendor/shoelace/components/${name}/${name}.js`).catch(() => {});
-});
+const CORE_COMPONENTS = ['dialog', 'drawer', 'alert', 'button', 'icon', 'input', 'select', 'dropdown', 'menu', 'menu-item', 'tab-group', 'tab', 'tab-panel', 'badge', 'tooltip'];
+
+export const shoelaceReady = Promise.all([
+  ...CORE_COMPONENTS.map((name) => import(`../../vendor/shoelace/components/${name}/${name}.js`).catch(() => {})),
+  typeof customElements !== 'undefined' ? customElements.whenDefined('sl-dialog') : Promise.resolve(),
+  typeof customElements !== 'undefined' ? customElements.whenDefined('sl-button') : Promise.resolve()
+]);
+
+export async function ensureDialogReady(dialogEl) {
+  await shoelaceReady;
+  if (typeof customElements !== 'undefined' && !customElements.get('sl-dialog')) {
+    await customElements.whenDefined('sl-dialog').catch(() => {});
+  }
+  return dialogEl;
+}

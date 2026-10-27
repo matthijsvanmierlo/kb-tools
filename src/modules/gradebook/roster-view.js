@@ -36,15 +36,20 @@ export async function renderRosterView({
   onOpenAccess,
   onAddStudent
 }) {
-  // Fetch assignment submissions to count hand-ins
-  let allSubmissions = [];
+  // Fetch assignment & task submissions to count hand-ins
+  let allAssignmentSubs = [];
+  let allTaskSubs = [];
   try {
-    allSubmissions = await storage.table('assignment_submissions').toArray();
+    [allAssignmentSubs, allTaskSubs] = await Promise.all([
+      storage.table('assignment_submissions').toArray().catch(() => []),
+      storage.table('task_submissions').toArray().catch(() => [])
+    ]);
   } catch (err) {
-    allSubmissions = [];
+    allAssignmentSubs = [];
+    allTaskSubs = [];
   }
 
-  // Find assignment IDs linked to this course
+  // Find assignment and task IDs linked to this course
   const courseAssignmentIds = new Set(
     allAssignments.map(a => a.id)
   );
@@ -53,12 +58,19 @@ export async function renderRosterView({
   const studentStats = new Map();
   for (const s of students) {
     const sId = String(s.student_id).toUpperCase();
-    // Submissions for this student on assignments in this course
-    const studentSubs = allSubmissions.filter(sub =>
-      String(sub.student_id).toUpperCase() === sId &&
-      courseAssignmentIds.has(sub.assignment_id) &&
-      sub.is_latest !== false
-    );
+    // Submissions for this student on assignments & tasks in this course
+    const studentSubs = [
+      ...allAssignmentSubs.filter(sub =>
+        String(sub.student_id).toUpperCase() === sId &&
+        courseAssignmentIds.has(sub.assignment_id) &&
+        sub.is_latest !== false
+      ),
+      ...allTaskSubs.filter(sub =>
+        String(sub.student_id).toUpperCase() === sId &&
+        courseAssignmentIds.has(sub.task_id) &&
+        sub.is_latest !== false
+      )
+    ];
 
     // Also count video receipts in gradebook_grades
     let receiptCount = 0;

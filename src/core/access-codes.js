@@ -31,6 +31,10 @@ export function formatAccessCode(code) {
 export const MIN_ACCESS_CODE_LENGTH = 6;
 
 export class AccessCodes {
+  static generateCode(length = 8) {
+    return generateAccessCode(length);
+  }
+
   /**
    * The secret that protects a student's grade report and feedback links: their access code.
    * Student IDs are never used as a fallback (classmates often know them); call ensureForStudent first.

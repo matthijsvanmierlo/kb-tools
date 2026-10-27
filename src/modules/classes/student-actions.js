@@ -6,18 +6,56 @@ import { splitName, joinName } from '../../core/names.js';
 import { AccessCodes } from '../../core/access-codes.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { GradebookReportGenerator } from '../gradebook/report-generator.js';
-import { stringSimilarity } from '../../core/student-matcher.js';
+import { stringSimilarity, StudentMatcher } from '../../core/student-matcher.js';
 
 /**
  * Student Actions (KB-CLASS-003)
  * Student profile drawer & Add Student modal for Roster and Classes views.
  */
 
-export function openAddStudentModal(course, onSave) {
+export async function openAddStudentModal(course, onSave) {
+  const [allStudents, allCourses] = await Promise.all([
+    storage.table('gradebook_students').toArray().catch(() => []),
+    storage.table('gradebook_courses').toArray().catch(() => [])
+  ]);
+
+  const courseMap = new Map(allCourses.map(c => [c.id, c.name]));
+  const currentClassStudents = allStudents.filter(s => s.course_id === course.id);
+  const otherClassStudents = allStudents.filter(s => s.course_id !== course.id);
+
+  // Group unique students from other classes by normalized student_id
+  const otherUniqueStudents = [];
+  const seenIds = new Set();
+  for (const s of otherClassStudents) {
+    const key = String(s.student_id || '').trim().toUpperCase();
+    if (!key || seenIds.has(key)) continue;
+    if (currentClassStudents.some(cs => String(cs.student_id || '').trim().toUpperCase() === key)) continue;
+    seenIds.add(key);
+    otherUniqueStudents.push(s);
+  }
+
   const dialog = document.createElement('sl-dialog');
-  dialog.label = 'Add Student to Roster';
+  dialog.label = `Add Student to ${course.name || 'Roster'}`;
+  dialog.style.setProperty('--width', '540px');
+
   dialog.innerHTML = `
-    <div class="space-y-3 py-1 text-sm">
+    <div class="space-y-4 py-1 text-sm">
+      ${otherUniqueStudents.length > 0 ? `
+        <div class="p-3 bg-blue-50 border border-blue-200 rounded-xl space-y-2">
+          <label class="text-xs font-bold text-blue-900 flex items-center gap-1.5">
+            <sl-icon name="people"></sl-icon> Enroll Existing Student from Another Class:
+          </label>
+          <sl-select id="select-existing-st" placeholder="Choose an existing student..." size="small" clearable>
+            ${otherUniqueStudents.map(s => `
+              <sl-option value="${Sanitizer.escapeHTML(s.student_id)}">
+                ${Sanitizer.escapeHTML(s.full_name)} (${Sanitizer.escapeHTML(s.student_id)})${s.course_id ? ` · ${Sanitizer.escapeHTML(courseMap.get(s.course_id) || 'Other Class')}` : ''}
+              </sl-option>
+            `).join('')}
+          </sl-select>
+          <p class="text-[11px] text-blue-700">Reuses their student ID, email, and personal access code across your classes.</p>
+        </div>
+      ` : ''}
+
       <div class="grid grid-cols-2 gap-2">
         <sl-input id="input-st-given" label="First Name" placeholder="Jane"></sl-input>
         <sl-input id="input-st-family" label="Last Name" placeholder="Doe"></sl-input>
@@ -25,6 +63,7 @@ export function openAddStudentModal(course, onSave) {
       <sl-input id="input-st-name" label="Student Full Name" placeholder="e.g. Jane Doe" required></sl-input>
       <sl-input id="input-st-id" label="Student ID / SIS ID" placeholder="e.g. S106" required></sl-input>
       <sl-input id="input-st-email" label="Student Email (Optional)" type="email" placeholder="jane.doe@school.edu"></sl-input>
+      <div id="st-match-feedback" class="text-xs font-medium hidden"></div>
     </div>
     <div slot="footer" class="flex justify-end gap-2">
       <sl-button variant="default" id="btn-cancel-st">Cancel</sl-button>
@@ -34,23 +73,100 @@ export function openAddStudentModal(course, onSave) {
   document.body.appendChild(dialog);
   dialog.show();
 
-  dialog.querySelector('#btn-save-st')?.addEventListener('click', () => {
-    const given = dialog.querySelector('#input-st-given')?.value?.trim();
-    const family = dialog.querySelector('#input-st-family')?.value?.trim();
-    let fullName = dialog.querySelector('#input-st-name')?.value?.trim();
+  const selExisting = dialog.querySelector('#select-existing-st');
+  const inputGiven = dialog.querySelector('#input-st-given');
+  const inputFamily = dialog.querySelector('#input-st-family');
+  const inputName = dialog.querySelector('#input-st-name');
+  const inputId = dialog.querySelector('#input-st-id');
+  const inputEmail = dialog.querySelector('#input-st-email');
+  const feedbackEl = dialog.querySelector('#st-match-feedback');
+
+  selExisting?.addEventListener('sl-change', () => {
+    const val = selExisting.value;
+    if (!val) return;
+    const match = otherUniqueStudents.find(s => s.student_id === val);
+    if (match) {
+      if (inputName) inputName.value = match.full_name || '';
+      if (inputGiven) inputGiven.value = match.given_name || '';
+      if (inputFamily) inputFamily.value = match.family_name || '';
+      if (inputId) inputId.value = match.student_id || '';
+      if (inputEmail) inputEmail.value = match.email || '';
+      checkDuplicates();
+    }
+  });
+
+  const checkDuplicates = async () => {
+    const sId = inputId?.value?.trim() || '';
+    const sName = inputName?.value?.trim() || '';
+    const sEmail = inputEmail?.value?.trim() || '';
+
+    if (!feedbackEl) return;
+    feedbackEl.className = 'text-xs font-medium hidden';
+    feedbackEl.innerHTML = '';
+
+    if (!sId && !sName) return;
+
+    const res = await StudentMatcher.findExistingStudentAcrossClasses({
+      studentId: sId,
+      fullName: sName,
+      email: sEmail,
+      currentCourseId: course.id
+    });
+
+    if (res.sameClassMatch) {
+      feedbackEl.className = 'p-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold block';
+      feedbackEl.innerHTML = `<sl-icon name="exclamation-octagon" class="mr-1"></sl-icon> Student with ID "${Sanitizer.escapeHTML(res.sameClassMatch.student_id)}" already exists in this class roster.`;
+    } else if (res.canonicalCandidate) {
+      feedbackEl.className = 'p-2 rounded-lg bg-blue-50 border border-blue-200 text-blue-700 text-xs font-medium block';
+      feedbackEl.innerHTML = `<sl-icon name="info-circle" class="mr-1"></sl-icon> Matches ${Sanitizer.escapeHTML(res.canonicalCandidate.full_name)} (${Sanitizer.escapeHTML(res.canonicalCandidate.student_id)}) from another class. Will use their profile and access code.`;
+    }
+  };
+
+  inputId?.addEventListener('sl-input', checkDuplicates);
+  inputName?.addEventListener('sl-input', checkDuplicates);
+  inputEmail?.addEventListener('sl-input', checkDuplicates);
+
+  inputName?.addEventListener('sl-change', () => {
+    const nameVal = inputName.value.trim();
+    if (nameVal && !inputGiven?.value && !inputFamily?.value) {
+      const split = splitName(nameVal);
+      if (inputGiven && split.given) inputGiven.value = split.given;
+      if (inputFamily && split.family) inputFamily.value = split.family;
+    }
+  });
+
+  dialog.querySelector('#btn-save-st')?.addEventListener('click', async () => {
+    const given = inputGiven?.value?.trim();
+    const family = inputFamily?.value?.trim();
+    let fullName = inputName?.value?.trim();
     if (!fullName && (given || family)) {
       fullName = joinName(given, family);
     }
-    const studentId = dialog.querySelector('#input-st-id')?.value?.trim();
-    const email = dialog.querySelector('#input-st-email')?.value?.trim();
+    const studentId = inputId?.value?.trim();
+    const email = inputEmail?.value?.trim();
 
     if (!fullName || !studentId) {
       toast.warning('Name and Student ID are required.');
       return;
     }
 
+    // Check duplicate in same class
+    const res = await StudentMatcher.findExistingStudentAcrossClasses({
+      studentId,
+      fullName,
+      email,
+      currentCourseId: course.id
+    });
+
+    if (res.sameClassMatch) {
+      toast.danger(`A student with ID "${studentId}" is already enrolled in this class.`);
+      return;
+    }
+
     dialog.hide();
     const now = new Date().toISOString();
+    const accessCode = res.canonicalCandidate?.access_code || AccessCodes.generateCode();
+
     onSave({
       id: generateUUID(),
       course_id: course.id,
@@ -59,9 +175,11 @@ export function openAddStudentModal(course, onSave) {
       given_name: given || undefined,
       family_name: family || undefined,
       email: email || undefined,
+      access_code: accessCode,
       created_at: now,
       updated_at: now
     });
+    toast.success(`Enrolled ${fullName} in ${course.name}.`);
   });
 
   dialog.querySelector('#btn-cancel-st')?.addEventListener('click', () => dialog.hide());
@@ -94,14 +212,20 @@ export async function openStudentDrawer({ student, course, assignments = [], gra
   let otherCourses = [];
   let studentSubs = [];
   try {
-    const [allStudents, allCourses, allSubs] = await Promise.all([
-      storage.table('gradebook_students').where('student_id').equals(student.student_id).toArray(),
-      storage.table('gradebook_courses').toArray(),
-      storage.table('assignment_submissions').where('student_id').equals(student.student_id).toArray()
+    const [allStudents, allCourses, allAssignmentSubs, allTaskSubs] = await Promise.all([
+      storage.table('gradebook_students').toArray().catch(() => []),
+      storage.table('gradebook_courses').toArray().catch(() => []),
+      storage.table('assignment_submissions').toArray().catch(() => []),
+      storage.table('task_submissions').toArray().catch(() => [])
     ]);
-    otherCourses = allCourses.filter(c => c.id !== course.id && allStudents.some(s => s.course_id === c.id));
+    const normId = String(student.student_id || '').trim().toLowerCase();
+    const matchingStudentRows = allStudents.filter(s => String(s.student_id || '').trim().toLowerCase() === normId);
+    otherCourses = allCourses.filter(c => c.id !== course.id && matchingStudentRows.some(s => s.course_id === c.id));
     const courseAssignmentIds = new Set(assignments.map(a => a.id));
-    studentSubs = allSubs.filter(sub => courseAssignmentIds.has(sub.assignment_id));
+    studentSubs = [
+      ...allAssignmentSubs.filter(sub => String(sub.student_id || '').trim().toLowerCase() === normId && courseAssignmentIds.has(sub.assignment_id)),
+      ...allTaskSubs.filter(sub => String(sub.student_id || '').trim().toLowerCase() === normId && courseAssignmentIds.has(sub.task_id))
+    ];
   } catch (_) {}
 
   const split = splitName(student.full_name || '');
@@ -241,9 +365,27 @@ export async function openStudentDrawer({ student, course, assignments = [], gra
     student.family_name = familyVal || undefined;
     student.email = emailVal || undefined;
     student.notes = drawer.querySelector('#input-drawer-notes')?.value?.trim() || undefined;
+    student.updated_at = new Date().toISOString();
+
+    // Propagate shared student profile updates across other classes
+    storage.table('gradebook_students').toArray().then(async (allRows) => {
+      const targetNormId = String(student.student_id || '').trim().toLowerCase();
+      for (const row of allRows) {
+        if (row.id !== student.id && String(row.student_id || '').trim().toLowerCase() === targetNormId) {
+          row.full_name = student.full_name;
+          row.given_name = student.given_name;
+          row.family_name = student.family_name;
+          row.email = student.email;
+          if (student.access_code && !row.access_code) row.access_code = student.access_code;
+          row.updated_at = new Date().toISOString();
+          await storage.table('gradebook_students').put(row);
+        }
+      }
+    }).catch(() => {});
+
     drawer.remove();
     onUpdateStudent(student);
-    toast.success('Student information updated.');
+    toast.success('Student information updated across enrolled classes.');
   });
 
   drawer.querySelector('#btn-drawer-print-pdf')?.addEventListener('click', () => {

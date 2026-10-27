@@ -424,6 +424,58 @@ export class StudentMatcher {
       console.warn('Could not save student alias:', e);
     }
   }
+
+  /**
+   * Search across all classes for existing student records to prevent duplicates and enable cross-class identity sharing.
+   */
+  static async findExistingStudentAcrossClasses({ studentId = '', fullName = '', email = '', currentCourseId = null } = {}) {
+    const rawId = String(studentId || '').trim();
+    const normId = normalizeId(rawId);
+    const rawName = String(fullName || '').trim();
+    const normName = normalizeString(rawName);
+    const rawEmail = String(email || '').trim().toLowerCase();
+
+    const allStudents = await storage.table('gradebook_students').toArray().catch(() => []);
+    let sameClassMatch = null;
+    const otherClassMatches = [];
+
+    for (const s of allStudents) {
+      const sId = String(s.student_id || '').trim();
+      const sNormId = normalizeId(sId);
+      const sName = String(s.full_name || '').trim();
+      const sNormName = normalizeString(sName);
+      const sEmail = String(s.email || '').trim().toLowerCase();
+
+      const idMatch = Boolean(normId && sNormId && sNormId === normId);
+      const emailMatch = Boolean(rawEmail && sEmail && sEmail === rawEmail);
+      const nameMatch = Boolean(normName && sNormName && (normName === sNormName || stringSimilarity(sName, rawName) > 0.88));
+
+      const isMatch = idMatch || emailMatch || (nameMatch && (idMatch || emailMatch || !rawId || !sId));
+
+      if (isMatch) {
+        if (currentCourseId && String(s.course_id) === String(currentCourseId)) {
+          if (!sameClassMatch) sameClassMatch = s;
+        } else {
+          otherClassMatches.push(s);
+        }
+      }
+    }
+
+    let canonicalCandidate = null;
+    if (otherClassMatches.length > 0) {
+      canonicalCandidate = [...otherClassMatches].sort((a, b) => {
+        const scoreA = (a.access_code ? 4 : 0) + (a.email ? 2 : 0) + (a.full_name ? 1 : 0);
+        const scoreB = (b.access_code ? 4 : 0) + (b.email ? 2 : 0) + (b.full_name ? 1 : 0);
+        return scoreB - scoreA;
+      })[0];
+    }
+
+    return {
+      sameClassMatch,
+      otherClassMatches,
+      canonicalCandidate
+    };
+  }
 }
 
 export default StudentMatcher;

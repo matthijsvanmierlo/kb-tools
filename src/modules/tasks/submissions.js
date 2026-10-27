@@ -84,12 +84,21 @@ export async function syncTaskSubmissionsToGradebook({ task, submissions = [], c
   for (const sub of submissions) {
     const sid = String(sub.student_id).toUpperCase();
     if (sub.is_latest !== false && sub.review?.reviewed_at && !rosterById.has(sid)) {
+      const { StudentMatcher } = await import('../../core/student-matcher.js');
+      const { AccessCodes } = await import('../../core/access-codes.js');
+      const crossMatch = await StudentMatcher.findExistingStudentAcrossClasses({
+        studentId: sub.student_id,
+        fullName: sub.claimed_name || sub.student_name,
+        currentCourseId: courseId
+      });
+      const generatedCode = sub.access_code || crossMatch.canonicalCandidate?.access_code || AccessCodes.generateCode();
       const newStudent = {
         id: crypto.randomUUID(),
         course_id: courseId,
         student_id: sub.student_id,
-        full_name: sub.claimed_name || sub.student_name || sub.student_id,
-        access_code: sub.access_code || '',
+        full_name: sub.claimed_name || sub.student_name || crossMatch.canonicalCandidate?.full_name || sub.student_id,
+        email: crossMatch.canonicalCandidate?.email || undefined,
+        access_code: generatedCode,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
@@ -483,16 +492,26 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
         toast.warning('No class linked to this assignment.');
         return;
       }
+      const { StudentMatcher } = await import('../../core/student-matcher.js');
+      const { AccessCodes } = await import('../../core/access-codes.js');
+      const crossMatch = await StudentMatcher.findExistingStudentAcrossClasses({
+        studentId: sid,
+        fullName: sname,
+        currentCourseId: courseId
+      });
+      const generatedCode = crossMatch.canonicalCandidate?.access_code || AccessCodes.generateCode();
       const newStudent = {
         id: crypto.randomUUID(),
         course_id: courseId,
         student_id: sid,
-        full_name: sname || sid,
+        full_name: sname || crossMatch.canonicalCandidate?.full_name || sid,
+        email: crossMatch.canonicalCandidate?.email || undefined,
+        access_code: generatedCode,
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
       };
       await storage.table('gradebook_students').put(newStudent);
-      toast.success(`Added ${newStudent.full_name} (${sid}) to class roster!`);
+      toast.success(`Enrolled ${newStudent.full_name} (${sid}) in class roster!`);
       await renderTaskSubmissions(params, router, container);
     });
   });

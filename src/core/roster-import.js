@@ -178,7 +178,7 @@ export function normalizeRows(rows = [], mapping = {}) {
  * @returns {{ add: object[], update: Array<{ existing: object, incoming: object, changes: Array<{ field: string, from: any, to: any }> }>, unchanged: object[], conflicts: Array<{ row: any, reason: string }>, duplicatesInFile: Array<{ student_id: string, row: any }> }}
  */
 export function planMerge(existingStudents = [], incomingRows = [], opts = {}) {
-  const { updateExisting = true, allowAccessCodeOverwrite = false } = opts;
+  const { updateExisting = true, allowAccessCodeOverwrite = false, otherClassStudents = [] } = opts;
 
   const add = [];
   const update = [];
@@ -215,6 +215,13 @@ export function planMerge(existingStudents = [], incomingRows = [], opts = {}) {
 
     const existing = existingMap.get(key);
     if (!existing) {
+      if (!row.access_code && otherClassStudents.length > 0) {
+        const otherMatch = otherClassStudents.find(o => String(o.student_id).trim().toUpperCase() === key);
+        if (otherMatch) {
+          if (otherMatch.access_code) row.access_code = otherMatch.access_code;
+          if (!row.email && otherMatch.email) row.email = otherMatch.email;
+        }
+      }
       add.push(row);
     } else {
       if (!updateExisting) {

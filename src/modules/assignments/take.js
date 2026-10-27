@@ -446,11 +446,14 @@ export async function renderTakeView(params, router, container) {
         state.screen = 'question';
       }
       if (!isPractice && state.student.id && state.student.id !== 'self_study') {
+        const resolvedCourseId = payload.course_id || payload.class_id || payload.course_meta?.course_id || payload.course_meta?.id || null;
+        const resolvedCourseName = payload.course_meta?.course_name || payload.course_meta?.name || payload.course_name || '';
         StudentProfile.saveIdentity({
           studentId: state.student.id,
           fullName: state.student.name,
           accessCode: state.student.code,
-          courseId: payload.class_id,
+          courseId: resolvedCourseId,
+          courseName: resolvedCourseName,
           teacherFingerprint: payload.teacher_key?.fingerprint
         }).catch(() => {});
       }
@@ -847,20 +850,23 @@ export async function renderTakeView(params, router, container) {
       safeStorage.set(receiptKey(), state.result);
       safeStorage.remove(draftKey());
       roamer?.markSubmitted().catch(() => {});
+      const resolvedCourseId = payload.course_id || payload.class_id || payload.course_meta?.course_id || payload.course_meta?.id || null;
+      const resolvedCourseName = payload.course_meta?.course_name || payload.course_meta?.name || payload.course_name || '';
+
       StudentProfile.saveIdentity({
         studentId: state.student.id,
         fullName: state.student.name,
         accessCode: state.student.code,
-        courseId: payload.course_id || payload.course_meta?.course_id || null,
-        courseName: payload.course_meta?.course_name || '',
+        courseId: resolvedCourseId,
+        courseName: resolvedCourseName,
         section: payload.course_meta?.section || '',
         teacherFingerprint: payload.teacher_key?.fingerprint || ''
       }).catch(() => {});
 
       StudentLedger.recordSubmission({
         assignmentId: payload.assignment_id,
-        courseId: payload.course_id || payload.course_meta?.course_id || null,
-        courseName: payload.course_meta?.course_name || '',
+        courseId: resolvedCourseId,
+        courseName: resolvedCourseName,
         title: payload.title,
         dueDate: payload.due_date || null,
         studentId: state.student.id,

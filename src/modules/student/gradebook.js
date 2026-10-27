@@ -11,10 +11,12 @@ import { toast } from '../../utils/toast.js';
 import { StudentProfile } from '../../core/student-profile.js';
 import { StudentLedger } from './ledger.js';
 import { toCSV, downloadCSV, downloadBlob } from '../../core/csv.js';
+import { reconcileStudentCoursesWithProfile } from './course-store.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
 export async function renderStudentGradebookView(params, router, container) {
+  await reconcileStudentCoursesWithProfile();
   const profile = StudentProfile.get();
   let courses = await StudentLedger.getStudentCourses();
   let allEntries = await StudentLedger.getAllLedgerEntries();
@@ -64,7 +66,7 @@ export async function renderStudentGradebookView(params, router, container) {
           <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
             <div class="text-xs font-semibold uppercase tracking-wider text-slate-400">Enrolled Classes</div>
             <div class="text-2xl font-bold text-slate-900">${courses.length}</div>
-            <div class="text-xs text-slate-500">${courses.length ? courses.map(c => esc(c.course_name)).join(', ') : 'No classes joined yet'}</div>
+            <div class="text-xs text-slate-500">${courses.length ? courses.map(c => esc(c.course_name || c.name || 'Class')).join(', ') : 'No classes joined yet'}</div>
           </div>
           <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-1">
             <div class="text-xs font-semibold uppercase tracking-wider text-slate-400">Assignments &amp; Quizzes</div>
@@ -88,7 +90,7 @@ export async function renderStudentGradebookView(params, router, container) {
             </button>
             ${courses.map(c => `
               <button type="button" class="px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${selectedCourseId === c.id ? 'bg-blue-600 text-white shadow-xs' : 'bg-white border border-slate-200 text-slate-600 hover:bg-slate-50'}" data-filter-course="${esc(c.id)}">
-                ${esc(c.course_name)} (${allEntries.filter(e => e.course_id === c.id).length})
+                ${esc(c.course_name || c.name || 'Class')} (${allEntries.filter(e => e.course_id === c.id).length})
               </button>
             `).join('')}
           </div>
@@ -132,7 +134,7 @@ export async function renderStudentGradebookView(params, router, container) {
                         </td>
                         <td class="px-5 py-4 hidden sm:table-cell">
                           <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
-                            ${esc(course?.course_name || 'Class')}
+                            ${esc(course?.course_name || course?.name || 'Class')}
                           </span>
                         </td>
                         <td class="px-5 py-4 text-right tabular-nums">

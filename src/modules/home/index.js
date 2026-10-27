@@ -6,6 +6,7 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { router } from '../../router.js';
 import { toast } from '../../utils/toast.js';
 import { ClassManager } from '../../components/class-manager.js';
+import { ClassSetupWizard } from '../../components/class-setup-wizard.js';
 import { ShareModal } from '../../components/share-dialog.js';
 import { SetupChecklist } from '../../components/setup-checklist.js';
 import { computeHomeStats } from './home-stats.js';
@@ -109,7 +110,9 @@ export async function renderHomeView(params, r, container) {
     SetupChecklist.render(checklistMount, {
       checklistItems: stats.checklistItems,
       onAction: (id, route) => {
-        if (route === '#backup') {
+        if (id === 'create_class') {
+          ClassSetupWizard.open({ onDone: () => renderHomeView(null, router, container) });
+        } else if (route === '#backup') {
           if (metadata.autosync_supported === false) sync.exportManualBackup();
           else window.dispatchEvent(new CustomEvent('kb-open-backup-location'));
         } else if (route === '#recovery-kit') {
@@ -382,7 +385,7 @@ function bindHomeEvents(container, courses, router) {
     if (val === 'new-flashcard') router.navigate('#/flashcards/edit');
     if (val === 'new-timeline') router.navigate('#/timeline/view?new=1');
     if (val === 'new-class') {
-      ClassManager.openClassEditorModal(null, () => renderHomeView(null, router, container));
+      ClassSetupWizard.open({ onDone: () => renderHomeView(null, router, container) });
     }
   });
 
@@ -404,7 +407,7 @@ function bindHomeEvents(container, courses, router) {
   });
 
   container.querySelector('#btn-home-create-first-class')?.addEventListener('click', () => {
-    ClassManager.openClassEditorModal(null, () => renderHomeView(null, router, container));
+    ClassSetupWizard.open({ onDone: () => renderHomeView(null, router, container) });
   });
 
   // Open shared file action (Universal Importer)

@@ -115,12 +115,16 @@ async function loadFeedbackModule(...args) {
  */
 async function bootstrapApp() {
   try {
-    // 0. School IT settings (config.json), before anything that reads them
-    const { loadManagedConfig } = await import('./core/managed-config.js');
-    await loadManagedConfig();
-
-    // 1. Initialize core storage & OPFS
-    await storage.init();
+    // 0. School IT settings, storage, and Shoelace readiness in parallel
+    const [{ loadManagedConfig }, { shoelaceReady }] = await Promise.all([
+      import('./core/managed-config.js'),
+      import('./boot/shoelace-setup.js')
+    ]);
+    await Promise.all([
+      loadManagedConfig(),
+      storage.init(),
+      shoelaceReady
+    ]);
 
     // 2. Initialize sync engine & check 72h backup
     await sync.init();
@@ -220,7 +224,7 @@ async function bootstrapApp() {
     const { ClassManager } = await import('./components/class-manager.js');
     const classContainer = document.getElementById('kb-nav-class-selector');
     if (classContainer) {
-      await ClassManager.renderGlobalNavSelector(classContainer);
+      ClassManager.renderGlobalNavSelector(classContainer).catch(() => {});
       window.addEventListener('kb-class-filter-changed', () => {
         router.handleRoute();
       });
@@ -279,8 +283,6 @@ async function bootstrapApp() {
       if (next === 'student') router.navigate('#/student');
       else router.navigate('#/');
     });
-    WelcomeRoleChooser.checkAndShow(router);
-
     // 6. Initialize Command Palette (Ctrl+K & ?) and Universal Context Bar
     const { CommandPalette } = await import('./components/command-palette.js');
     CommandPalette.init();
@@ -304,6 +306,10 @@ async function bootstrapApp() {
 
     // 8. Execute initial route
     await router.handleRoute();
+
+    // 9. Startup coordinator: First-run role chooser & route preloading
+    await WelcomeRoleChooser.checkAndShow(router);
+    router.preloadPrimaryRoutes(RoleMode.get());
 
     // 9. Sync unreviewed submissions badge in navigation
     const syncInboxBadge = async () => {

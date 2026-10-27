@@ -55,7 +55,7 @@ export async function renderStudentCourseDetailView(params, router, container) {
             <div class="w-3.5 h-12 rounded-lg flex-shrink-0 shadow-xs" style="background-color: ${color};"></div>
             <div class="min-w-0">
               <div class="flex items-center gap-2">
-                <h1 class="text-xl sm:text-2xl font-bold text-slate-900 truncate">${esc(course.name)}</h1>
+                <h1 class="text-xl sm:text-2xl font-bold text-slate-900 truncate">${esc(course.name || course.course_name || 'Enrolled Course')}</h1>
                 ${course.section ? `<span class="px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 text-slate-700">${esc(course.section)}</span>` : ''}
               </div>
               <p class="text-xs text-slate-500 mt-0.5 flex items-center gap-2">

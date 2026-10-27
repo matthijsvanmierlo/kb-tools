@@ -225,11 +225,11 @@ export class Router {
     }
     this._setProgress(true);
 
-    // Dialogs and drawers live on <body>, outside the view; close them when leaving the view.
+    // Dialogs and drawers live on <body>, outside the view; close transient ones when leaving a previous view.
     // Also revoke in-memory object URLs created for decrypted CDN media blobs.
     if (isNewView) {
-      if (typeof document !== 'undefined') {
-        document.querySelectorAll('body > sl-dialog, body > sl-drawer').forEach(el => el.remove());
+      if (typeof document !== 'undefined' && this._lastViewKey !== null) {
+        document.querySelectorAll('body > sl-dialog:not([data-persist-route="true"]), body > sl-drawer:not([data-persist-route="true"])').forEach(el => el.remove());
       }
       try {
         storage.revokeAllObjectURLs();
@@ -570,7 +570,8 @@ export class Router {
 
     try {
       const itemId = payload?.task_id || payload?.assignment_id || payload?.id || (typeof crypto !== 'undefined' ? crypto.randomUUID() : 'shared-item');
-      const courseId = payload?.course_id || payload?.course_meta?.course_id || null;
+      const courseId = payload?.course_id || payload?.class_id || payload?.course_meta?.course_id || payload?.course_meta?.id || null;
+      const courseName = payload?.course_meta?.name || payload?.course_meta?.course_name || payload?.course_name || '';
       const dueDate = payload?.due_date || payload?.settings?.due_date || null;
       storage.table('student_items').put({
         id: `${courseId || 'general'}_${itemId}`,
@@ -582,6 +583,18 @@ export class Router {
         due_date: dueDate,
         updated_at: new Date().toISOString()
       }).catch(() => {});
+
+      if (courseId) {
+        import('./modules/student/course-store.js').then(({ upsertStudentCourse }) => {
+          upsertStudentCourse({
+            id: courseId,
+            name: courseName || 'Shared Course',
+            course_name: courseName || 'Shared Course',
+            section: payload?.course_meta?.section || '',
+            access_code: payload?.course_meta?.access_code || ''
+          }).catch(() => {});
+        }).catch(() => {});
+      }
     } catch (_) {}
 
     const isStudent = type === 'assignment' || type === 'task' || (type === 'video' && payload?.secure) || type === 'student_grade_report' || type === 'assignment_feedback' || type === 'task_feedback';
@@ -789,6 +802,31 @@ export class Router {
     }
 
     this.navigate('#/');
+  }
+
+  /**
+   * Preload primary views on idle after initial render to ensure instant tab switching
+   * @param {'teacher'|'student'} [role='teacher']
+   */
+  preloadPrimaryRoutes(role = 'teacher') {
+    const run = () => {
+      if (role === 'student') {
+        import('./modules/student/index.js').catch(() => {});
+        import('./modules/student/courses.js').catch(() => {});
+        import('./modules/student/gradebook.js').catch(() => {});
+      } else {
+        import('./modules/home/index.js').catch(() => {});
+        import('./modules/classes/index.js').catch(() => {});
+        import('./modules/course/index.js').catch(() => {});
+        import('./modules/gradebook/index.js').catch(() => {});
+        import('./modules/inbox/index.js').catch(() => {});
+      }
+    };
+    if (typeof window !== 'undefined' && 'requestIdleCallback' in window) {
+      window.requestIdleCallback(run, { timeout: 1500 });
+    } else if (typeof setTimeout !== 'undefined') {
+      setTimeout(run, 400);
+    }
   }
 }
 

@@ -2,16 +2,17 @@ import { storage } from '../../core/storage.js';
 import { Sanitizer } from '../../core/sanitizer.js';
 import { toast } from '../../utils/toast.js';
 import { PromptDialog } from '../../utils/dialogs.js';
-import { getStudentCourses } from './course-store.js';
 import { exportStudentSession, importStudentSession } from './session-portability.js';
 import { getTransport, PublicFeedTransport, getStudentRelayUrl } from '../../core/transport.js';
 import { deriveCourseFeedId } from '../../core/course-feed.js';
-import { mergeCourseFeed } from './course-store.js';
+import { mergeCourseFeed, getStudentCourses, reconcileStudentCoursesWithProfile, joinCourseByCode } from './course-store.js';
 
 const esc = (v) => Sanitizer.escapeHTML(v ?? '');
 
 export async function renderStudentCoursesView(params, router, container) {
   let doEnrollWithCode = null;
+
+  await reconcileStudentCoursesWithProfile();
 
   const render = async () => {
     const courses = await getStudentCourses();
@@ -71,7 +72,7 @@ export async function renderStudentCoursesView(params, router, container) {
                   <div class="flex items-center gap-3">
                     <div class="w-3.5 h-10 rounded-full flex-shrink-0" style="background-color: ${color};"></div>
                     <div class="min-w-0 flex-1">
-                      <h3 class="text-base font-bold text-slate-900 truncate">${esc(c.name)}</h3>
+                      <h3 class="text-base font-bold text-slate-900 truncate">${esc(c.name || c.course_name || 'Enrolled Course')}</h3>
                       <div class="text-xs text-slate-500 truncate">
                         ${c.section ? `<span>${esc(c.section)}</span> • ` : ''}
                         <span>${esc(c.academic_year || 'Current')}</span>
@@ -201,6 +202,18 @@ export async function renderStudentCoursesView(params, router, container) {
           router.navigate(`#/student/course?id=${encodeURIComponent(localCourse.id)}`);
         }
       } else {
+        try {
+          const res = await joinCourseByCode(code, relayUrl);
+          if (res) {
+            toast.success('Joined class!');
+            await render();
+            const targetId = res.course?.id || res.id;
+            if (router?.navigate && targetId) {
+              router.navigate(`#/student/course?id=${encodeURIComponent(targetId)}`);
+            }
+            return;
+          }
+        } catch (_) {}
         toast.warning(`Could not find a course matching code "${normalizedCode}". Make sure you typed it correctly or ask your teacher for the link.`);
       }
     };
@@ -250,8 +263,12 @@ export async function renderStudentCoursesView(params, router, container) {
 
   await render();
 
-  if (params?.code) {
-    await doEnrollWithCode(params.code, params.relay);
+  const hashSearch = typeof window !== 'undefined' ? new URLSearchParams(window.location.hash.split('?')[1] || '') : new URLSearchParams();
+  const joinCode = params?.code || params?.join || hashSearch.get('code') || hashSearch.get('join');
+  const relayUrl = params?.relay || hashSearch.get('relay');
+
+  if (joinCode && doEnrollWithCode) {
+    await doEnrollWithCode(joinCode, relayUrl);
   }
 }
 

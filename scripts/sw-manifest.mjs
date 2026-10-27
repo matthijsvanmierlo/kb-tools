@@ -37,9 +37,14 @@ export function collectPrecacheAssets() {
     'vendor/katex/katex.min.css',
     'vendor/katex/contrib/mhchem.min.js',
     ...walk('vendor/katex/fonts', f => f.endsWith('.woff2')),
+    'vendor/shoelace/utilities/base-path.js',
     'vendor/shoelace/shoelace-autoloader.js',
     'vendor/shoelace/themes/light.css',
-    'vendor/shoelace/themes/dark.css'
+    'vendor/shoelace/themes/dark.css',
+    ...[
+      'dialog', 'drawer', 'alert', 'button', 'icon', 'input', 'select', 'option',
+      'dropdown', 'menu', 'menu-item', 'tab-group', 'tab', 'tab-panel', 'badge', 'tooltip'
+    ].map(name => `vendor/shoelace/components/${name}/${name}.js`)
   ].filter(f => fs.existsSync(path.join(root, f)));
   return [...new Set(files)].sort();
 }

@@ -1137,6 +1137,13 @@ async function openShareCoursePackageDialog(course) {
   const { showQrSequence } = await import('../../components/qr-handoff.js');
   const { buildCourseFeed } = await import('../../core/course-feed.js');
 
+  // Ensure course has a valid access_code
+  if (!course.access_code) {
+    const { AccessCodes } = await import('../../core/access-codes.js');
+    course.access_code = AccessCodes.generateCode(6);
+    await storage.table('gradebook_courses').put(course);
+  }
+
   toast.info('Preparing course package...', 1500);
   let sharePayload = null;
   const transport = await getTransport();

@@ -361,9 +361,10 @@ export async function renderClassesView(params, router, container) {
     container.querySelector('#btn-create-class')?.addEventListener('click', () => {
       ClassSetupWizard.open({
         onDone: async (newId) => {
-          if (newId) {
-            activeCourseId = newId;
-            ClassManager.setActiveFilter(newId);
+          const resolvedId = typeof newId === 'object' ? newId?.id : newId;
+          if (resolvedId) {
+            activeCourseId = resolvedId;
+            ClassManager.setActiveFilter(resolvedId);
           }
           await render();
         }
@@ -373,9 +374,10 @@ export async function renderClassesView(params, router, container) {
     container.querySelector('#btn-create-first-class')?.addEventListener('click', () => {
       ClassSetupWizard.open({
         onDone: async (newId) => {
-          if (newId) {
-            activeCourseId = newId;
-            ClassManager.setActiveFilter(newId);
+          const resolvedId = typeof newId === 'object' ? newId?.id : newId;
+          if (resolvedId) {
+            activeCourseId = resolvedId;
+            ClassManager.setActiveFilter(resolvedId);
           }
           await render();
         }

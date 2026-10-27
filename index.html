@@ -16,6 +16,16 @@
   <!-- Theme before first paint + file:// guard (external so the CSP needs no inline scripts) -->
   <script src="src/boot/preboot.js"></script>
 
+  <!-- Module preloads for fast boot and navigation -->
+  <link rel="modulepreload" href="src/boot/shoelace-setup.js">
+  <link rel="modulepreload" href="src/main.js">
+  <link rel="modulepreload" href="src/router.js">
+  <link rel="modulepreload" href="src/core/storage.js">
+  <link rel="modulepreload" href="src/state/store.js">
+  <link rel="modulepreload" href="src/state/role-mode.js">
+  <link rel="modulepreload" href="src/components/app-nav.js">
+  <link rel="modulepreload" href="src/components/context-bar.js">
+
   <!--
     Native ESM import map (MUST precede any module script per HTML spec).
     Every dependency is self-hosted under vendor/ (npm run vendor). The SHA-256 of this exact
@@ -230,7 +240,16 @@
 
   <!-- Main Dynamic SPA View Container -->
   <main id="app-view-container" class="kb-main" role="main" tabindex="-1">
-    <!-- Rendered dynamically by Router -->
+    <!-- Initial lightweight app shell skeleton (replaced by Router) -->
+    <div class="max-w-6xl mx-auto px-4 py-8 space-y-6 animate-pulse" aria-hidden="true">
+      <div class="h-8 bg-slate-200/80 rounded-xl w-48"></div>
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="h-32 bg-slate-100 rounded-2xl border border-slate-200/60"></div>
+        <div class="h-32 bg-slate-100 rounded-2xl border border-slate-200/60"></div>
+        <div class="h-32 bg-slate-100 rounded-2xl border border-slate-200/60"></div>
+      </div>
+      <div class="h-64 bg-slate-100 rounded-2xl border border-slate-200/60"></div>
+    </div>
   </main>
 
   <!-- Global Application Footer -->

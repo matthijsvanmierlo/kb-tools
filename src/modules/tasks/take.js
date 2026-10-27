@@ -1079,6 +1079,33 @@ export async function renderTaskTake(params = {}, router = null, container = nul
       };
     };
 
+    const resolvedCourseId = payload.course_id || payload.class_id || payload.course_meta?.course_id || payload.course_meta?.id || null;
+    const resolvedCourseName = payload.course_meta?.course_name || payload.course_meta?.name || payload.course_name || '';
+
+    const recordSuccess = async (subId, envelopeText, submittedAt) => {
+      StudentProfile.saveIdentity({
+        studentId: state.student.id,
+        fullName: state.student.name,
+        accessCode: state.student.code,
+        courseId: resolvedCourseId,
+        courseName: resolvedCourseName,
+        section: payload.course_meta?.section || '',
+        teacherFingerprint: payload.teacher_key?.fingerprint || ''
+      }).catch(() => {});
+
+      await StudentLedger.recordSubmission({
+        assignmentId: payload.task_id,
+        courseId: resolvedCourseId,
+        courseName: resolvedCourseName,
+        title: payload.title,
+        studentId: state.student.id,
+        studentName: state.student.name,
+        receiptId: subId,
+        submissionText: envelopeText,
+        submittedAt
+      });
+    };
+
     const relayBtn = dialog.querySelector('#btn-submit-relay');
     if (relayBtn) {
       relayBtn.addEventListener('click', async () => {
@@ -1100,18 +1127,8 @@ export async function renderTaskTake(params = {}, router = null, container = nul
             submission.id = res.receiptId;
           }
 
-          // Record in Student Ledger
-          await StudentLedger.recordSubmission({
-            assignmentId: payload.task_id,
-            courseId: payload.course_id,
-            courseName: payload.course_meta?.course_name || '',
-            title: payload.title,
-            studentId: state.student.id,
-            studentName: state.student.name,
-            receiptId: submission.id,
-            submissionText: envelopeText,
-            submittedAt: submission.submitted_at
-          });
+          // Record in Student Ledger & Keychain
+          await recordSuccess(submission.id, envelopeText, submission.submitted_at);
 
           dialog.hide();
           state.submittedReceipt = submission;
@@ -1145,17 +1162,7 @@ export async function renderTaskTake(params = {}, router = null, container = nul
         a.click();
         URL.revokeObjectURL(a.href);
 
-        await StudentLedger.recordSubmission({
-          assignmentId: payload.task_id,
-          courseId: payload.course_id,
-          courseName: payload.course_meta?.course_name || '',
-          title: payload.title,
-          studentId: state.student.id,
-          studentName: state.student.name,
-          receiptId: submission.id,
-          submissionText: envelopeText,
-          submittedAt: submission.submitted_at
-        });
+        await recordSuccess(submission.id, envelopeText, submission.submitted_at);
 
         dialog.hide();
         state.submittedReceipt = submission;
@@ -1188,17 +1195,7 @@ export async function renderTaskTake(params = {}, router = null, container = nul
           shareUrl: ''
         }, filename);
 
-        await StudentLedger.recordSubmission({
-          assignmentId: payload.task_id,
-          courseId: payload.course_id,
-          courseName: payload.course_meta?.course_name || '',
-          title: payload.title,
-          studentId: state.student.id,
-          studentName: state.student.name,
-          receiptId: submission.id,
-          submissionText: envelopeText,
-          submittedAt: submission.submitted_at
-        });
+        await recordSuccess(submission.id, envelopeText, submission.submitted_at);
 
         dialog.hide();
         state.submittedReceipt = submission;

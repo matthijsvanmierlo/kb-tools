@@ -37,6 +37,7 @@ export class StudentLedger {
       course = {
         id: courseId,
         course_id: courseId,
+        name: courseName,
         course_name: courseName,
         section,
         teacher_fingerprint: feedbackPayload.teacher_fingerprint || '',
@@ -45,7 +46,8 @@ export class StudentLedger {
       };
       await storage.table('student_courses').put(course);
     } else {
-      if (courseName && course.course_name !== courseName) {
+      if (courseName && (course.course_name !== courseName || !course.name)) {
+        course.name = courseName;
         course.course_name = courseName;
         course.updated_at = now;
         await storage.table('student_courses').put(course);
@@ -165,11 +167,15 @@ export class StudentLedger {
       course = {
         id: courseId,
         course_id: courseId,
+        name: courseName,
         course_name: courseName,
         section,
         created_at: now,
         updated_at: now
       };
+      await storage.table('student_courses').put(course);
+    } else if (!course.name && course.course_name) {
+      course.name = course.course_name;
       await storage.table('student_courses').put(course);
     }
 
@@ -288,10 +294,14 @@ export class StudentLedger {
       course = {
         id: courseId,
         course_id: courseId,
+        name: courseName,
         course_name: courseName,
         section: reportPayload.course?.section || '',
         updated_at: now
       };
+      await storage.table('student_courses').put(course);
+    } else if (!course.name && course.course_name) {
+      course.name = course.course_name;
       await storage.table('student_courses').put(course);
     }
 
@@ -384,14 +394,30 @@ export class StudentLedger {
   }) {
     const cId = courseId || 'self_study';
     let course = await storage.table('student_courses').get(cId).catch(() => null);
+    const resolvedName = courseName || (cId === 'self_study' ? 'Self Study' : 'My Course');
     if (!course) {
       course = {
         id: cId,
         course_id: cId,
-        course_name: courseName || 'My Course',
+        name: resolvedName,
+        course_name: resolvedName,
         updated_at: submittedAt
       };
       await storage.table('student_courses').put(course);
+    } else {
+      let changed = false;
+      if (courseName && course.course_name !== courseName) {
+        course.course_name = courseName;
+        course.name = courseName;
+        changed = true;
+      } else if (!course.name && course.course_name) {
+        course.name = course.course_name;
+        changed = true;
+      }
+      if (changed) {
+        course.updated_at = submittedAt;
+        await storage.table('student_courses').put(course);
+      }
     }
 
     const existingArr = await storage.table('student_ledger')
