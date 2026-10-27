@@ -53,7 +53,7 @@ export class ConfirmDialog {
       const cleanup = (result) => {
         if (resolved) return;
         resolved = true;
-        dialog.hide();
+        dialog.hide?.();
         setTimeout(() => dialog.remove(), 200);
         resolve(result);
       };
@@ -63,10 +63,16 @@ export class ConfirmDialog {
 
       confirmBtn?.addEventListener('click', () => cleanup(true));
       cancelBtn?.addEventListener('click', () => cleanup(false));
-      dialog.addEventListener('sl-request-close', () => cleanup(false));
-      dialog.addEventListener('sl-after-hide', () => cleanup(false));
+      dialog.addEventListener('sl-request-close', (e) => {
+        if (e.target !== dialog) return;
+        cleanup(false);
+      });
+      dialog.addEventListener('sl-after-hide', (e) => {
+        if (e.target !== dialog) return;
+        cleanup(false);
+      });
 
-      dialog.show();
+      dialog.show?.();
       setTimeout(() => confirmBtn?.focus(), 50);
     });
   }
@@ -128,7 +134,7 @@ export class PromptDialog {
       const cleanup = (result) => {
         if (resolved) return;
         resolved = true;
-        dialog.hide();
+        dialog.hide?.();
         setTimeout(() => dialog.remove(), 200);
         resolve(result);
       };
@@ -144,10 +150,16 @@ export class PromptDialog {
           cleanup(input.value);
         }
       });
-      dialog.addEventListener('sl-request-close', () => cleanup(null));
-      dialog.addEventListener('sl-after-hide', () => cleanup(null));
+      dialog.addEventListener('sl-request-close', (e) => {
+        if (e.target !== dialog) return;
+        cleanup(null);
+      });
+      dialog.addEventListener('sl-after-hide', (e) => {
+        if (e.target !== dialog) return;
+        cleanup(null);
+      });
 
-      dialog.show();
+      dialog.show?.();
       setTimeout(() => {
         input?.focus();
         if (input) input.select();

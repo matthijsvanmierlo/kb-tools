@@ -259,16 +259,49 @@ export async function upsertStudentCourse(courseMeta) {
 }
 
 /**
- * Join course by 6-character access code or course ID
+ * Join course by access code or course ID with automatic local, relay, and fallback resolution.
  */
-export async function joinCourseByCode(code, relayUrl = null) {
+export async function joinCourseByCode(code, opts = {}) {
   if (!code || typeof code !== 'string') throw new Error('Course code is required');
+  const relayUrl = typeof opts === 'string' ? opts : (opts.relayUrl || null);
+  const courseName = typeof opts === 'object' ? (opts.courseName || opts.name || '') : '';
+  const section = typeof opts === 'object' ? (opts.section || '') : '';
+  const color = typeof opts === 'object' ? (opts.color || '#2563eb') : '#2563eb';
+  const customId = typeof opts === 'object' ? (opts.courseId || opts.id || null) : null;
+  const embeddedFeed = typeof opts === 'object' ? (opts.embeddedFeed || opts.feed || null) : null;
+
   const cleanCode = code.trim().toUpperCase();
+  const normalizedCode = cleanCode.replace(/[^A-Z0-9]/g, '');
+
+  // 0. If embedded feed is provided in opts, merge directly
+  if (embeddedFeed) {
+    try {
+      return await mergeCourseFeed(embeddedFeed, { accessCode: cleanCode, relayUrl });
+    } catch (e) {
+      console.warn('Failed to merge provided embeddedFeed:', e);
+    }
+  }
 
   // 1. First, check if there's a matching course in local gradebook_courses (same device / kiosk / demo / local server)
   try {
     const localCourses = await storage.table('gradebook_courses').toArray().catch(() => []);
-    const localMatch = localCourses.find(c => (c.access_code && c.access_code.trim().toUpperCase() === cleanCode) || c.id === code.trim());
+    let localMatch = localCourses.find(c => {
+      const cNorm = (c.access_code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+      return (cNorm && (cNorm === normalizedCode || cNorm === cleanCode)) || c.id === code.trim();
+    });
+
+    if (!localMatch) {
+      // Check if code belongs to a student seat in gradebook_students
+      const localStudents = await storage.table('gradebook_students').toArray().catch(() => []);
+      const matchedStudent = localStudents.find(s => {
+        const sNorm = (s.access_code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+        return sNorm && (sNorm === normalizedCode || sNorm === cleanCode);
+      });
+      if (matchedStudent) {
+        localMatch = localCourses.find(c => c.id === matchedStudent.course_id);
+      }
+    }
+
     if (localMatch) {
       const { buildCourseFeed } = await import('../../core/course-feed.js');
       const feed = await buildCourseFeed(localMatch.id, { relayUrl: relayUrl || localMatch.relay_url || null });
@@ -287,19 +320,25 @@ export async function joinCourseByCode(code, relayUrl = null) {
     if (effectiveBaseUrl) {
       const feedTransport = new PublicFeedTransport({ baseUrl: effectiveBaseUrl, token: transport?.token || null });
       const feedId = await deriveCourseFeedId(cleanCode);
-      const res = await feedTransport.getCourseFeed(feedId);
-      if (res && res.feed) {
-        return await mergeCourseFeed(res.feed, { accessCode: cleanCode, etag: res.etag, relayUrl: effectiveBaseUrl });
+      const res = await feedTransport.fetchCourseFeed(feedId);
+      if (res && res.ciphertext) {
+        return await mergeCourseFeed(res.ciphertext, { accessCode: cleanCode, etag: res.etag, relayUrl: effectiveBaseUrl });
       }
     }
   } catch (err) {
     console.warn('Remote feed lookup by access code failed:', err);
   }
 
-  // 3. Fallback: create placeholder enrolled course so class appears immediately in student hub & keychain
+  // 3. Fallback: create enrolled course using real metadata if supplied, so class appears immediately in student hub & keychain
+  const displayName = courseName || `Course (${cleanCode})`;
+  const targetId = customId || ('course_' + (normalizedCode || cleanCode).toLowerCase());
   return await upsertStudentCourse({
-    id: 'course_' + cleanCode.toLowerCase(),
-    name: `Course (${cleanCode})`,
+    id: targetId,
+    course_id: targetId,
+    name: displayName,
+    course_name: displayName,
+    section: section,
+    color: color,
     access_code: cleanCode,
     relay_url: relayUrl || null
   });

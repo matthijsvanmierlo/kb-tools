@@ -621,7 +621,10 @@ export function openMergeDuplicatesModal(course, students = [], onMerged) {
   dialog.show();
 
   dialog.querySelector('#btn-merge-cancel')?.addEventListener('click', () => dialog.hide());
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 
   const executeMerge = async (primaryStudent, duplicateStudent) => {
     if (primaryStudent.id === duplicateStudent.id) {

@@ -527,6 +527,9 @@ export function openEventDetailDialog(ev, onUpdated) {
     if (onUpdated) onUpdated();
   });
 
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
   return dialog;
 }

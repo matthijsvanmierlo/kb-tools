@@ -50,13 +50,49 @@ export async function renderCoursePage(courseId, container) {
   }
 
   const render = async () => {
-    const [units, items] = await Promise.all([
+    // Auto-reconcile class assignments/content into course_items
+    try {
+      await GradebookBridge.reconcileCourseItemsForClass(courseId);
+    } catch (_) {}
+
+    const [units, items, allTasks, allAssignments, allDecks, allTimelines, allVideos] = await Promise.all([
       storage.table('course_units').where('course_id').equals(courseId).toArray().catch(() => []),
-      storage.table('course_items').where('course_id').equals(courseId).toArray().catch(() => [])
+      storage.table('course_items').where('course_id').equals(courseId).toArray().catch(() => []),
+      storage.table('tasks').toArray().catch(() => []),
+      storage.table('assignments').toArray().catch(() => []),
+      storage.table('flashcards').toArray().catch(() => []),
+      storage.table('timelines').toArray().catch(() => []),
+      storage.table('video_assessments').toArray().catch(() => [])
     ]);
 
     units.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     items.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+
+    const getItemStatus = (it) => {
+      const kind = it.kind || it.type || 'assignment';
+      const sourceId = it.source_id || it.id;
+      const isHidden = it.hidden === true;
+      let sourceRecord = null;
+      if (kind === 'assignment') sourceRecord = allAssignments.find(a => a.id === sourceId);
+      else if (kind === 'task') sourceRecord = allTasks.find(t => t.id === sourceId);
+      else if (kind === 'flashcards') sourceRecord = allDecks.find(d => d.id === sourceId);
+      else if (kind === 'timeline') sourceRecord = allTimelines.find(t => t.id === sourceId);
+      else if (kind === 'video') sourceRecord = allVideos.find(v => v.id === sourceId);
+
+      const isPub = !isHidden && it.published !== false && (
+        (kind === 'assignment' || kind === 'task') ? Boolean(sourceRecord?.publish?.version) : true
+      );
+      const hasEdits = isPub && sourceRecord?.updated_at && sourceRecord?.publish?.published_at &&
+        (new Date(sourceRecord.updated_at) > new Date(sourceRecord.publish.published_at));
+
+      return { kind, sourceId, sourceRecord, isHidden, isPub, hasEdits };
+    };
+
+    const draftItems = items.filter(it => {
+      const s = getItemStatus(it);
+      return !s.isPub || s.isHidden;
+    });
+    const totalDrafts = draftItems.length;
 
     const dirty = await isFeedDirty(courseId).catch(() => false);
     const color = Sanitizer.safeColor(course.color, '#2563eb');
@@ -83,13 +119,19 @@ export async function renderCoursePage(courseId, container) {
                     <span>${units.length} Folder${units.length === 1 ? '' : 's'}</span>
                     <span>•</span>
                     <span>${items.length} Item${items.length === 1 ? '' : 's'}</span>
-                    ${dirty ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800">Unpublished Changes</span>' : '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800">Feed In Sync</span>'}
+                    ${totalDrafts > 0 ? `<span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800">${totalDrafts} Draft / Unpublished</span>` : '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-100 text-emerald-800">All Published</span>'}
+                    ${dirty ? '<span class="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-blue-100 text-blue-800">Unshared Edits</span>' : ''}
                   </div>
                 </div>
               </div>
 
               <!-- Action Buttons -->
               <div class="flex items-center gap-2 flex-wrap">
+                ${totalDrafts > 0 ? `
+                  <sl-button size="small" variant="success" id="btn-publish-all-drafts" title="Publish all draft and unpublished items so students can access them">
+                    <sl-icon slot="prefix" name="check2-all"></sl-icon> Quick Publish All (${totalDrafts})
+                  </sl-button>
+                ` : ''}
                 <sl-button size="small" variant="default" id="btn-course-share-card">
                   <sl-icon slot="prefix" name="qr-code"></sl-icon> Student Card
                 </sl-button>
@@ -99,7 +141,7 @@ export async function renderCoursePage(courseId, container) {
                 <sl-button size="small" variant="default" href="#/gradebook?courseId=${esc(course.id)}">
                   <sl-icon slot="prefix" name="journal-bookmark"></sl-icon> Gradebook
                 </sl-button>
-                <sl-button size="small" variant="${dirty ? 'primary' : 'default'}" id="btn-publish-feed">
+                <sl-button size="small" variant="${dirty || totalDrafts > 0 ? 'primary' : 'default'}" id="btn-publish-feed">
                   <sl-icon slot="prefix" name="${hasRelay ? 'cloud-upload' : 'box-arrow-up'}"></sl-icon> ${hasRelay ? 'Publish Feed to Server' : 'Package Course (.kbshare)'}
                 </sl-button>
               </div>
@@ -134,6 +176,10 @@ export async function renderCoursePage(courseId, container) {
               </div>
             ` : units.map((u, uIdx) => {
               const unitItems = items.filter(it => it.unit_id === u.id);
+              const unitDraftCount = unitItems.filter(it => {
+                const s = getItemStatus(it);
+                return !s.isPub || s.isHidden;
+              }).length;
               const isCollapsed = collapsedUnits.has(u.id);
               const uColor = u.color ? Sanitizer.safeColor(u.color) : UNIT_PALETTE[uIdx % UNIT_PALETTE.length].hex;
 
@@ -157,6 +203,12 @@ export async function renderCoursePage(courseId, container) {
                     <div class="flex items-center gap-1.5 flex-shrink-0">
                       <span class="text-xs text-slate-400 font-medium hidden sm:inline mr-1">${unitItems.length} item${unitItems.length === 1 ? '' : 's'}</span>
 
+                      ${unitDraftCount > 0 ? `
+                        <sl-button size="small" variant="text" class="btn-publish-unit text-emerald-600 hover:text-emerald-700 font-semibold text-xs" data-unit-id="${esc(u.id)}" title="Publish all draft items in this folder">
+                          <sl-icon slot="prefix" name="check2-all"></sl-icon> Publish Folder (${unitDraftCount})
+                        </sl-button>
+                      ` : ''}
+
                       <sl-button size="small" variant="default" class="btn-add-item-to-unit" data-unit-id="${esc(u.id)}">
                         <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add / Create Item
                       </sl-button>
@@ -166,6 +218,13 @@ export async function renderCoursePage(courseId, container) {
                           <sl-icon name="three-dots-vertical"></sl-icon>
                         </button>
                         <sl-menu>
+                          <sl-menu-item class="menu-publish-all-unit" data-unit-id="${esc(u.id)}">
+                            <sl-icon slot="prefix" name="check2-all"></sl-icon> Publish All in Folder
+                          </sl-menu-item>
+                          <sl-menu-item class="menu-hide-all-unit" data-unit-id="${esc(u.id)}">
+                            <sl-icon slot="prefix" name="eye-slash"></sl-icon> Hide All in Folder
+                          </sl-menu-item>
+                          <sl-divider></sl-divider>
                           <sl-menu-item class="menu-edit-unit" data-unit-id="${esc(u.id)}">
                             <sl-icon slot="prefix" name="pencil"></sl-icon> Edit Folder / Color...
                           </sl-menu-item>
@@ -197,8 +256,9 @@ export async function renderCoursePage(courseId, container) {
                         <p class="text-[11px] text-slate-400 mt-0.5">Drag items here or click "+ Add / Create Item".</p>
                       </div>
                     ` : unitItems.map((it, itIdx) => {
-                      const kind = it.kind || it.type || 'assignment';
-                      const sourceId = it.source_id || it.id;
+                      const status = getItemStatus(it);
+                      const kind = status.kind;
+                      const sourceId = status.sourceId;
                       const icons = {
                         task: 'journal-text text-indigo-600',
                         assignment: 'file-earmark-check text-blue-600',
@@ -210,16 +270,34 @@ export async function renderCoursePage(courseId, container) {
                       const iconClass = icons[kind] || 'file-earmark text-slate-500';
 
                       return `
-                        <div class="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50/80 transition-colors gap-3 item-row" draggable="true" data-item-id="${esc(it.id)}" data-unit-id="${esc(u.id)}" data-item-index="${itIdx}">
+                        <div class="flex items-center justify-between p-2.5 rounded-xl hover:bg-slate-50/80 transition-colors gap-3 item-row ${status.isHidden ? 'opacity-70 bg-slate-50/50 border border-dashed border-slate-200' : ''}" draggable="true" data-item-id="${esc(it.id)}" data-unit-id="${esc(u.id)}" data-item-index="${itIdx}">
                           <div class="flex items-center gap-2.5 min-w-0 flex-1">
                             <span class="cursor-grab text-slate-300 hover:text-slate-600 item-drag-handle flex-shrink-0" title="Drag to reorder or move across folders">
                               <sl-icon name="grip-vertical" class="text-sm"></sl-icon>
                             </span>
                             <sl-icon name="${iconClass.split(' ')[0]}" class="text-base flex-shrink-0 ${iconClass.split(' ')[1] || ''}"></sl-icon>
                             <div class="min-w-0 flex-1">
-                              <div class="flex items-center gap-2">
+                              <div class="flex items-center gap-2 flex-wrap">
                                 <span class="text-xs font-semibold text-slate-900 truncate">${esc(it.title)}</span>
                                 <span class="text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.2 rounded bg-slate-100 text-slate-600">${esc(kind)}</span>
+                                ${status.isHidden ? `
+                                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-slate-100 text-slate-600 border border-slate-300" title="Hidden from students in the course feed">
+                                    <sl-icon name="eye-slash" class="text-xs text-slate-500"></sl-icon> Hidden
+                                  </span>
+                                ` : (status.isPub ? `
+                                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200" title="Published and visible to students">
+                                    <sl-icon name="check-circle" class="text-xs text-emerald-500"></sl-icon> Published
+                                  </span>
+                                  ${status.hasEdits ? `
+                                    <span class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 cursor-pointer btn-quick-publish" data-item-id="${esc(it.id)}" data-kind="${esc(kind)}" data-source-id="${esc(sourceId)}" title="Item edited since last publish. Click to update published feed!">
+                                      <sl-icon name="exclamation-circle" class="text-xs text-amber-500"></sl-icon> Unshared edits
+                                    </span>
+                                  ` : ''}
+                                ` : `
+                                  <span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-50 text-amber-700 border border-amber-200 cursor-pointer btn-quick-publish" data-item-id="${esc(it.id)}" data-kind="${esc(kind)}" data-source-id="${esc(sourceId)}" title="Draft (not visible to students). Click to publish!">
+                                    <sl-icon name="pencil-square" class="text-xs text-amber-500"></sl-icon> Draft
+                                  </span>
+                                `)}
                               </div>
                               <div class="flex items-center gap-2 text-[11px] text-slate-500 mt-0.5">
                                 ${it.due_date ? `
@@ -234,6 +312,21 @@ export async function renderCoursePage(courseId, container) {
                           </div>
 
                           <div class="flex items-center gap-1 flex-shrink-0">
+                            <!-- 1-Click Quick Publish / Unpublish Toggle -->
+                            ${!status.isPub || status.isHidden ? `
+                              <sl-tooltip content="Quick Publish this item so students can access it">
+                                <sl-button size="small" variant="success" class="btn-quick-publish font-medium" data-item-id="${esc(it.id)}" data-kind="${esc(kind)}" data-source-id="${esc(sourceId)}">
+                                  <sl-icon slot="prefix" name="upload"></sl-icon> Publish
+                                </sl-button>
+                              </sl-tooltip>
+                            ` : `
+                              <sl-tooltip content="Unpublish / Hide item from students">
+                                <sl-button size="small" variant="text" class="btn-quick-unpublish text-slate-400 hover:text-slate-600" data-item-id="${esc(it.id)}">
+                                  <sl-icon name="eye-slash" class="text-sm"></sl-icon>
+                                </sl-button>
+                              </sl-tooltip>
+                            `}
+
                             <!-- Direct Edit / Open Button -->
                             <sl-tooltip content="Open / Edit Content">
                               <sl-button size="small" variant="text" class="btn-open-editor" data-kind="${esc(kind)}" data-source-id="${esc(sourceId)}">
@@ -272,6 +365,9 @@ export async function renderCoursePage(courseId, container) {
                                 <sl-icon name="three-dots-vertical"></sl-icon>
                               </button>
                               <sl-menu>
+                                <sl-menu-item class="btn-toggle-item-visibility" data-item-id="${esc(it.id)}" data-action="${status.isPub && !status.isHidden ? 'hide' : 'publish'}" data-kind="${esc(kind)}" data-source-id="${esc(sourceId)}">
+                                  <sl-icon slot="prefix" name="${status.isPub && !status.isHidden ? 'eye-slash' : 'check-circle'}"></sl-icon> ${status.isPub && !status.isHidden ? 'Hide from Students (Unpublish)' : 'Quick Publish to Students'}
+                                </sl-menu-item>
                                 <sl-menu-item class="btn-change-item-due" data-id="${esc(it.id)}" data-kind="${esc(kind)}" data-source-id="${esc(sourceId)}">
                                   <sl-icon slot="prefix" name="calendar-date"></sl-icon> Change Due Date...
                                 </sl-menu-item>
@@ -397,6 +493,192 @@ export async function renderCoursePage(courseId, container) {
     // -------------------------------------------------------------------------
     // Bind Item Action Handlers
     // -------------------------------------------------------------------------
+    const syncFeedToRelayIfConfigured = async () => {
+      try {
+        const transport = await getTransport();
+        if (isTeacherRelayConfigured(transport)) {
+          const feed = await buildCourseFeed(courseId, { relayUrl: transport.baseUrl });
+          const feedId = await deriveCourseFeedId(course.access_code || courseId);
+          const feedTransport = new PublicFeedTransport({ baseUrl: transport.baseUrl, token: transport.token });
+          await feedTransport.publishCourseFeed(feedId, feed.ciphertext, feed.etag);
+          await markFeedPublished(courseId, feed.etag);
+        }
+      } catch (_) {}
+    };
+
+    const publishSingleItem = async (itemId, kind, sourceId) => {
+      const it = items.find(i => i.id === itemId);
+      if (!it) return;
+
+      if (kind === 'assignment') {
+        const asg = allAssignments.find(a => a.id === sourceId) || await storage.table('assignments').get(sourceId).catch(() => null);
+        if (asg) {
+          asg.publish = {
+            version: (asg.publish?.version || 0) + 1,
+            salt: asg.publish?.salt || ('asg-salt-' + asg.id.slice(0, 8)),
+            published_at: new Date().toISOString()
+          };
+          await storage.table('assignments').put(asg);
+        }
+      } else if (kind === 'task') {
+        const t = allTasks.find(x => x.id === sourceId) || await storage.table('tasks').get(sourceId).catch(() => null);
+        if (t) {
+          t.publish = {
+            version: (t.publish?.version || 0) + 1,
+            salt: t.publish?.salt || ('task-salt-' + t.id.slice(0, 8)),
+            published_at: new Date().toISOString()
+          };
+          await storage.table('tasks').put(t);
+        }
+      }
+
+      it.published = true;
+      it.hidden = false;
+      it.updated_at = new Date().toISOString();
+      await storage.table('course_items').put(it);
+      await markCourseFeedDirty(courseId);
+      await syncFeedToRelayIfConfigured();
+      toast.success(`Published "${it.title}"! Students can now access it.`);
+      render();
+    };
+
+    const hideSingleItem = async (itemId) => {
+      const it = items.find(i => i.id === itemId);
+      if (!it) return;
+
+      it.hidden = true;
+      it.published = false;
+      it.updated_at = new Date().toISOString();
+      await storage.table('course_items').put(it);
+      await markCourseFeedDirty(courseId);
+      await syncFeedToRelayIfConfigured();
+      toast.info(`Hidden "${it.title}" from students.`);
+      render();
+    };
+
+    const publishUnitItems = async (unitId) => {
+      const unitItems = items.filter(it => it.unit_id === unitId);
+      for (const it of unitItems) {
+        const kind = it.kind || it.type || 'assignment';
+        const sourceId = it.source_id || it.id;
+        if (kind === 'assignment') {
+          const asg = allAssignments.find(a => a.id === sourceId) || await storage.table('assignments').get(sourceId).catch(() => null);
+          if (asg) {
+            asg.publish = {
+              version: (asg.publish?.version || 0) + 1,
+              salt: asg.publish?.salt || ('asg-salt-' + asg.id.slice(0, 8)),
+              published_at: new Date().toISOString()
+            };
+            await storage.table('assignments').put(asg);
+          }
+        } else if (kind === 'task') {
+          const t = allTasks.find(x => x.id === sourceId) || await storage.table('tasks').get(sourceId).catch(() => null);
+          if (t) {
+            t.publish = {
+              version: (t.publish?.version || 0) + 1,
+              salt: t.publish?.salt || ('task-salt-' + t.id.slice(0, 8)),
+              published_at: new Date().toISOString()
+            };
+            await storage.table('tasks').put(t);
+          }
+        }
+        it.published = true;
+        it.hidden = false;
+        it.updated_at = new Date().toISOString();
+        await storage.table('course_items').put(it);
+      }
+      await markCourseFeedDirty(courseId);
+      await syncFeedToRelayIfConfigured();
+      toast.success(`Published all items in folder!`);
+      render();
+    };
+
+    const hideUnitItems = async (unitId) => {
+      const unitItems = items.filter(it => it.unit_id === unitId);
+      for (const it of unitItems) {
+        it.hidden = true;
+        it.published = false;
+        it.updated_at = new Date().toISOString();
+        await storage.table('course_items').put(it);
+      }
+      await markCourseFeedDirty(courseId);
+      await syncFeedToRelayIfConfigured();
+      toast.info(`Hidden all items in folder from students.`);
+      render();
+    };
+
+    const publishAllDrafts = async () => {
+      for (const it of items) {
+        const kind = it.kind || it.type || 'assignment';
+        const sourceId = it.source_id || it.id;
+        if (kind === 'assignment') {
+          const asg = allAssignments.find(a => a.id === sourceId) || await storage.table('assignments').get(sourceId).catch(() => null);
+          if (asg) {
+            asg.publish = {
+              version: (asg.publish?.version || 0) + 1,
+              salt: asg.publish?.salt || ('asg-salt-' + asg.id.slice(0, 8)),
+              published_at: new Date().toISOString()
+            };
+            await storage.table('assignments').put(asg);
+          }
+        } else if (kind === 'task') {
+          const t = allTasks.find(x => x.id === sourceId) || await storage.table('tasks').get(sourceId).catch(() => null);
+          if (t) {
+            t.publish = {
+              version: (t.publish?.version || 0) + 1,
+              salt: t.publish?.salt || ('task-salt-' + t.id.slice(0, 8)),
+              published_at: new Date().toISOString()
+            };
+            await storage.table('tasks').put(t);
+          }
+        }
+        it.published = true;
+        it.hidden = false;
+        it.updated_at = new Date().toISOString();
+        await storage.table('course_items').put(it);
+      }
+      await markCourseFeedDirty(courseId);
+      await syncFeedToRelayIfConfigured();
+      toast.success(`All ${items.length} items published! Students can now access them.`);
+      render();
+    };
+
+    container.querySelector('#btn-publish-all-drafts')?.addEventListener('click', () => publishAllDrafts());
+    container.querySelectorAll('.btn-publish-unit, .menu-publish-all-unit').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        publishUnitItems(btn.dataset.unitId);
+      });
+    });
+    container.querySelectorAll('.menu-hide-all-unit').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideUnitItems(btn.dataset.unitId);
+      });
+    });
+    container.querySelectorAll('.btn-quick-publish').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        publishSingleItem(btn.dataset.itemId, btn.dataset.kind, btn.dataset.sourceId);
+      });
+    });
+    container.querySelectorAll('.btn-quick-unpublish').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        hideSingleItem(btn.dataset.itemId);
+      });
+    });
+    container.querySelectorAll('.btn-toggle-item-visibility').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (btn.dataset.action === 'hide') {
+          hideSingleItem(btn.dataset.itemId);
+        } else {
+          publishSingleItem(btn.dataset.itemId, btn.dataset.kind, btn.dataset.sourceId);
+        }
+      });
+    });
+
     container.querySelectorAll('.btn-add-item-to-unit').forEach(btn => {
       btn.addEventListener('click', () => {
         const uId = btn.dataset.unitId;
@@ -525,6 +807,32 @@ export async function renderCoursePage(courseId, container) {
       const btn = container.querySelector('#btn-publish-feed');
       btn.loading = true;
       try {
+        if (totalDrafts > 0) {
+          for (const it of items) {
+            const kind = it.kind || it.type || 'assignment';
+            const sourceId = it.source_id || it.id;
+            if (kind === 'assignment') {
+              const asg = allAssignments.find(a => a.id === sourceId) || await storage.table('assignments').get(sourceId).catch(() => null);
+              if (asg && !asg.publish?.version) {
+                asg.publish = { version: 1, salt: 'asg-salt-' + asg.id.slice(0, 8), published_at: new Date().toISOString() };
+                await storage.table('assignments').put(asg);
+              }
+            } else if (kind === 'task') {
+              const t = allTasks.find(x => x.id === sourceId) || await storage.table('tasks').get(sourceId).catch(() => null);
+              if (t && !t.publish?.version) {
+                t.publish = { version: 1, salt: 'task-salt-' + t.id.slice(0, 8), published_at: new Date().toISOString() };
+                await storage.table('tasks').put(t);
+              }
+            }
+            if (it.published === false || it.hidden === true) {
+              it.published = true;
+              it.hidden = false;
+              it.updated_at = new Date().toISOString();
+              await storage.table('course_items').put(it);
+            }
+          }
+        }
+
         const transport = await getTransport();
         const hasRelay = isTeacherRelayConfigured(transport);
         const relayUrl = hasRelay ? transport.baseUrl : null;
@@ -698,7 +1006,10 @@ function openMoveItemModal({ itemId, currentUnitId, units, onMoved }) {
     if (onMoved) onMoved();
   });
 
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 }
 
 /**
@@ -783,7 +1094,10 @@ function openUnitModal({ courseId, unit = null, totalUnits = 0, onSaved }) {
     if (onSaved) onSaved();
   });
 
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 }
 
 /**
@@ -1085,7 +1399,10 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
     if (onAdded) onAdded();
   });
 
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 }
 
 async function openChangeDueDialog(kind, sourceId, itemId, onSaved) {
@@ -1128,7 +1445,10 @@ async function openChangeDueDialog(kind, sourceId, itemId, onSaved) {
     if (onSaved) onSaved();
   });
 
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 }
 
 async function openShareCoursePackageDialog(course) {
@@ -1280,5 +1600,8 @@ async function openShareCoursePackageDialog(course) {
     toast.success('Downloaded course package (.kbshare)!');
   });
 
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 }

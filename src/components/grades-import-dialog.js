@@ -263,7 +263,10 @@ export class GradesImportDialog {
     });
 
     dialog.querySelector('#btn-grades-import-cancel')?.addEventListener('click', () => dialog.hide());
-    dialog.addEventListener('sl-after-hide', () => dialog.remove());
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target !== dialog) return;
+      dialog.remove();
+    });
 
     await dialog.show();
   }

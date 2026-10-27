@@ -15,6 +15,14 @@ export async function buildCourseFeed(courseId, opts = {}) {
   const { origin, studentId, relayUrl } = opts;
   if (!courseId) throw new Error('courseId is required to build a course feed');
 
+  // Auto-sync any assignments/materials assigned to this class before building the feed
+  try {
+    const { reconcileCourseItemsForClass } = await import('../modules/gradebook/bridge.js');
+    await reconcileCourseItemsForClass(courseId);
+  } catch (e) {
+    // Non-blocking in tests or mock environments
+  }
+
   const course = await storage.table('gradebook_courses').get(courseId);
   if (!course) throw new Error(`Course not found: ${courseId}`);
 
@@ -26,8 +34,11 @@ export async function buildCourseFeed(courseId, opts = {}) {
   ]);
   const rosterWithCode = rosterStudents.filter(s => s.access_code);
 
+  // Filter out items that are hidden or explicitly unpublished
+  const visibleItems = items.filter(item => !item.hidden && item.published !== false);
+
   // Enrich items with due dates, payloads, and clean presentation metadata
-  const enrichedItems = await Promise.all(items.map(async (item) => {
+  const enrichedItems = await Promise.all(visibleItems.map(async (item) => {
     const kind = item.kind || item.type || 'assignment';
     const sourceId = item.content_id || item.source_id || item.id;
     let due = null;
@@ -43,6 +54,10 @@ export async function buildCourseFeed(courseId, opts = {}) {
         if (kind === 'assignment') {
           const rawAsg = await storage.table('assignments').get(sourceId).catch(() => null);
           if (rawAsg) {
+            if (!rawAsg.publish) {
+              rawAsg.publish = { version: 1, salt: 'asg-salt-' + rawAsg.id.slice(0, 8), published_at: new Date().toISOString() };
+              await storage.table('assignments').put(rawAsg).catch(() => {});
+            }
             const asgSalt = rawAsg.publish?.salt || 'course-salt';
             itemPayload = await buildStudentPayload(rawAsg, {
               teacherKeys: keys,
@@ -55,11 +70,12 @@ export async function buildCourseFeed(courseId, opts = {}) {
         } else if (kind === 'task') {
           const rawTask = await storage.table('tasks').get(sourceId).catch(() => null);
           if (rawTask) {
+            if (!rawTask.publish) {
+              rawTask.publish = { version: 1, salt: 'task-salt-' + rawTask.id.slice(0, 8), published_at: new Date().toISOString() };
+              await storage.table('tasks').put(rawTask).catch(() => {});
+            }
             const taskSalt = rawTask.publish?.salt || 'course-salt';
-            itemPayload = await buildStudentTaskPayload({
-              ...rawTask,
-              publish: { version: rawTask.publish?.version || 1, salt: taskSalt }
-            }, {
+            itemPayload = await buildStudentTaskPayload(rawTask, {
               teacherKeys: keys,
               courseMeta: { id: course.id, course_id: course.id, name: course.name, course_name: course.name, section: course.section, access_code: course.access_code },
               relay: rawTask.publish?.relay || null
@@ -124,8 +140,9 @@ export async function buildCourseFeed(courseId, opts = {}) {
     revision: revisionHash
   };
 
-  const accessCode = (opts.accessCode || opts.passphrase || course.access_code || course.passphrase || '').trim();
-  const packed = await CryptoShareEngine.createSharePayload('course_feed', feedPayload, accessCode);
+  const rawAccessCode = (opts.accessCode || opts.passphrase || course.access_code || course.passphrase || '').trim();
+  const normalizedAccessCode = rawAccessCode.toUpperCase().replace(/[^A-Z0-9]/g, '') || rawAccessCode;
+  const packed = await CryptoShareEngine.createSharePayload('course_feed', feedPayload, normalizedAccessCode);
   const parsedFile = CryptoShareEngine.parseShareFile(packed.rawFileContent);
 
   return {
@@ -168,9 +185,26 @@ export async function decryptCourseFeed(feedEnvelope, accessCode) {
     if (feedEnvelope.enc !== undefined) isEncrypted = feedEnvelope.enc === '1' || feedEnvelope.enc === 1;
   }
 
-  const unpacked = await CryptoShareEngine.unpackSharePayload(d, isEncrypted, (accessCode || '').trim(), version);
-  const data = typeof unpacked === 'string' ? JSON.parse(unpacked) : unpacked;
-  return data?.payload || data;
+  const rawCode = String(accessCode || '').trim();
+  const normalizedCode = rawCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+  const candidateCodes = [];
+  if (normalizedCode) candidateCodes.push(normalizedCode);
+  if (rawCode && rawCode !== normalizedCode) candidateCodes.push(rawCode);
+  if (candidateCodes.length === 0) candidateCodes.push('');
+
+  let lastError = null;
+  for (const code of candidateCodes) {
+    try {
+      const unpacked = await CryptoShareEngine.unpackSharePayload(d, isEncrypted, code, version);
+      const data = typeof unpacked === 'string' ? JSON.parse(unpacked) : unpacked;
+      return data?.payload || data;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError || new Error('Failed to decrypt course feed');
 }
 
 /**

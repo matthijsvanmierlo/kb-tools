@@ -103,15 +103,18 @@ export class AccessCodes {
 
   /** Build a direct setup link that auto-populates the student's keychain */
   static createOnboardingPassUrl(student, course, baseUrl = (typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : '')) {
+    const courseCode = course?.access_code || '';
+    const studentCode = student.access_code || '';
     const params = new URLSearchParams({
       sid: student.student_id || '',
       sname: student.full_name || '',
-      code: student.access_code || '',
+      code: courseCode || studentCode || '',
+      scode: studentCode,
       cid: course?.id || '',
       cname: course?.name || '',
       csec: course?.section || ''
     });
-    return `${baseUrl}#/student?${params.toString()}`;
+    return `${baseUrl}#/student/courses?${params.toString()}`;
   }
 
   /** CSV of roster codes for printing or mail-merge */

@@ -377,7 +377,8 @@ export class ExportDialog {
       dialog.hide();
     });
 
-    dialog.addEventListener('sl-after-hide', () => {
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target !== dialog) return;
       dialog.remove();
     });
 

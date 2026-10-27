@@ -498,9 +498,31 @@ export async function renderClassesView(params, router, container) {
       const joinInput = container.querySelector('#input-join-link');
       if (!qrMount) return;
 
+      if (!activeCourse.access_code) {
+        const { AccessCodes } = await import('../../core/access-codes.js');
+        activeCourse.access_code = AccessCodes.generateCode();
+        await storage.table('gradebook_courses').put(activeCourse);
+      }
+
       const code = activeCourse.access_code || '';
       const base = window.location.origin + window.location.pathname;
-      const joinUrl = `${base}#/student?code=${encodeURIComponent(code)}`;
+
+      let relay = '';
+      try {
+        const { getTransport } = await import('../../core/transport.js');
+        const transport = await getTransport();
+        relay = transport?.baseUrl || activeCourse.relay_url || '';
+      } catch (_) {}
+
+      const params = new URLSearchParams();
+      params.set('code', code);
+      params.set('cid', activeCourse.id);
+      if (activeCourse.name) params.set('cname', activeCourse.name);
+      if (activeCourse.section) params.set('csec', activeCourse.section);
+      if (activeCourse.color) params.set('ccolor', activeCourse.color);
+      if (relay) params.set('relay', relay);
+
+      const joinUrl = `${base}#/student/courses?${params.toString()}`;
 
       if (joinInput) {
         joinInput.value = joinUrl;

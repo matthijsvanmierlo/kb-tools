@@ -754,7 +754,10 @@ export async function openRelayConfigDialog() {
     updateRelayStatusIndicator();
   });
 
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 }
 
 export async function updateRelayStatusIndicator() {

@@ -19,21 +19,22 @@ export async function renderStudentHubView(params, router, container) {
   // Auto-enroll and navigate if accessed via QR / join link (#/student?code=...&relay=...)
   const hashSearch = typeof window !== 'undefined' ? new URLSearchParams(window.location.hash.split('?')[1] || '') : new URLSearchParams();
   const rawCode = String(params?.code || params?.join || hashSearch.get('code') || hashSearch.get('join') || '').trim().toUpperCase();
-  const rawRelay = params?.relay || hashSearch.get('relay') || '';
 
-  if (rawCode) {
-    try {
-      const { storage } = await import('../../core/storage.js');
-      const saved = (await storage.getMetadata('student_saved_class_codes')) || [];
-      if (!saved.includes(rawCode)) {
-        saved.push(rawCode);
-        await storage.setMetadata('student_saved_class_codes', saved);
+  if (rawCode || hashSearch.has('d') || hashSearch.has('cname')) {
+    if (rawCode) {
+      try {
+        const { storage } = await import('../../core/storage.js');
+        const saved = (await storage.getMetadata('student_saved_class_codes')) || [];
+        if (!saved.includes(rawCode)) {
+          saved.push(rawCode);
+          await storage.setMetadata('student_saved_class_codes', saved);
+        }
+      } catch (err) {
+        console.warn('Error saving class code from params:', err);
       }
-    } catch (err) {
-      console.warn('Error saving class code from params:', err);
     }
-    const relayParam = rawRelay ? `&relay=${encodeURIComponent(rawRelay)}` : '';
-    router.navigate(`#/student/courses?code=${encodeURIComponent(rawCode)}${relayParam}`);
+    const searchString = hashSearch.toString();
+    router.navigate(`#/student/courses${searchString ? '?' + searchString : ''}`);
     return;
   }
 

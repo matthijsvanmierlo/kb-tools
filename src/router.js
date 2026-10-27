@@ -259,7 +259,7 @@ export class Router {
 
         // Self-healing recovery if stale Service Worker cache served outdated ES modules
         const isModuleLoadError = err instanceof SyntaxError ||
-          /does not provide an export|Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed/i.test(err?.message || '');
+          /does not provide an export|Failed to fetch dynamically imported module|error loading dynamically imported module|Importing a module script failed|is not a function/i.test(err?.message || '');
 
         const recoveryKey = `kb_recovery_${path}`;
         if (isModuleLoadError && typeof sessionStorage !== 'undefined' && !sessionStorage.getItem(recoveryKey)) {
@@ -609,7 +609,22 @@ export class Router {
     this._renderEphemeralBanner(type, payload);
 
     // Route to appropriate module
-    if (type === 'flashcards') {
+    if (type === 'course_feed') {
+      import('./modules/student/course-store.js').then(async ({ mergeCourseFeed }) => {
+        try {
+          const courseRecord = await mergeCourseFeed(storage, { feed: payload, isRawFeed: true });
+          RoleMode.set('student');
+          toast.success(`Enrolled in "${courseRecord?.name || 'Course'}"!`);
+          this.navigate(`#/student/course?id=${encodeURIComponent(courseRecord?.id || payload?.course?.id)}`);
+        } catch (err) {
+          console.error('Failed to activate shared course feed:', err);
+          toast.danger('Could not enroll in course: ' + err.message);
+          this.navigate('#/student/courses');
+        }
+      }).catch(() => {
+        this.navigate('#/student/courses');
+      });
+    } else if (type === 'flashcards') {
       store.setState('activeDeck', payload);
       this.navigate('#/flashcards/study');
     } else if (type === 'timeline') {

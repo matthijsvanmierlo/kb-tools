@@ -258,7 +258,10 @@ export async function openTaskPublishDialog(task, { onPublished } = {}) {
   const closeBtn = dialog.querySelector('#task-pub-close-btn');
 
   closeBtn.addEventListener('click', () => dialog.hide());
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 
   let currentPublished = null;
   let currentShareUrl = '';

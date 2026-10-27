@@ -763,7 +763,10 @@ function openImportDialog(task, roster, onComplete) {
   };
 
   cancelBtn.onclick = () => dialog.hide();
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 
   confirmBtn.onclick = async () => {
     confirmBtn.loading = true;
@@ -860,5 +863,8 @@ function openLinkStudentModal(sub, roster, courseId, onLinked) {
     }
   });
 
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 }

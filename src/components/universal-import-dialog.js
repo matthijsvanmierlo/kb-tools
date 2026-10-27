@@ -296,6 +296,25 @@ export class UniversalImportDialog {
         return;
       }
 
+      // Case A.2: Student Class Join
+      if (inspectionResult.kind === 'student_join') {
+        const code = inspectionResult.code;
+        previewStatus.innerHTML = `
+          <span class="inline-flex items-center gap-1 text-blue-800 bg-blue-100 font-semibold px-2.5 py-0.5 rounded-full text-xs">
+            <sl-icon name="mortarboard"></sl-icon> Class Join Code (${Sanitizer.escapeHTML(code)})
+          </span>
+        `;
+        previewBadge.textContent = 'Class';
+        previewContent.innerHTML = `
+          <div class="p-3 text-slate-600 text-xs">
+            Class access code: <strong>${Sanitizer.escapeHTML(code)}</strong>. Click below to join the class and load its lessons and assignments.
+          </div>
+        `;
+        submitBtn.disabled = false;
+        submitBtnText.textContent = 'Join Class';
+        return;
+      }
+
       // Case B: .kbshare File
       if (inspectionResult.kind === 'kbshare') {
         if (inspectionResult.isEncrypted) {
@@ -556,6 +575,14 @@ export class UniversalImportDialog {
         return;
       }
 
+      // 1b. If it's a student class join code
+      if (inspectionResult?.kind === 'student_join') {
+        dialog.hide();
+        const { router: r } = await import('../router.js');
+        (router || r).navigate(`#/student/courses?code=${encodeURIComponent(inspectionResult.code)}`);
+        return;
+      }
+
       // 2. Educational Content (flashcards, assignment, timeline, video)
       if (!unpackedData || !unpackedData.type || !unpackedData.payload) {
         toast.warning('No valid content available to import.');
@@ -611,7 +638,10 @@ export class UniversalImportDialog {
     });
 
     cancelBtn?.addEventListener('click', () => dialog.hide());
-    dialog.addEventListener('sl-after-hide', () => dialog.remove());
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target !== dialog) return;
+      dialog.remove();
+    });
 
     await dialog.show();
     return dialog;
@@ -672,15 +702,15 @@ export class UniversalImportDialog {
               try {
                 const localCourse = await storage.table('gradebook_courses').where('access_code').equals(upper).first();
                 if (localCourse) {
+                  const { buildCourseFeed } = await import('../core/course-feed.js');
                   const { mergeCourseFeed } = await import('../modules/student/course-store.js');
-                  const [units, items] = await Promise.all([
-                    storage.table('course_units').where('course_id').equals(localCourse.id).toArray().catch(() => []),
-                    storage.table('course_items').where('course_id').equals(localCourse.id).toArray().catch(() => [])
-                  ]);
-                  await mergeCourseFeed({ course: localCourse, units, items }, { accessCode: upper });
+                  const feed = await buildCourseFeed(localCourse.id);
+                  await mergeCourseFeed(feed.raw_payload, { accessCode: upper });
                   toast.success(`Joined class "${localCourse.name}"!`);
                 } else {
-                  toast.success(`Saved class code "${upper}"!`);
+                  const { joinCourseByCode } = await import('../modules/student/course-store.js');
+                  await joinCourseByCode(upper);
+                  toast.success(`Joined class (${upper})!`);
                 }
               } catch (_) {
                 toast.success(`Saved class code "${upper}"!`);

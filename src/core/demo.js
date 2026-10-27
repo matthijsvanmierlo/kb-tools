@@ -12,6 +12,8 @@ export async function hasDemoData() {
 
   const tables = [
     'gradebook_courses',
+    'course_units',
+    'course_items',
     'assignments',
     'flashcards',
     'timelines',
@@ -41,6 +43,7 @@ export async function loadDemoWorkspace() {
     section: 'Period 2 • Lab Room 304',
     academic_year: '2026-2027',
     color: '#2563eb',
+    access_code: 'CHEM-2026',
     grading_scale: 'traditional',
     is_demo: true,
     terms: [
@@ -63,6 +66,7 @@ export async function loadDemoWorkspace() {
     section: 'Period 4 • Room 201',
     academic_year: '2026-2027',
     color: '#16a34a',
+    access_code: 'HIST-2026',
     grading_scale: 'traditional',
     is_demo: true,
     terms: [
@@ -312,13 +316,59 @@ export async function loadDemoWorkspace() {
   };
   await storage.table('assignments').put(sampleAssignment);
 
+  // 11. Course Plan Units & Items for AP Chemistry
+  const chemUnit1 = {
+    id: generateUUID(),
+    course_id: apChem.id,
+    title: 'Unit 1: Thermodynamics & Equilibrium',
+    description: 'Entropy, free energy, reaction quotients, and equilibrium dynamics.',
+    order: 0,
+    color: '#2563eb',
+    is_demo: true,
+    created_at: now
+  };
+  await storage.table('course_units').put(chemUnit1);
+
+  const chemItem1 = {
+    id: generateUUID(),
+    course_id: apChem.id,
+    unit_id: chemUnit1.id,
+    title: chemVideo.title,
+    kind: 'video',
+    source_id: chemVideo.id,
+    order: 0,
+    points: 10,
+    published: true,
+    hidden: false,
+    is_demo: true,
+    created_at: now
+  };
+  const chemItem2 = {
+    id: generateUUID(),
+    course_id: apChem.id,
+    unit_id: chemUnit1.id,
+    title: sampleAssignment.title,
+    kind: 'assignment',
+    source_id: sampleAssignment.id,
+    order: 1,
+    points: 100,
+    due_date: due,
+    published: true,
+    hidden: false,
+    is_demo: true,
+    created_at: now
+  };
+  await storage.table('course_items').bulkPut([chemItem1, chemItem2]);
+
   await storage.setMetadata('demo_loaded_at', now);
-  return { apChem, worldHistory, sampleAssignment };
+  return { apChem, worldHistory, sampleAssignment, chemUnit1, chemItems: [chemItem1, chemItem2] };
 }
 
 export async function removeDemoData() {
   const tables = [
     'gradebook_courses',
+    'course_units',
+    'course_items',
     'gradebook_students',
     'gradebook_assignments',
     'gradebook_rubrics',

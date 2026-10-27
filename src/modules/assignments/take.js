@@ -50,11 +50,23 @@ async function resolvePayload(params) {
       const match = items.find(it =>
         it.item_id === searchId ||
         it.id === searchId ||
+        it.source_id === searchId ||
         it.payload?.assignment_id === searchId ||
         it.payload?.id === searchId
       );
-      if (match?.payload?.kind === 'kb-assignment') {
+      if (match?.payload?.kind === 'kb-assignment' || (match?.payload?.questions && Array.isArray(match.payload.questions))) {
         return { payload: match.payload, preview: false };
+      }
+      if (match?.source_id) {
+        const a = await storage.table('assignments').get(match.source_id);
+        if (a) {
+          const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
+          const payload = await buildStudentPayload(
+            { ...a, publish: { version: a.publish?.version || 1, salt: a.publish?.salt || 'student-local' } },
+            { teacherKeys: keys }
+          );
+          return { payload, preview: false, teacherAssignment: a };
+        }
       }
     } catch (_) {}
 

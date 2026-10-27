@@ -74,11 +74,29 @@ export async function resolvePayload(params = {}) {
       const match = items.find(it =>
         it.item_id === searchId ||
         it.id === searchId ||
+        it.source_id === searchId ||
         it.payload?.task_id === searchId ||
         it.payload?.id === searchId
       );
       if (match?.payload?.kind === 'kb-task') {
         return { payload: match.payload, preview: false };
+      }
+      if (match?.source_id) {
+        const task = await storage.table('tasks').get(match.source_id);
+        if (task) {
+          const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
+          const payload = await buildStudentTaskPayload(
+            {
+              ...task,
+              publish: {
+                version: task.publish?.version || 1,
+                salt: task.publish?.salt || 'local-task-salt'
+              }
+            },
+            { teacherKeys: keys }
+          );
+          return { payload, preview: false, teacherTask: task };
+        }
       }
     } catch (_) {}
 
@@ -1054,7 +1072,10 @@ export async function renderTaskTake(params = {}, router = null, container = nul
 
     const closeBtn = dialog.querySelector('#btn-submit-close');
     closeBtn.addEventListener('click', () => dialog.hide());
-    dialog.addEventListener('sl-after-hide', () => dialog.remove());
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target !== dialog) return;
+      dialog.remove();
+    });
 
     // Prepare encrypted submission
     const relayInfo = {

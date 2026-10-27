@@ -25,3 +25,35 @@ export async function ensureDialogReady(dialogEl) {
   }
   return dialogEl;
 }
+
+// Global safeguard: Shoelace child controls (<sl-select>, <sl-dropdown>, <sl-popup>, <sl-tooltip>)
+// dispatch 'sl-hide', 'sl-after-hide', and 'sl-request-close' with bubbles: true when closed/selected.
+// When nested inside an <sl-dialog> or <sl-drawer>, these child events must not bubble to the modal
+// container where they would erroneously trigger modal teardown, removal, or rejection.
+if (typeof window !== 'undefined') {
+  const CHILD_POPUP_TAGS = new Set([
+    'SL-SELECT',
+    'SL-DROPDOWN',
+    'SL-POPUP',
+    'SL-TOOLTIP',
+    'SL-MENU',
+    'SL-COLOR-PICKER'
+  ]);
+
+  ['sl-hide', 'sl-after-hide', 'sl-request-close'].forEach((eventName) => {
+    window.addEventListener(
+      eventName,
+      (e) => {
+        const targetTag = e.target?.tagName?.toUpperCase?.();
+        if (CHILD_POPUP_TAGS.has(targetTag)) {
+          const parentModal = e.target?.closest?.('sl-dialog, sl-drawer');
+          if (parentModal && e.target !== parentModal) {
+            e.stopPropagation();
+          }
+        }
+      },
+      true // capture phase to intercept before bubbling to parent dialog listeners
+    );
+  });
+}
+

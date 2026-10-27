@@ -178,8 +178,182 @@ export async function syncContentClassLink(item, moduleType, classId) {
     }
   }
 
+  // Auto-sync into course_items so it immediately appears on Course Plan (#/course) and in student course feed
+  if (targetClassId && item.id) {
+    try {
+      await ensureCourseItemForClassContent(targetClassId, moduleType, item);
+    } catch (e) {
+      console.warn('ensureCourseItemForClassContent error:', e);
+    }
+  }
+
   return item;
 }
+
+/**
+ * Ensure an item linked to a class has a corresponding entry in course_items.
+ */
+export async function ensureCourseItemForClassContent(courseId, moduleType, item) {
+  if (!courseId || !item || !item.id) return null;
+
+  const course = await storage.table('gradebook_courses').get(courseId).catch(() => null);
+  if (!course) return null;
+
+  let units = await storage.table('course_units').where('course_id').equals(courseId).toArray().catch(() => []);
+  if (units.length === 0) {
+    const defaultUnit = {
+      id: generateUUID(),
+      course_id: courseId,
+      title: 'Class Assignments & Materials',
+      description: 'Course work and study resources',
+      order: 0,
+      color: course.color || '#0d9488',
+      created_at: new Date().toISOString()
+    };
+    await storage.table('course_units').put(defaultUnit);
+    units = [defaultUnit];
+  }
+
+  const existingItems = await storage.table('course_items').where('course_id').equals(courseId).toArray().catch(() => []);
+  const existing = existingItems.find(ci => ci.source_id === item.id || ci.content_id === item.id || ci.id === item.id);
+  if (existing) {
+    // Update title/due if changed
+    existing.title = item.title || item.name || existing.title;
+    if (item.settings?.due_date !== undefined) existing.due_date = item.settings.due_date;
+    await storage.table('course_items').put(existing);
+    return existing;
+  }
+
+  let kind = 'assignment';
+  if (moduleType === 'task' || moduleType === 'tasks') kind = 'task';
+  else if (moduleType === 'video' || moduleType === 'videos') kind = 'video';
+  else if (moduleType === 'flashcards' || moduleType === 'deck') kind = 'flashcards';
+  else if (moduleType === 'timeline' || moduleType === 'timelines') kind = 'timeline';
+
+  const targetUnitId = units.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))[0].id;
+  const isPublished = item.published !== false;
+
+  const newCi = {
+    id: generateUUID(),
+    course_id: courseId,
+    unit_id: targetUnitId,
+    title: item.title || item.name || 'Untitled Item',
+    kind,
+    source_id: item.id,
+    order: existingItems.length,
+    points: item.total_points || item.grading?.max_points || 100,
+    due_date: item.settings?.due_date || item.due_date || null,
+    due_time: item.settings?.due_time || item.due_time || null,
+    published: isPublished,
+    hidden: item.hidden === true,
+    created_at: item.created_at || new Date().toISOString()
+  };
+
+  await storage.table('course_items').put(newCi);
+  return newCi;
+}
+
+/**
+ * Scan all content tables and sync any items assigned to courseId into course_items.
+ * Also ensures the course has an access_code.
+ */
+export async function reconcileCourseItemsForClass(courseId) {
+  if (!courseId) return [];
+  const course = await storage.table('gradebook_courses').get(courseId).catch(() => null);
+  if (!course) return [];
+
+  // Ensure course has access_code
+  if (!course.access_code) {
+    const { AccessCodes } = await import('../../core/access-codes.js');
+    course.access_code = AccessCodes.generateCode();
+    await storage.table('gradebook_courses').put(course);
+  }
+
+  let units = await storage.table('course_units').where('course_id').equals(courseId).toArray().catch(() => []);
+  let items = await storage.table('course_items').where('course_id').equals(courseId).toArray().catch(() => []);
+
+  const [tasks, assignments, decks, timelines, videos] = await Promise.all([
+    storage.table('tasks').toArray().catch(() => []),
+    storage.table('assignments').toArray().catch(() => []),
+    storage.table('flashcards').toArray().catch(() => []),
+    storage.table('timelines').toArray().catch(() => []),
+    storage.table('video_assessments').toArray().catch(() => [])
+  ]);
+
+  const matches = [];
+  tasks.forEach(t => {
+    if (t.class_id === courseId || t.gradebook?.course_id === courseId) matches.push({ kind: 'task', item: t });
+  });
+  assignments.forEach(a => {
+    if (a.class_id === courseId || a.gradebook?.course_id === courseId) matches.push({ kind: 'assignment', item: a });
+  });
+  decks.forEach(d => {
+    if (d.class_id === courseId) matches.push({ kind: 'flashcards', item: d });
+  });
+  timelines.forEach(t => {
+    if (t.class_id === courseId) matches.push({ kind: 'timeline', item: t });
+  });
+  videos.forEach(v => {
+    if (v.class_id === courseId || v.gradebook?.course_id === courseId) matches.push({ kind: 'video', item: v });
+  });
+
+  if (matches.length === 0) return items;
+
+  if (units.length === 0) {
+    const defaultUnit = {
+      id: generateUUID(),
+      course_id: courseId,
+      title: 'Class Assignments & Materials',
+      description: 'Course work and study resources',
+      order: 0,
+      color: course.color || '#0d9488',
+      created_at: new Date().toISOString()
+    };
+    await storage.table('course_units').put(defaultUnit);
+    units = [defaultUnit];
+  }
+
+  const primaryUnitId = units.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))[0].id;
+  const existingSourceIds = new Set(items.map(ci => ci.source_id || ci.content_id || ci.id));
+
+  let orderCount = items.length;
+  let addedAny = false;
+
+  for (const { kind, item } of matches) {
+    if (!existingSourceIds.has(item.id) && !item.course_plan_excluded) {
+      const isPublished = item.published !== false;
+
+      const newCi = {
+        id: generateUUID(),
+        course_id: courseId,
+        unit_id: primaryUnitId,
+        title: item.title || item.name || 'Untitled Item',
+        kind,
+        source_id: item.id,
+        order: orderCount++,
+        points: item.total_points || item.grading?.max_points || 100,
+        due_date: item.settings?.due_date || item.due_date || null,
+        due_time: item.settings?.due_time || item.due_time || null,
+        published: isPublished,
+        hidden: item.hidden === true,
+        created_at: item.created_at || new Date().toISOString()
+      };
+      await storage.table('course_items').put(newCi);
+      existingSourceIds.add(item.id);
+      addedAny = true;
+    }
+  }
+
+  if (addedAny) {
+    items = await storage.table('course_items').where('course_id').equals(courseId).toArray().catch(() => []);
+  }
+
+  return items;
+}
+
+GradebookBridge.reconcileCourseItemsForClass = reconcileCourseItemsForClass;
+GradebookBridge.ensureCourseItemForClassContent = ensureCourseItemForClassContent;
+
 
 GradebookBridge.syncContentClassLink = syncContentClassLink;
 

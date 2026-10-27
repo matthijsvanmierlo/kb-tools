@@ -11,6 +11,7 @@ const esc = (v) => Sanitizer.escapeHTML(v ?? '');
 
 export async function renderStudentCoursesView(params, router, container) {
   let doEnrollWithCode = null;
+  const hashSearch = typeof window !== 'undefined' ? new URLSearchParams(window.location.hash.split('?')[1] || '') : new URLSearchParams();
 
   await reconcileStudentCoursesWithProfile();
 
@@ -117,15 +118,36 @@ export async function renderStudentCoursesView(params, router, container) {
       fileInput.value = '';
     });
 
-    doEnrollWithCode = async (code, relayUrlOverride = null) => {
+    doEnrollWithCode = async (code, relayUrlOverride = null, meta = {}) => {
       const normalizedCode = String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
-      if (normalizedCode.length < 4) {
+      if (normalizedCode.length < 4 && !meta.embeddedPayload && !params?.d) {
         toast.warning('Please enter a valid access code.');
         return;
       }
 
-      // 1. Try fetching from configured relay
       const relayUrl = relayUrlOverride || params?.relay || getStudentRelayUrl();
+
+      // 0. Embedded encrypted payload from URL (#/student/courses?code=...&d=...)
+      const embeddedD = meta.embeddedPayload || params?.d || hashSearch.get('d');
+      if (embeddedD) {
+        try {
+          const { decryptCourseFeed } = await import('../../core/course-feed.js');
+          const decrypted = await decryptCourseFeed(embeddedD, code);
+          const merged = await mergeCourseFeed(decrypted, { accessCode: code, relayUrl });
+          if (merged?.course?.id) {
+            toast.success(`Joined "${merged.course.name || 'Course'}"!`);
+            await render();
+            if (router?.navigate) {
+              router.navigate(`#/student/course?id=${encodeURIComponent(merged.course.id)}`);
+            }
+            return;
+          }
+        } catch (err) {
+          console.warn('Failed to decrypt embedded feed parameter:', err);
+        }
+      }
+
+      // 1. Try fetching from configured relay
       if (relayUrl) {
         try {
           const feedId = await deriveCourseFeedId(normalizedCode);
@@ -189,11 +211,9 @@ export async function renderStudentCoursesView(params, router, container) {
       }
 
       if (localCourse) {
-        const [units, items] = await Promise.all([
-          storage.table('course_units').where('course_id').equals(localCourse.id).toArray().catch(() => []),
-          storage.table('course_items').where('course_id').equals(localCourse.id).toArray().catch(() => [])
-        ]);
-        await mergeCourseFeed({ course: localCourse, units, items }, { accessCode: code });
+        const { buildCourseFeed } = await import('../../core/course-feed.js');
+        const feed = await buildCourseFeed(localCourse.id, { relayUrl });
+        const merged = await mergeCourseFeed(feed.raw_payload, { accessCode: code, relayUrl });
         const { StudentProfile } = await import('../../core/student-profile.js');
         await StudentProfile.saveClassAccessCode(localCourse.id, code);
         toast.success(`Joined "${localCourse.name}"!`);
@@ -203,9 +223,15 @@ export async function renderStudentCoursesView(params, router, container) {
         }
       } else {
         try {
-          const res = await joinCourseByCode(code, relayUrl);
+          const res = await joinCourseByCode(code, {
+            courseId: meta.courseId || params?.cid || hashSearch.get('cid'),
+            courseName: meta.courseName || params?.cname || hashSearch.get('cname'),
+            section: meta.section || params?.csec || hashSearch.get('csec'),
+            color: meta.color || params?.ccolor || hashSearch.get('ccolor'),
+            relayUrl
+          });
           if (res) {
-            toast.success('Joined class!');
+            toast.success(`Joined "${res.name || res.course?.name || 'Class'}"!`);
             await render();
             const targetId = res.course?.id || res.id;
             if (router?.navigate && targetId) {
@@ -263,12 +289,17 @@ export async function renderStudentCoursesView(params, router, container) {
 
   await render();
 
-  const hashSearch = typeof window !== 'undefined' ? new URLSearchParams(window.location.hash.split('?')[1] || '') : new URLSearchParams();
   const joinCode = params?.code || params?.join || hashSearch.get('code') || hashSearch.get('join');
   const relayUrl = params?.relay || hashSearch.get('relay');
 
-  if (joinCode && doEnrollWithCode) {
-    await doEnrollWithCode(joinCode, relayUrl);
+  if ((joinCode || hashSearch.has('d')) && doEnrollWithCode) {
+    await doEnrollWithCode(joinCode, relayUrl, {
+      courseId: params?.cid || hashSearch.get('cid'),
+      courseName: params?.cname || hashSearch.get('cname'),
+      section: params?.csec || hashSearch.get('csec'),
+      color: params?.ccolor || hashSearch.get('ccolor'),
+      embeddedPayload: params?.d || hashSearch.get('d')
+    });
   }
 }
 
@@ -324,5 +355,8 @@ function openClaimSeatDialog(course, onDone) {
     if (onDone) onDone();
   });
 
-  dialog.addEventListener('sl-after-hide', () => dialog.remove());
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target !== dialog) return;
+    dialog.remove();
+  });
 }
