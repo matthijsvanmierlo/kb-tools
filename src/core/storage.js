@@ -389,6 +389,12 @@ export class StorageManager {
       draft_history: '++id, [item_id+student_id], item_id, saved_at'
     });
 
+    // v9: Indexes for fast course access_code and student access_code resolution
+    this.db.version(9).stores({
+      gradebook_courses: 'id, name, access_code, section, academic_year, updated_at',
+      gradebook_students: 'id, course_id, student_id, access_code, full_name'
+    });
+
     // Initialize in-memory tables for ephemeral mode
     const tables = [
       'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',

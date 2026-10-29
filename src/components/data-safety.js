@@ -125,15 +125,16 @@ export async function updateDataSafetyChip() {
   if (!chip) return null;
   const state = computeDataSafety(await gatherDataSafety());
   const l = LEVELS[state.level];
+  chip.dataset.safetyLevel = state.level;
   const parentPill = chip.closest('.kb-data-sync-pill');
   if (parentPill) {
     parentPill.dataset.safetyLevel = state.level;
     chip.className = 'inline-flex items-center gap-1.5 text-xs font-medium';
   } else {
-    chip.className = `inline-flex items-center gap-1 text-xs font-medium px-2 py-1 rounded-full border ${l.cls}`;
+    chip.className = `kb-safety-chip inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 ${l.cls}`;
   }
   const iconColor = state.level === 'ok' ? 'text-emerald-600' : state.level === 'attention' ? 'text-amber-500' : 'text-rose-600';
-  chip.innerHTML = `<sl-icon name="${l.icon}" class="${iconColor}"></sl-icon><span class="hidden sm:inline">${esc(l.label)}</span>`;
+  chip.innerHTML = `<sl-icon name="${l.icon}" class="${iconColor}"></sl-icon><span class="hidden md:inline">${esc(l.label)}</span>`;
   chip.title = l.label;
   chip.setAttribute('aria-label', `${l.label}. Open data safety details.`);
   return state;
@@ -298,7 +299,15 @@ export async function openDataSafetyDialog() {
 export function initDataSafety() {
   const chip = document.getElementById('kb-data-safety-chip');
   if (!chip) return;
-  chip.addEventListener('click', () => openDataSafetyDialog());
+  if (!chip.dataset.bound) {
+    chip.dataset.bound = '1';
+    chip.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      document.querySelector('sl-dropdown.kb-storage-menu')?.hide?.();
+      openDataSafetyDialog();
+    });
+  }
   const refresh = () => updateDataSafetyChip().catch(() => {});
   for (const ev of ['kb-backup-written', 'kb-recovery-kit-saved', 'kb-replication-status', 'kb-transport-changed']) window.addEventListener(ev, refresh);
   setInterval(refresh, 5 * 60 * 1000);

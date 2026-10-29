@@ -579,7 +579,8 @@ export class UniversalImportDialog {
       if (inspectionResult?.kind === 'student_join') {
         dialog.hide();
         const { router: r } = await import('../router.js');
-        (router || r).navigate(`#/student/courses?code=${encodeURIComponent(inspectionResult.code)}`);
+        const qp = inspectionResult.queryString ? `?${inspectionResult.queryString}` : `?code=${encodeURIComponent(inspectionResult.code)}`;
+        (router || r).navigate(`#/student/courses${qp}`);
         return;
       }
 
@@ -700,12 +701,16 @@ export class UniversalImportDialog {
                 await storage.setMetadata('student_saved_class_codes', saved);
               }
               try {
-                const localCourse = await storage.table('gradebook_courses').where('access_code').equals(upper).first();
+                const allCourses = await storage.table('gradebook_courses').toArray().catch(() => []);
+                const localCourse = allCourses.find(c => {
+                  const norm = String(c.access_code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+                  return norm === upper || c.id === upper;
+                });
                 if (localCourse) {
                   const { buildCourseFeed } = await import('../core/course-feed.js');
                   const { mergeCourseFeed } = await import('../modules/student/course-store.js');
                   const feed = await buildCourseFeed(localCourse.id);
-                  await mergeCourseFeed(feed.raw_payload, { accessCode: upper });
+                  await mergeCourseFeed(feed.feed || feed.raw_payload, { accessCode: upper });
                   toast.success(`Joined class "${localCourse.name}"!`);
                 } else {
                   const { joinCourseByCode } = await import('../modules/student/course-store.js');

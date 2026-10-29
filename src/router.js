@@ -554,7 +554,7 @@ export class Router {
     });
   }
 
-  _activateSharedPayload(unpacked) {
+  async _activateSharedPayload(unpacked) {
     // Unpacked structure: { v: 1, type: 'flashcards' | 'timeline' | 'video' | 'gradebook' | 'student_grade_report', payload: ... }
     let type;
     let payload;
@@ -568,34 +568,37 @@ export class Router {
     }
     store.setState('ephemeralData', { type, payload });
 
-    try {
-      const itemId = payload?.task_id || payload?.assignment_id || payload?.id || (typeof crypto !== 'undefined' ? crypto.randomUUID() : 'shared-item');
-      const courseId = payload?.course_id || payload?.class_id || payload?.course_meta?.course_id || payload?.course_meta?.id || null;
-      const courseName = payload?.course_meta?.name || payload?.course_meta?.course_name || payload?.course_name || '';
-      const dueDate = payload?.due_date || payload?.settings?.due_date || null;
-      storage.table('student_items').put({
-        id: `${courseId || 'general'}_${itemId}`,
-        course_id: courseId,
-        item_id: itemId,
-        kind: type,
-        title: payload?.title || payload?.name || 'Shared Item',
-        payload,
-        due_date: dueDate,
-        updated_at: new Date().toISOString()
-      }).catch(() => {});
-
-      if (courseId) {
-        import('./modules/student/course-store.js').then(({ upsertStudentCourse }) => {
-          upsertStudentCourse({
-            id: courseId,
-            name: courseName || 'Shared Course',
-            course_name: courseName || 'Shared Course',
-            section: payload?.course_meta?.section || '',
-            access_code: payload?.course_meta?.access_code || ''
-          }).catch(() => {});
+    const isFeedOrFeedback = type === 'course_feed' || type === 'assignment_feedback' || type === 'task_feedback' || type === 'student_grade_report';
+    if (!isFeedOrFeedback) {
+      try {
+        const itemId = payload?.task_id || payload?.assignment_id || payload?.id || (typeof crypto !== 'undefined' ? crypto.randomUUID() : 'shared-item');
+        const courseId = payload?.course_id || payload?.class_id || payload?.course_meta?.course_id || payload?.course_meta?.id || null;
+        const courseName = payload?.course_meta?.name || payload?.course_meta?.course_name || payload?.course_name || '';
+        const dueDate = payload?.due_date || payload?.settings?.due_date || null;
+        storage.table('student_items').put({
+          id: `${courseId || 'general'}_${itemId}`,
+          course_id: courseId,
+          item_id: itemId,
+          kind: type,
+          title: payload?.title || payload?.name || 'Shared Item',
+          payload,
+          due_date: dueDate,
+          updated_at: new Date().toISOString()
         }).catch(() => {});
-      }
-    } catch (_) {}
+
+        if (courseId) {
+          import('./modules/student/course-store.js').then(({ upsertStudentCourse }) => {
+            upsertStudentCourse({
+              id: courseId,
+              name: courseName || 'Shared Course',
+              course_name: courseName || 'Shared Course',
+              section: payload?.course_meta?.section || '',
+              access_code: payload?.course_meta?.access_code || ''
+            }).catch(() => {});
+          }).catch(() => {});
+        }
+      } catch (_) {}
+    }
 
     const isStudent = type === 'assignment' || type === 'task' || (type === 'video' && payload?.secure) || type === 'student_grade_report' || type === 'assignment_feedback' || type === 'task_feedback';
     if (typeof document !== 'undefined' && document.body) {
@@ -610,20 +613,18 @@ export class Router {
 
     // Route to appropriate module
     if (type === 'course_feed') {
-      import('./modules/student/course-store.js').then(async ({ mergeCourseFeed }) => {
-        try {
-          const courseRecord = await mergeCourseFeed(storage, { feed: payload, isRawFeed: true });
-          RoleMode.set('student');
-          toast.success(`Enrolled in "${courseRecord?.name || 'Course'}"!`);
-          this.navigate(`#/student/course?id=${encodeURIComponent(courseRecord?.id || payload?.course?.id)}`);
-        } catch (err) {
-          console.error('Failed to activate shared course feed:', err);
-          toast.danger('Could not enroll in course: ' + err.message);
-          this.navigate('#/student/courses');
-        }
-      }).catch(() => {
+      try {
+        const { mergeCourseFeed } = await import('./modules/student/course-store.js');
+        const merged = await mergeCourseFeed(payload);
+        const courseRecord = merged?.course;
+        RoleMode.set('student');
+        toast.success(`Enrolled in "${courseRecord?.course_name || courseRecord?.name || 'Course'}"!`);
+        this.navigate(`#/student/course?id=${encodeURIComponent(courseRecord?.id || payload?.course?.id || '')}`);
+      } catch (err) {
+        console.error('Failed to activate shared course feed:', err);
+        toast.danger('Could not enroll in course: ' + (err?.message || 'Unknown error'));
         this.navigate('#/student/courses');
-      });
+      }
     } else if (type === 'flashcards') {
       store.setState('activeDeck', payload);
       this.navigate('#/flashcards/study');
@@ -663,9 +664,8 @@ export class Router {
 
   _renderEphemeralBanner(type, payload) {
     if (typeof document === 'undefined') return;
-    // Grade reports and assignments are for viewing/answering only, never for copying into a library
-    // (Video links are student copies without answer keys, so saving them as a project makes no sense)
-    if (type === 'assignment' || type === 'task' || type === 'student_grade_report' || type === 'assignment_feedback' || type === 'task_feedback' || (type === 'video' && payload?.secure)) {
+    // Course packages, grade reports, and assignments are for viewing/answering only, never for copying into a teacher library
+    if (type === 'course_feed' || type === 'assignment' || type === 'task' || type === 'student_grade_report' || type === 'assignment_feedback' || type === 'task_feedback' || (type === 'video' && payload?.secure)) {
       document.getElementById('kb-ephemeral-banner')?.remove();
       return;
     }

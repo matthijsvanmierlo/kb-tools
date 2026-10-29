@@ -38,7 +38,7 @@ export async function renderCoursePage(courseId, container) {
     return;
   }
 
-  const course = await storage.table('gradebook_courses').get(courseId);
+  let course = await storage.table('gradebook_courses').get(courseId);
   if (!course) {
     container.innerHTML = `
       <div class="p-8 text-center text-slate-500">
@@ -54,6 +54,7 @@ export async function renderCoursePage(courseId, container) {
     try {
       await GradebookBridge.reconcileCourseItemsForClass(courseId);
     } catch (_) {}
+    course = await storage.table('gradebook_courses').get(courseId) || course;
 
     const [units, items, allTasks, allAssignments, allDecks, allTimelines, allVideos] = await Promise.all([
       storage.table('course_units').where('course_id').equals(courseId).toArray().catch(() => []),
@@ -495,14 +496,8 @@ export async function renderCoursePage(courseId, container) {
     // -------------------------------------------------------------------------
     const syncFeedToRelayIfConfigured = async () => {
       try {
-        const transport = await getTransport();
-        if (isTeacherRelayConfigured(transport)) {
-          const feed = await buildCourseFeed(courseId, { relayUrl: transport.baseUrl });
-          const feedId = await deriveCourseFeedId(course.access_code || courseId);
-          const feedTransport = new PublicFeedTransport({ baseUrl: transport.baseUrl, token: transport.token });
-          await feedTransport.publishCourseFeed(feedId, feed.ciphertext, feed.etag);
-          await markFeedPublished(courseId, feed.etag);
-        }
+        const { autoSyncCourseFeed } = await import('../../core/course-feed.js');
+        await autoSyncCourseFeed(courseId);
       } catch (_) {}
     };
 
@@ -1297,6 +1292,9 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
       created_at: now
     };
     await storage.table('course_items').put(newItem);
+    await markCourseFeedDirty(courseId);
+    const { autoSyncCourseFeed } = await import('../../core/course-feed.js');
+    autoSyncCourseFeed(courseId).catch(() => {});
 
     dialog.hide();
     toast.success(`Created "${title}" and added to unit!`);
@@ -1394,6 +1392,9 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
     };
 
     await storage.table('course_items').put(newItem);
+    await markCourseFeedDirty(courseId);
+    const { autoSyncCourseFeed } = await import('../../core/course-feed.js');
+    autoSyncCourseFeed(courseId).catch(() => {});
     dialog.hide();
     toast.success(`Added "${title}" to unit!`);
     if (onAdded) onAdded();
@@ -1452,42 +1453,32 @@ async function openChangeDueDialog(kind, sourceId, itemId, onSaved) {
 }
 
 async function openShareCoursePackageDialog(course) {
-  const { CryptoShareEngine } = await import('../../core/crypto-share.js');
   const { downloadClickableHtmlFile } = await import('../../core/html-launcher.js');
   const { showQrSequence } = await import('../../components/qr-handoff.js');
-  const { buildCourseFeed } = await import('../../core/course-feed.js');
+  const { buildStudentCourseJoinLinks, autoSyncCourseFeed } = await import('../../core/course-feed.js');
 
-  // Ensure course has a valid access_code
-  if (!course.access_code) {
-    const { AccessCodes } = await import('../../core/access-codes.js');
-    course.access_code = AccessCodes.generateCode(6);
-    await storage.table('gradebook_courses').put(course);
-  }
+  toast.info('Preparing course package...', 1200);
 
-  toast.info('Preparing course package...', 1500);
-  let sharePayload = null;
-  const transport = await getTransport();
-  const hasRelay = isTeacherRelayConfigured(transport);
-  const relayUrl = hasRelay ? transport.baseUrl : null;
+  // Background auto-sync if relay configured
+  autoSyncCourseFeed(course.id).catch(() => {});
+
+  let joinInfo = null;
   try {
-    const feed = await buildCourseFeed(course.id, { relayUrl });
-    sharePayload = await CryptoShareEngine.createSharePayload('course_feed', feed.raw_payload, course.access_code);
+    joinInfo = await buildStudentCourseJoinLinks(course.id);
   } catch (err) {
     console.error('Failed to create course package:', err);
     toast.danger('Could not build course package: ' + err.message);
     return;
   }
 
-  const base = window.location.origin + window.location.pathname;
-  let joinUrl = `${base}#/student?code=${encodeURIComponent(course.access_code || '')}`;
-  if (hasRelay && relayUrl) {
-    joinUrl += `&relay=${encodeURIComponent(relayUrl)}`;
-  }
-  const shareUrl = sharePayload.url;
+  const accessCode = joinInfo.accessCode || course.access_code || '------';
+  const joinUrl = joinInfo.joinUrl;
+  const qrUrl = joinInfo.qrUrl;
+  const shareUrl = `${window.location.origin}${window.location.pathname}#/share?v=2&enc=1&d=${encodeURIComponent(joinInfo.ciphertext)}`;
 
   let qrSvg = '';
   try {
-    qrSvg = QRCode.generateSVG(joinUrl, { size: 160, margin: 1 });
+    qrSvg = QRCode.generateSVG(qrUrl, { size: 160, margin: 1 });
   } catch {
     qrSvg = '<span>QR Code</span>';
   }
@@ -1504,7 +1495,7 @@ async function openShareCoursePackageDialog(course) {
         </div>
         <div class="text-right">
           <span class="text-[10px] uppercase font-bold text-slate-500 block">Access Code</span>
-          <span class="font-mono font-bold text-primary-700 text-lg">${esc(course.access_code || '------')}</span>
+          <span class="font-mono font-bold text-primary-700 text-lg">${esc(accessCode)}</span>
         </div>
       </div>
 
@@ -1585,16 +1576,17 @@ async function openShareCoursePackageDialog(course) {
     downloadClickableHtmlFile({
       title: `${course.name} · Course Package`,
       payloadType: 'course_feed',
-      payload: sharePayload.rawFileContent,
+      payload: joinInfo.rawFileContent,
       shareUrl
     }, `${cleanName}_course.kbshare.html`);
     toast.success('Downloaded clickable course package (.kbshare.html)!');
   });
 
-  dialog.querySelector('#btn-download-course-file')?.addEventListener('click', () => {
+  dialog.querySelector('#btn-download-course-file')?.addEventListener('click', async () => {
     const cleanName = (course.name || 'course').replace(/[^a-z0-9]+/gi, '_').toLowerCase();
+    const { CryptoShareEngine } = await import('../../core/crypto-share.js');
     CryptoShareEngine.downloadKbShareFile(
-      sharePayload.rawFileContent,
+      joinInfo.rawFileContent,
       `${cleanName}_course.kbshare`
     );
     toast.success('Downloaded course package (.kbshare)!');

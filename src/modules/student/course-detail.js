@@ -149,18 +149,21 @@ export async function renderStudentCourseDetailView(params, router, container) {
                     task: 'journal-text text-indigo-600',
                     flashcards: 'collection text-purple-600',
                     timeline: 'clock-history text-emerald-600',
-                    video: 'play-circle text-rose-600'
+                    video: 'play-circle text-rose-600',
+                    link: 'box-arrow-up-right text-sky-600'
                   };
                   const iconClass = icons[kind] || 'file-earmark text-slate-500';
 
                   // Determine launch URL
-                  let launchUrl = `#/assessments/take?itemId=${encodeURIComponent(it.id)}`;
-                  if (kind === 'task') launchUrl = `#/assignments/work?itemId=${encodeURIComponent(it.id)}`;
-                  else if (kind === 'flashcards') launchUrl = `#/flashcards/study?id=${encodeURIComponent(sourceId)}`;
-                  else if (kind === 'timeline') launchUrl = `#/timeline/view?id=${encodeURIComponent(sourceId)}`;
-                  else if (kind === 'video') launchUrl = `#/video/kiosk?id=${encodeURIComponent(sourceId)}`;
+                  let launchUrl = `#/assessments/take?itemId=${encodeURIComponent(it.id)}&courseId=${encodeURIComponent(courseId)}`;
+                  if (kind === 'task') launchUrl = `#/assignments/work?itemId=${encodeURIComponent(it.id)}&courseId=${encodeURIComponent(courseId)}`;
+                  else if (kind === 'flashcards' || kind === 'flashcard') launchUrl = `#/flashcards/study?id=${encodeURIComponent(sourceId)}&courseId=${encodeURIComponent(courseId)}`;
+                  else if (kind === 'timeline') launchUrl = `#/timeline/view?id=${encodeURIComponent(sourceId)}&courseId=${encodeURIComponent(courseId)}`;
+                  else if (kind === 'video') launchUrl = `#/video/kiosk?id=${encodeURIComponent(sourceId)}&courseId=${encodeURIComponent(courseId)}`;
+                  else if (kind === 'link') launchUrl = it.settings?.url || it.url || it.payload?.url || '#';
 
-                  const displayKind = kind === 'assignment' ? 'Assessment' : (kind === 'task' ? 'Assignment' : kind);
+                  const isExternalLink = kind === 'link';
+                  const displayKind = kind === 'assignment' ? 'Assessment' : (kind === 'task' ? 'Assignment' : (kind === 'link' ? 'Web Link' : kind));
 
                   return `
                     <div class="flex flex-col sm:flex-row sm:items-center justify-between p-3.5 rounded-xl hover:bg-slate-50/80 transition-colors gap-3">
@@ -183,6 +186,10 @@ export async function renderStudentCourseDetailView(params, router, container) {
                         ${!access.unlocked ? `
                           <sl-button size="small" variant="default" disabled>
                             <sl-icon slot="prefix" name="lock"></sl-icon> Locked
+                          </sl-button>
+                        ` : isExternalLink ? `
+                          <sl-button size="small" variant="default" href="${esc(launchUrl)}" target="_blank" rel="noopener noreferrer">
+                            <sl-icon slot="prefix" name="box-arrow-up-right"></sl-icon> Open Link
                           </sl-button>
                         ` : `
                           <sl-button size="small" variant="${submission ? 'default' : 'primary'}" href="${launchUrl}">

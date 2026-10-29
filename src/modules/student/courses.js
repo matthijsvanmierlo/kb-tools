@@ -135,6 +135,26 @@ export async function renderStudentCoursesView(params, router, container) {
           const decrypted = await decryptCourseFeed(embeddedD, code);
           const merged = await mergeCourseFeed(decrypted, { accessCode: code, relayUrl });
           if (merged?.course?.id) {
+            const realName = meta.courseName || params?.cname || hashSearch.get('cname');
+            if (realName && (!merged.course.name || merged.course.name.startsWith('Course ('))) {
+              merged.course.name = realName;
+              merged.course.course_name = realName;
+              await storage.table('student_courses').put(merged.course).catch(() => {});
+            }
+            const urlSid = params?.sid || hashSearch.get('sid');
+            const urlSname = params?.sname || hashSearch.get('sname');
+            const urlScode = params?.scode || hashSearch.get('scode');
+            if (urlSid && urlSname) {
+              const { StudentProfile } = await import('../../core/student-profile.js');
+              await StudentProfile.saveIdentity({
+                courseId: merged.course.id,
+                courseName: merged.course.name,
+                section: merged.course.section || '',
+                studentId: urlSid,
+                fullName: urlSname,
+                accessCode: urlScode || code
+              }).catch(() => {});
+            }
             toast.success(`Joined "${merged.course.name || 'Course'}"!`);
             await render();
             if (router?.navigate) {
@@ -213,9 +233,23 @@ export async function renderStudentCoursesView(params, router, container) {
       if (localCourse) {
         const { buildCourseFeed } = await import('../../core/course-feed.js');
         const feed = await buildCourseFeed(localCourse.id, { relayUrl });
-        const merged = await mergeCourseFeed(feed.raw_payload, { accessCode: code, relayUrl });
+        const merged = await mergeCourseFeed(feed.feed || feed.raw_payload, { accessCode: localCourse.access_code || code, relayUrl });
         const { StudentProfile } = await import('../../core/student-profile.js');
-        await StudentProfile.saveClassAccessCode(localCourse.id, code);
+        const urlSid = params?.sid || hashSearch.get('sid');
+        const urlSname = params?.sname || hashSearch.get('sname');
+        const urlScode = params?.scode || hashSearch.get('scode');
+        if (urlSid && urlSname) {
+          await StudentProfile.saveIdentity({
+            courseId: localCourse.id,
+            courseName: localCourse.name,
+            section: localCourse.section || '',
+            studentId: urlSid,
+            fullName: urlSname,
+            accessCode: urlScode || code
+          });
+        } else {
+          await StudentProfile.saveClassAccessCode(localCourse.id, code);
+        }
         toast.success(`Joined "${localCourse.name}"!`);
         await render();
         if (router?.navigate) {
@@ -239,7 +273,10 @@ export async function renderStudentCoursesView(params, router, container) {
             }
             return;
           }
-        } catch (_) {}
+        } catch (err) {
+          toast.warning(err?.message || `Could not find a course matching code "${normalizedCode}". Make sure you typed it correctly or ask your teacher for the link.`);
+          return;
+        }
         toast.warning(`Could not find a course matching code "${normalizedCode}". Make sure you typed it correctly or ask your teacher for the link.`);
       }
     };

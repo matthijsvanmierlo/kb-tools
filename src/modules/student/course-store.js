@@ -290,10 +290,11 @@ export async function joinCourseByCode(code, opts = {}) {
       return (cNorm && (cNorm === normalizedCode || cNorm === cleanCode)) || c.id === code.trim();
     });
 
+    let matchedStudent = null;
     if (!localMatch) {
       // Check if code belongs to a student seat in gradebook_students
       const localStudents = await storage.table('gradebook_students').toArray().catch(() => []);
-      const matchedStudent = localStudents.find(s => {
+      matchedStudent = localStudents.find(s => {
         const sNorm = (s.access_code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
         return sNorm && (sNorm === normalizedCode || sNorm === cleanCode);
       });
@@ -305,7 +306,19 @@ export async function joinCourseByCode(code, opts = {}) {
     if (localMatch) {
       const { buildCourseFeed } = await import('../../core/course-feed.js');
       const feed = await buildCourseFeed(localMatch.id, { relayUrl: relayUrl || localMatch.relay_url || null });
-      return await mergeCourseFeed(feed.raw_payload, { accessCode: cleanCode, relayUrl });
+      const merged = await mergeCourseFeed(feed.feed || feed.raw_payload, { accessCode: localMatch.access_code || cleanCode, relayUrl });
+      if (matchedStudent) {
+        const { StudentProfile } = await import('../../core/student-profile.js');
+        await StudentProfile.saveIdentity({
+          courseId: localMatch.id,
+          courseName: localMatch.name,
+          section: localMatch.section || '',
+          studentId: matchedStudent.student_id,
+          fullName: matchedStudent.full_name,
+          accessCode: cleanCode
+        }).catch(() => {});
+      }
+      return merged;
     }
   } catch (err) {
     console.warn('Local course lookup check failed:', err);
@@ -313,10 +326,10 @@ export async function joinCourseByCode(code, opts = {}) {
 
   // 2. Second, if relayUrl is provided or configured in transport, query public course feed from relay
   try {
-    const { getTransport, PublicFeedTransport } = await import('../../core/transport.js');
+    const { getTransport, getStudentRelayUrl, PublicFeedTransport } = await import('../../core/transport.js');
     const { deriveCourseFeedId } = await import('../../core/course-feed.js');
     const transport = await getTransport();
-    const effectiveBaseUrl = relayUrl || transport?.baseUrl;
+    const effectiveBaseUrl = relayUrl || getStudentRelayUrl() || transport?.baseUrl;
     if (effectiveBaseUrl) {
       const feedTransport = new PublicFeedTransport({ baseUrl: effectiveBaseUrl, token: transport?.token || null });
       const feedId = await deriveCourseFeedId(cleanCode);
@@ -329,19 +342,22 @@ export async function joinCourseByCode(code, opts = {}) {
     console.warn('Remote feed lookup by access code failed:', err);
   }
 
-  // 3. Fallback: create enrolled course using real metadata if supplied, so class appears immediately in student hub & keychain
-  const displayName = courseName || `Course (${cleanCode})`;
-  const targetId = customId || ('course_' + (normalizedCode || cleanCode).toLowerCase());
-  return await upsertStudentCourse({
-    id: targetId,
-    course_id: targetId,
-    name: displayName,
-    course_name: displayName,
-    section: section,
-    color: color,
-    access_code: cleanCode,
-    relay_url: relayUrl || null
-  });
+  // 3. Fallback: if courseName is supplied (from a rich join URL/QR), create enrolled course immediately
+  if (courseName) {
+    const targetId = customId || ('course_' + (normalizedCode || cleanCode).toLowerCase());
+    return await upsertStudentCourse({
+      id: targetId,
+      course_id: targetId,
+      name: courseName,
+      course_name: courseName,
+      section: section,
+      color: color,
+      access_code: cleanCode,
+      relay_url: relayUrl || null
+    });
+  }
+
+  throw new Error(`Could not find an active course with code "${cleanCode}". Please verify the code or ask your teacher for the course link or .kbshare package.`);
 }
 
 /**

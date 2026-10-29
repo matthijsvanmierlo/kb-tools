@@ -486,6 +486,8 @@ export async function renderClassesView(params, router, container) {
         onAddStudent: () => {
           openAddStudentModal(ctx.course, async (newStudent) => {
             await storage.table('gradebook_students').put(newStudent);
+            const { autoSyncCourseFeed } = await import('../../core/course-feed.js');
+            autoSyncCourseFeed(ctx.course.id).catch(() => {});
             toast.success(`Student ${newStudent.full_name} added!`);
             render();
           });
@@ -498,40 +500,20 @@ export async function renderClassesView(params, router, container) {
       const joinInput = container.querySelector('#input-join-link');
       if (!qrMount) return;
 
-      if (!activeCourse.access_code) {
-        const { AccessCodes } = await import('../../core/access-codes.js');
-        activeCourse.access_code = AccessCodes.generateCode();
-        await storage.table('gradebook_courses').put(activeCourse);
-      }
+      const { buildStudentCourseJoinLinks, autoSyncCourseFeed } = await import('../../core/course-feed.js');
+      autoSyncCourseFeed(activeCourse.id).catch(() => {});
 
-      const code = activeCourse.access_code || '';
-      const base = window.location.origin + window.location.pathname;
-
-      let relay = '';
-      try {
-        const { getTransport } = await import('../../core/transport.js');
-        const transport = await getTransport();
-        relay = transport?.baseUrl || activeCourse.relay_url || '';
-      } catch (_) {}
-
-      const params = new URLSearchParams();
-      params.set('code', code);
-      params.set('cid', activeCourse.id);
-      if (activeCourse.name) params.set('cname', activeCourse.name);
-      if (activeCourse.section) params.set('csec', activeCourse.section);
-      if (activeCourse.color) params.set('ccolor', activeCourse.color);
-      if (relay) params.set('relay', relay);
-
-      const joinUrl = `${base}#/student/courses?${params.toString()}`;
+      const joinInfo = await buildStudentCourseJoinLinks(activeCourse.id).catch(() => null);
+      if (!joinInfo) return;
 
       if (joinInput) {
-        joinInput.value = joinUrl;
+        joinInput.value = joinInfo.joinUrl;
       }
 
       qrMount.innerHTML = '';
-      if (code) {
+      if (joinInfo.accessCode) {
         try {
-          const qrSvg = QRCode.generateSVG(joinUrl, { size: 128, margin: 1 });
+          const qrSvg = QRCode.generateSVG(joinInfo.qrUrl, { size: 128, margin: 1 });
           qrMount.innerHTML = qrSvg;
         } catch (err) {
           qrMount.innerHTML = '<span class="text-xs text-slate-400">QR unavailable</span>';

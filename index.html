@@ -93,17 +93,19 @@
           <sl-icon name="search"></sl-icon>
         </button>
 
-        <!-- 2. Data Safety, Backup & Sync Dropdown -->
-        <sl-dropdown class="kb-storage-menu" placement="bottom-end" distance="6">
-          <button slot="trigger" type="button" class="kb-data-sync-pill" aria-label="Backup and storage options" title="Backup &amp; storage">
-            <span id="kb-data-safety-chip" class="inline-flex items-center gap-1.5 text-xs font-medium" aria-label="Data safety">
-              <sl-icon name="shield"></sl-icon>
-              <span id="kb-data-safety-label" class="hidden md:inline">Data safe</span>
-            </span>
-            <span id="sync-status-indicator" class="inline-flex items-center text-xs"></span>
-            <sl-icon name="chevron-down" class="text-[10px] text-slate-400"></sl-icon>
+        <!-- 2. Data Safety & Backup Controls -->
+        <div class="kb-header-storage-group inline-flex items-center">
+          <button type="button" id="kb-data-safety-chip" class="kb-safety-chip inline-flex items-center gap-1.5 text-xs font-medium" aria-label="Data safety checkup" title="Data safety checkup">
+            <sl-icon name="shield"></sl-icon>
+            <span id="kb-data-safety-label" class="hidden md:inline">Data safe</span>
           </button>
-          <sl-menu id="kb-storage-menu-list">
+          <sl-dropdown class="kb-storage-menu" placement="bottom-end" distance="6">
+            <button slot="trigger" type="button" class="kb-data-sync-pill" aria-label="Backup and storage options" title="Backup &amp; storage">
+              <span id="sync-status-indicator" class="inline-flex items-center text-xs"></span>
+              <sl-icon name="hdd-network" class="text-xs text-slate-500"></sl-icon>
+              <sl-icon name="chevron-down" class="text-[10px] text-slate-400"></sl-icon>
+            </button>
+            <sl-menu id="kb-storage-menu-list">
             <sl-menu-label>Data Safety &amp; Storage</sl-menu-label>
             <sl-menu-item value="open-data-safety" id="menu-btn-open-data-safety">
               <sl-icon slot="prefix" name="shield-check" class="text-emerald-600"></sl-icon>

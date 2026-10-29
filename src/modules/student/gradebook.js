@@ -145,7 +145,7 @@ export async function renderStudentGradebookView(params, router, container) {
                           ` : '<span class="text-slate-400">Awaiting grade</span>'}
                         </td>
                         <td class="px-5 py-4 text-center">
-                          ${it.item_type === 'assignment_feedback' ? `
+                          ${(it.item_type === 'assignment_feedback' || it.item_type === 'task_feedback') ? `
                             <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
                               <sl-icon name="check2-circle"></sl-icon> Feedback Returned
                             </span>
@@ -310,6 +310,45 @@ export async function renderStudentGradebookView(params, router, container) {
               }).join('')}
             </ol>
           </div>
+        ` : item.rubric || (item.standards && item.standards.length) ? `
+          <div class="space-y-4">
+            ${item.rubric ? `
+              <div class="space-y-2">
+                <h3 class="font-bold text-slate-900 text-sm">Rubric Evaluation</h3>
+                <div class="space-y-2">
+                  ${(item.rubric.criteria || []).map(crit => {
+                    const evalTier = item.rubric.eval?.[crit.id];
+                    const comment = item.rubric.comments?.[crit.id];
+                    return `
+                      <div class="p-3 rounded-xl border border-slate-200 bg-slate-50/50 space-y-1 text-xs">
+                        <div class="flex justify-between items-center font-semibold text-slate-800">
+                          <span>${esc(crit.title || 'Criterion')}</span>
+                          ${evalTier ? `<span class="px-2 py-0.5 rounded-full bg-blue-100 text-blue-800 font-medium">${esc(evalTier)}</span>` : ''}
+                        </div>
+                        ${comment ? `<div class="text-slate-600 italic">“${esc(comment)}”</div>` : ''}
+                      </div>
+                    `;
+                  }).join('')}
+                </div>
+              </div>
+            ` : ''}
+            ${item.standards && item.standards.length ? `
+              <div class="space-y-2">
+                <h3 class="font-bold text-slate-900 text-sm">Standards Mastery</h3>
+                <div class="space-y-2">
+                  ${item.standards.map(std => `
+                    <div class="p-3 rounded-xl border border-slate-200 bg-slate-50/50 space-y-1 text-xs">
+                      <div class="flex justify-between items-center font-semibold text-slate-800">
+                        <span>${esc(std.code)} · ${esc(std.description || '')}</span>
+                        ${std.level_label ? `<span class="px-2 py-0.5 rounded-full text-white font-bold" style="background-color: ${esc(std.level_color || '#2563eb')}">${esc(std.level_label)}</span>` : ''}
+                      </div>
+                      ${std.comment ? `<div class="text-slate-600 italic">“${esc(std.comment)}”</div>` : ''}
+                    </div>
+                  `).join('')}
+                </div>
+              </div>
+            ` : ''}
+          </div>
         ` : `
           <div class="text-xs text-slate-400 italic">No question-level breakdown available for this score.</div>
         `}
@@ -463,6 +502,15 @@ export async function renderStudentGradebookView(params, router, container) {
             render();
             return;
           }
+          if (parsed.type === 'task_feedback' || parsed.kind === 'task_feedback') {
+            await StudentLedger.ingestTaskFeedback(parsed.payload);
+            dialog.hide();
+            toast.success('Feedback added to your gradebook!');
+            courses = await StudentLedger.getStudentCourses();
+            allEntries = await StudentLedger.getAllLedgerEntries();
+            render();
+            return;
+          }
           if (parsed.type === 'student_grade_report') {
             dialog.hide();
             const { store } = await import('../../state/store.js');
@@ -479,6 +527,22 @@ export async function renderStudentGradebookView(params, router, container) {
           courses = await StudentLedger.getStudentCourses();
           allEntries = await StudentLedger.getAllLedgerEntries();
           render();
+          return;
+        }
+
+        if (parsed && (parsed.kind === 'task_feedback' || parsed.type === 'task_feedback')) {
+          await StudentLedger.ingestTaskFeedback(parsed.payload || parsed);
+          dialog.hide();
+          toast.success('Feedback added to your gradebook!');
+          courses = await StudentLedger.getStudentCourses();
+          allEntries = await StudentLedger.getAllLedgerEntries();
+          render();
+          return;
+        }
+
+        if (parsed && (parsed.enc === '1' || parsed.enc === 1) && parsed.d) {
+          dialog.hide();
+          router.navigate(`#/share?v=2&enc=1&d=${encodeURIComponent(parsed.d)}`);
           return;
         }
 

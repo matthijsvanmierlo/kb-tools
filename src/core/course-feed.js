@@ -75,8 +75,16 @@ export async function buildCourseFeed(courseId, opts = {}) {
               await storage.table('tasks').put(rawTask).catch(() => {});
             }
             const taskSalt = rawTask.publish?.salt || 'course-salt';
+            let taskRosterChecks = null;
+            let taskRosterCards = null;
+            if (rosterWithCode.length > 0) {
+              taskRosterChecks = await SubmissionCrypto.buildRosterChecks(sourceId, taskSalt, rosterWithCode);
+              taskRosterCards = await SubmissionCrypto.buildRosterCards(sourceId, rosterWithCode);
+            }
             itemPayload = await buildStudentTaskPayload(rawTask, {
               teacherKeys: keys,
+              rosterChecks: taskRosterChecks,
+              rosterCards: taskRosterCards,
               courseMeta: { id: course.id, course_id: course.id, name: course.name, course_name: course.name, section: course.section, access_code: course.access_code },
               relay: rawTask.publish?.relay || null
             });
@@ -152,6 +160,9 @@ export async function buildCourseFeed(courseId, opts = {}) {
     format_version: parsedFile.v,
     published_at: feedPayload.published_at,
     raw_payload: feedPayload,
+    feed: feedPayload,
+    encryptedEnvelope: parsedFile,
+    accessCode: normalizedAccessCode,
     rawFileContent: packed.rawFileContent,
     stats: {
       unitsCount: feedPayload.units.length,
@@ -219,4 +230,85 @@ export async function deriveCourseFeedId(accessCodeOrCourseId) {
   const buf = new TextEncoder().encode(`kb-course-feed-v1|${norm}`);
   const digest = await crypto.subtle.digest('SHA-256', buf);
   return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 24);
+}
+
+/**
+ * Automatically sync course feed to relay if transport is configured.
+ * @param {string} courseId
+ * @returns {Promise<{ feedId: string, etag: string, synced: boolean }|null>}
+ */
+export async function autoSyncCourseFeed(courseId) {
+  if (!courseId) return null;
+  try {
+    const { getTransport, isTeacherRelayConfigured, PublicFeedTransport } = await import('./transport.js');
+    const { markFeedPublished } = await import('./course-revision.js');
+    const transport = await getTransport();
+    if (!isTeacherRelayConfigured(transport)) return null;
+
+    const freshCourse = await storage.table('gradebook_courses').get(courseId);
+    if (!freshCourse) return null;
+
+    const feedResult = await buildCourseFeed(courseId, { relayUrl: transport.baseUrl });
+    const codeToUse = feedResult.accessCode || freshCourse.access_code;
+    const feedId = await deriveCourseFeedId(codeToUse || courseId);
+    const feedTransport = new PublicFeedTransport({ baseUrl: transport.baseUrl, token: transport.token });
+    await feedTransport.publishCourseFeed(feedId, feedResult.ciphertext, feedResult.etag);
+    await markFeedPublished(courseId, feedResult.etag);
+    return { feedId, etag: feedResult.etag, synced: true };
+  } catch (err) {
+    console.warn('[course-feed] autoSyncCourseFeed failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Builds rich, self-contained student course join links and QR codes.
+ * Ensures metadata (cname, cid, csec, ccolor) and inline feed ciphertext (d) are packaged when compact.
+ * @param {string} courseId
+ * @param {object} [opts]
+ */
+export async function buildStudentCourseJoinLinks(courseId, opts = {}) {
+  const feedResult = await buildCourseFeed(courseId, opts);
+  const course = feedResult.raw_payload?.course || {};
+  const accessCode = feedResult.accessCode || course.access_code || '';
+  const origin = opts.origin || (typeof window !== 'undefined' && window.location ? window.location.origin : 'https://kennisboost.local');
+  const pathname = (typeof window !== 'undefined' && window.location && window.location.pathname) ? window.location.pathname : '/';
+  const basePath = `${origin.replace(/\/+$/, '')}${pathname.startsWith('/') ? pathname : '/' + pathname}`;
+
+  const { getStudentRelayUrl } = await import('./transport.js');
+  const relayUrl = opts.relayUrl || course.relay_url || getStudentRelayUrl({ relay_url: course.relay_url }) || '';
+
+  const params = new URLSearchParams();
+  if (accessCode) params.set('code', accessCode);
+  if (course.id) params.set('cid', course.id);
+  if (course.name) params.set('cname', course.name);
+  if (course.section) params.set('csec', course.section);
+  if (course.color) params.set('ccolor', course.color);
+  if (relayUrl) params.set('relay', relayUrl);
+
+  const baseJoinUrl = `${basePath}#/student/courses?${params.toString()}`;
+
+  // If ciphertext fits within safe URL budget (<= 4000 chars), include it so student loads offline with 0 server dependency
+  let fullJoinUrl = baseJoinUrl;
+  if (feedResult.ciphertext && feedResult.ciphertext.length <= 4000) {
+    const fullParams = new URLSearchParams(params);
+    fullParams.set('d', feedResult.ciphertext);
+    fullJoinUrl = `${basePath}#/student/courses?${fullParams.toString()}`;
+  }
+
+  // QR Code URL: if full fits in standard QR budget (<= 1500 chars), use full; otherwise baseJoinUrl
+  const qrUrl = (fullJoinUrl.length <= 1500) ? fullJoinUrl : baseJoinUrl;
+
+  return {
+    courseId,
+    course,
+    accessCode,
+    joinUrl: fullJoinUrl,
+    baseJoinUrl,
+    qrUrl,
+    ciphertext: feedResult.ciphertext,
+    rawFileContent: feedResult.rawFileContent,
+    stats: feedResult.stats,
+    feedResult
+  };
 }

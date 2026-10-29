@@ -426,7 +426,9 @@ export function isTeacherRelayConfigured(transport = _currentTransport) {
 export function getStudentRelayUrl(target = null) {
   const url = target?.relay_url
     || target?.relay?.base_url
-    || (typeof window !== 'undefined' && (window.KB_CONFIG?.relay?.baseUrl || window.KB_CONFIG?.baseUrl))
+    || target?.relay?.baseUrl
+    || (_currentTransport instanceof RelayTransport && _currentTransport.baseUrl ? _currentTransport.baseUrl : null)
+    || (typeof window !== 'undefined' && (window.KB_CONFIG?.relay?.baseUrl || window.KB_CONFIG?.baseUrl || window.KB_CONFIG?.relayUrl || window.KB_CONFIG?.defaultRelayUrl))
     || null;
   return url ? String(url).replace(/\/+$/, '') : null;
 }

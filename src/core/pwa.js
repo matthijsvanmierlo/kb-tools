@@ -163,13 +163,27 @@ export async function openIncomingFiles(files, router) {
         }
         if (parsed.course && (Array.isArray(parsed.items) || Array.isArray(parsed.units))) {
           const { mergeCourseFeed } = await import('../modules/student/course-store.js');
-          await mergeCourseFeed(parsed);
-          router.navigate(`#/student/course?id=${parsed.course.id}`);
+          const merged = await mergeCourseFeed(parsed);
+          router.navigate(`#/student/course?id=${merged?.course?.id || parsed.course.id}`);
+          return;
+        }
+        if (parsed.kind === 'course_feed' || parsed.type === 'course_feed' || parsed.kind === 'kb_course_feed') {
+          const { mergeCourseFeed } = await import('../modules/student/course-store.js');
+          const merged = await mergeCourseFeed(parsed.payload || parsed);
+          router.navigate(`#/student/course?id=${merged?.course?.id || parsed.payload?.course?.id || ''}`);
           return;
         }
         if (parsed.kind === 'assignment_feedback' || parsed.type === 'assignment_feedback') {
           if (typeof router._activateSharedPayload === 'function') {
-            router._activateSharedPayload({ type: 'assignment_feedback', payload: parsed });
+            router._activateSharedPayload({ type: 'assignment_feedback', payload: parsed.payload || parsed });
+          } else {
+            router.navigate('#/student/gradebook');
+          }
+          return;
+        }
+        if (parsed.kind === 'task_feedback' || parsed.type === 'task_feedback') {
+          if (typeof router._activateSharedPayload === 'function') {
+            router._activateSharedPayload({ type: 'task_feedback', payload: parsed.payload || parsed });
           } else {
             router.navigate('#/student/gradebook');
           }

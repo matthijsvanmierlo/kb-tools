@@ -343,6 +343,8 @@ export async function renderGradebookView(params, router, container) {
         onAddStudent: () => {
           openAddStudentModal(activeCourse, async (newStudent) => {
             await storage.table('gradebook_students').put(newStudent);
+            const { autoSyncCourseFeed } = await import('../../core/course-feed.js');
+            autoSyncCourseFeed(activeCourse.id).catch(() => {});
             toast.success(`Student ${newStudent.full_name} added!`);
             renderGradebookView(params, router, container);
           });
@@ -559,6 +561,8 @@ export async function renderGradebookView(params, router, container) {
   container.querySelector('#btn-add-student')?.addEventListener('click', () => {
     openAddStudentModal(activeCourse, async (newStudent) => {
       await storage.table('gradebook_students').put(newStudent);
+      const { autoSyncCourseFeed } = await import('../../core/course-feed.js');
+      autoSyncCourseFeed(activeCourse.id).catch(() => {});
       toast.success(`Student ${newStudent.full_name} added!`);
       renderGradebookView(params, router, container);
     });

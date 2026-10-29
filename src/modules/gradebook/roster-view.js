@@ -285,6 +285,9 @@ export async function renderRosterView({
                             <button type="button" class="btn-copy-code text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer" data-code="${Sanitizer.escapeHTML(s.access_code)}" title="Copy code">
                               <sl-icon name="clipboard"></sl-icon>
                             </button>
+                            <button type="button" class="btn-copy-student-pass text-blue-500 hover:text-blue-700 p-0.5 rounded cursor-pointer" data-id="${safeId}" data-code="${Sanitizer.escapeHTML(s.access_code)}" data-name="${safeName}" title="Copy Student Invite Pass (1-Click Join)">
+                              <sl-icon name="link-45deg"></sl-icon>
+                            </button>
                           </div>
                         ` : `
                           <button type="button" class="btn-gen-code px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-[11px] font-medium hover:bg-amber-200 cursor-pointer" data-id="${safeId}">
@@ -505,6 +508,31 @@ export async function renderRosterView({
         try {
           await navigator.clipboard.writeText(code);
           toast.success('Access code copied.');
+        } catch (_) {
+          toast.warning('Copy failed.');
+        }
+      });
+    });
+
+    // Copy 1-click student invite pass
+    container.querySelectorAll('.btn-copy-student-pass').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const studentCode = btn.dataset.code;
+        const studentId = btn.dataset.id;
+        const studentName = btn.dataset.name;
+        const base = window.location.origin + window.location.pathname;
+        const params = new URLSearchParams();
+        params.set('code', course.access_code || studentCode);
+        params.set('cid', course.id);
+        if (course.name) params.set('cname', course.name);
+        if (course.section) params.set('csec', course.section);
+        params.set('sid', studentId);
+        params.set('sname', studentName);
+        params.set('scode', studentCode);
+        const passUrl = `${base}#/student/courses?${params.toString()}`;
+        try {
+          await navigator.clipboard.writeText(passUrl);
+          toast.success(`Copied invite pass for ${studentName}!`);
         } catch (_) {
           toast.warning('Copy failed.');
         }

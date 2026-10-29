@@ -139,7 +139,11 @@ export class ContentImporter {
     // 1. Check for student course enrollment link (#/student?code=...)
     const studentCode = extractStudentCode(raw);
     if (studentCode) {
-      return { kind: 'student_join', code: studentCode, rawText: raw, filename };
+      let queryString = '';
+      if (raw.includes('?')) {
+        queryString = raw.slice(raw.indexOf('?') + 1).split(/["'\s<>]/)[0];
+      }
+      return { kind: 'student_join', code: studentCode, queryString, rawText: raw, filename };
     }
 
     // 2. Check for share URL (#/share?... or URL with d=/ref=)

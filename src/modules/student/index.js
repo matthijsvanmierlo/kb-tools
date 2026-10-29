@@ -416,7 +416,7 @@ function openAddCodeDialog(onSaved) {
     try {
       const { joinCourseByCode, upsertStudentCourse } = await import('./course-store.js');
       if (code) {
-        await joinCourseByCode(code).catch(() => {});
+        await joinCourseByCode(code, { courseName: cName }).catch(() => {});
       } else if (cName) {
         await upsertStudentCourse({
           id: 'course_' + cName.toLowerCase().replace(/[^a-z0-9]+/g, '_'),
