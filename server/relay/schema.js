@@ -98,6 +98,7 @@ CREATE TABLE IF NOT EXISTS drop_media (
 
 CREATE TABLE IF NOT EXISTS feedback_drops (
   drop_id TEXT PRIMARY KEY,
+  teacher_id TEXT,
   ciphertext TEXT NOT NULL,
   created_at TEXT NOT NULL,
   expires_at TEXT

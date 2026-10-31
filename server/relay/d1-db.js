@@ -23,13 +23,34 @@ export function createD1Database(d1) {
     async pruneExpired({ retentionDays = null } = {}) {
       const now = new Date().toISOString();
       const pRes = await d1.prepare('DELETE FROM payloads WHERE expires_at IS NOT NULL AND expires_at < ?').bind(now).run();
+      
+      // Before deleting drops, collect any associated media keys so caller can prune blobs
+      let expiredMediaKeys = [];
+      try {
+        const dropRows = await d1.prepare('SELECT id FROM drops WHERE expires_at IS NOT NULL AND expires_at < ?').bind(now).all();
+        const expiredDropIds = (dropRows?.results || []).map(r => r.id);
+        if (expiredDropIds.length > 0) {
+          const placeholders = expiredDropIds.map(() => '?').join(',');
+          const mediaRows = await d1.prepare(`SELECT key FROM drop_media WHERE drop_id IN (${placeholders})`).bind(...expiredDropIds).all();
+          expiredMediaKeys = (mediaRows?.results || []).map(r => r.key);
+        }
+      } catch (_) {}
+
       const dRes = await d1.prepare('DELETE FROM drops WHERE expires_at IS NOT NULL AND expires_at < ?').bind(now).run();
+      let fbRes = null;
+      try {
+        fbRes = await d1.prepare('DELETE FROM feedback_drops WHERE expires_at IS NOT NULL AND expires_at < ?').bind(now).run();
+      } catch (_) {}
+
       const result = {
         payloadsPruned: pRes?.meta?.changes ?? 0,
         dropsPruned: dRes?.meta?.changes ?? 0,
+        feedbackPruned: fbRes?.meta?.changes ?? 0,
         submissionsPruned: 0,
         draftsPruned: 0,
-        chunksPruned: 0
+        chunksPruned: 0,
+        snapshotsPruned: 0,
+        expiredMediaKeys
       };
 
       if (retentionDays > 0) {
@@ -40,6 +61,19 @@ export function createD1Database(d1) {
         result.submissionsPruned = sRes?.meta?.changes ?? 0;
         result.draftsPruned = dfRes?.meta?.changes ?? 0;
         result.chunksPruned = cRes?.meta?.changes ?? 0;
+        try {
+          const snapRes = await d1.prepare(`
+            DELETE FROM sync_snapshots
+            WHERE created_at < ?
+              AND rowid NOT IN (
+                SELECT rowid FROM (
+                  SELECT rowid, ROW_NUMBER() OVER (PARTITION BY workspace_id ORDER BY created_at DESC) as rn
+                  FROM sync_snapshots
+                ) WHERE rn = 1
+              )
+          `).bind(cutoff).run();
+          result.snapshotsPruned = snapRes?.meta?.changes ?? 0;
+        } catch (_) {}
       }
       return result;
     },
@@ -213,6 +247,12 @@ export function createD1Database(d1) {
 
     feeds: {
       async put({ courseId, teacherId, ciphertext, etag, updatedAt = new Date().toISOString() }) {
+        const existing = await d1.prepare('SELECT teacher_id FROM course_feeds WHERE course_id = ?').bind(courseId).first();
+        if (existing && existing.teacher_id !== teacherId) {
+          const err = new Error('FEED_OWNERSHIP_CONFLICT');
+          err.code = 'FORBIDDEN';
+          throw err;
+        }
         await d1.prepare(`
           INSERT INTO course_feeds (course_id, teacher_id, ciphertext, etag, updated_at)
           VALUES (?, ?, ?, ?, ?)
@@ -280,6 +320,43 @@ export function createD1Database(d1) {
       async getStats(dropId) {
         const row = await d1.prepare('SELECT count(*) as count, coalesce(sum(size), 0) as total_size FROM drop_media WHERE drop_id = ?').bind(dropId).first();
         return { count: Number(row?.count || 0), totalSize: Number(row?.total_size || 0) };
+      }
+    },
+
+    feedbackDrops: {
+      async put({ dropId, teacherId = null, ciphertext, expiresAt = null }) {
+        const now = new Date().toISOString();
+        const existing = await d1.prepare('SELECT teacher_id FROM feedback_drops WHERE drop_id = ?').bind(dropId).first();
+        if (existing && existing.teacher_id && teacherId && existing.teacher_id !== teacherId) {
+          const err = new Error('FEEDBACK_DROP_OWNERSHIP_CONFLICT');
+          err.code = 'FORBIDDEN';
+          throw err;
+        }
+        await d1.prepare(`INSERT INTO feedback_drops (drop_id, teacher_id, ciphertext, created_at, expires_at) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (drop_id) DO UPDATE SET teacher_id = coalesce(excluded.teacher_id, feedback_drops.teacher_id), ciphertext = excluded.ciphertext, created_at = excluded.created_at, expires_at = excluded.expires_at`)
+          .bind(dropId, teacherId || null, ciphertext, now, expiresAt || null)
+          .run();
+        return { dropId, createdAt: now };
+      },
+      async get(dropId) {
+        const row = await d1.prepare('SELECT * FROM feedback_drops WHERE drop_id = ?').bind(dropId).first();
+        if (!row) return null;
+        if (row.expires_at && row.expires_at < new Date().toISOString()) {
+          return { expired: true };
+        }
+        return row;
+      },
+      async delete(dropId, teacherId = null) {
+        if (teacherId) {
+          const row = await d1.prepare('SELECT teacher_id FROM feedback_drops WHERE drop_id = ?').bind(dropId).first();
+          if (row && row.teacher_id && row.teacher_id !== teacherId) {
+            const err = new Error('FEEDBACK_DROP_OWNERSHIP_CONFLICT');
+            err.code = 'FORBIDDEN';
+            throw err;
+          }
+        }
+        const res = await d1.prepare('DELETE FROM feedback_drops WHERE drop_id = ?').bind(dropId).run();
+        return (res?.meta?.changes ?? 0) > 0;
       }
     },
 

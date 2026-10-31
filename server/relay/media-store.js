@@ -18,6 +18,13 @@ export function createMemoryMediaStore(backingMap = new Map()) {
       if (!item) return null;
       return { data: item.data, contentType: item.contentType || 'application/octet-stream' };
     },
+    async delete(key) {
+      return backingMap.delete(key);
+    },
+    async deleteMany(keys = []) {
+      for (const k of keys) backingMap.delete(k);
+      return true;
+    },
     raw: backingMap
   };
 }
@@ -55,6 +62,19 @@ export function createFsMediaStore(dirPath) {
         } catch (_) {}
       }
       return { data, contentType };
+    },
+    async delete(key) {
+      const filePath = path.join(dir, key);
+      const metaPath = path.join(dir, `${key}.meta.json`);
+      try { await fs.promises.unlink(filePath); } catch (_) {}
+      try { await fs.promises.unlink(metaPath); } catch (_) {}
+      return true;
+    },
+    async deleteMany(keys = []) {
+      for (const k of keys) {
+        await this.delete(k);
+      }
+      return true;
     }
   };
 }
@@ -85,6 +105,19 @@ export function createR2MediaStore(r2Bucket) {
         data: new Uint8Array(arrayBuf),
         contentType: obj.httpMetadata?.contentType || 'application/octet-stream'
       };
+    },
+    async delete(key) {
+      const objectKey = `assets/${key}`;
+      try {
+        await r2Bucket.delete(objectKey);
+      } catch (_) {}
+      return true;
+    },
+    async deleteMany(keys = []) {
+      for (const k of keys) {
+        await this.delete(k);
+      }
+      return true;
     },
     raw: r2Bucket
   };

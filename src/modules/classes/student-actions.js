@@ -465,13 +465,23 @@ export async function mergeStudents({ courseId, primaryStudent, duplicateStudent
   aliases.delete(primId);
   primaryStudent.aliases = Array.from(aliases);
 
-  // 2. Merge previous access code hashes
-  const prevHashes = new Set([
-    ...(Array.isArray(primaryStudent.previous_access_codes) ? primaryStudent.previous_access_codes : []),
-    ...(Array.isArray(duplicateStudent.previous_access_codes) ? duplicateStudent.previous_access_codes : [])
-  ]);
-  if (duplicateStudent.access_code_hash) prevHashes.add(duplicateStudent.access_code_hash);
-  primaryStudent.previous_access_codes = Array.from(prevHashes);
+  // 2. Merge previous access codes (array of objects { code, retired_at })
+  const prevCodes = Array.isArray(primaryStudent.previous_access_codes)
+    ? [...primaryStudent.previous_access_codes]
+    : [];
+  if (Array.isArray(duplicateStudent.previous_access_codes)) {
+    for (const item of duplicateStudent.previous_access_codes) {
+      if (item && item.code && !prevCodes.some(p => p.code === item.code)) {
+        prevCodes.push(item);
+      }
+    }
+  }
+  if (duplicateStudent.access_code && duplicateStudent.access_code !== primaryStudent.access_code) {
+    if (!prevCodes.some(p => p.code === duplicateStudent.access_code)) {
+      prevCodes.push({ code: duplicateStudent.access_code, retired_at: new Date().toISOString() });
+    }
+  }
+  primaryStudent.previous_access_codes = prevCodes;
 
   // 3. Merge fields
   if (!primaryStudent.email && duplicateStudent.email) primaryStudent.email = duplicateStudent.email;

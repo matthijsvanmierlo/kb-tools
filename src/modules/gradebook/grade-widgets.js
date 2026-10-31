@@ -100,7 +100,7 @@ export function renderRubricSection({ rubric, rubricEval = {}, rubricComments = 
               <span class="text-sm font-medium text-slate-800">${esc(c.name)}</span>
               ${c.weight && c.weight !== 1 ? `<span class="text-[11px] text-slate-400">×${num(c.weight, 1)}</span>` : ''}
             </div>
-            <div class="grid gap-1.5" style="grid-template-columns: repeat(${(rubric.tiers || []).length || 1}, minmax(0, 1fr));">
+            <div class="grid gap-1.5" style="grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));">
               ${(rubric.tiers || []).map(t => {
                 const cell = c.cells?.[t.id];
                 const pts = cell ? (cell.points ?? t.default_points ?? 0) : (t.default_points ?? 0);

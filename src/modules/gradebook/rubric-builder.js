@@ -194,7 +194,7 @@ export class RubricScorer {
 
     drawer.querySelector('#btn-apply-rubric')?.addEventListener('click', () => {
       const score = this.calculateScore(rubric, selectedEval);
-      drawer.remove();
+      drawer.hide();
       if (typeof onCommit === 'function') {
         onCommit({
           raw_score: score.totalEarned,
@@ -205,7 +205,10 @@ export class RubricScorer {
       }
     });
 
-    drawer.querySelector('#btn-cancel-rubric')?.addEventListener('click', () => drawer.remove());
+    drawer.querySelector('#btn-cancel-rubric')?.addEventListener('click', () => drawer.hide());
+    drawer.addEventListener('sl-after-hide', (e) => {
+      if (e.target === drawer) drawer.remove();
+    });
     updateUI();
   }
 }
@@ -221,12 +224,14 @@ export class RubricDesigner {
     const existing = document.getElementById('sl-rubrics-manager-dialog');
     if (existing) existing.remove();
 
+    const courseId = course?.id || null;
+    const courseName = course?.name || 'Class / Global';
     const rubrics = (await storage.table('gradebook_rubrics').toArray())
-      .filter(r => r.course_id === course.id);
+      .filter(r => !courseId || r.course_id === courseId || !r.course_id);
 
     const dialog = document.createElement('sl-dialog');
     dialog.id = 'sl-rubrics-manager-dialog';
-    dialog.label = `Rubrics Manager — ${course.name}`;
+    dialog.label = `Rubrics Manager — ${courseName}`;
     dialog.style.setProperty('--width', '640px');
 
     dialog.innerHTML = `
@@ -271,10 +276,13 @@ export class RubricDesigner {
 
     document.body.appendChild(dialog);
     dialog.show();
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target === dialog) dialog.remove();
+    });
 
     dialog.querySelector('#btn-new-rubric')?.addEventListener('click', () => {
-      dialog.remove();
-      this.openDesignerModal({ courseId: course.id, onSave: () => onUpdate() });
+      dialog.hide();
+      this.openDesignerModal({ courseId: course?.id || null, onSave: (saved) => onUpdate && onUpdate(saved) });
     });
 
     dialog.querySelectorAll('.btn-edit-rubric').forEach(btn => {
@@ -282,8 +290,8 @@ export class RubricDesigner {
         const id = btn.getAttribute('data-id');
         const rubric = rubrics.find(r => r.id === id);
         if (rubric) {
-          dialog.remove();
-          this.openDesignerModal({ courseId: course.id, rubric, onSave: () => onUpdate() });
+          dialog.hide();
+          this.openDesignerModal({ courseId: course?.id || null, rubric, onSave: (saved) => onUpdate && onUpdate(saved) });
         }
       });
     });
@@ -549,11 +557,14 @@ export class RubricDesigner {
 
         await storage.table('gradebook_rubrics').put(currentRubric);
         toast.success(`Rubric "${currentRubric.title}" saved!`);
-        dialog.remove();
+        dialog.hide();
         if (onSave) onSave(currentRubric);
       });
 
-      dialog.querySelector('#btn-cancel-designer')?.addEventListener('click', () => dialog.remove());
+      dialog.querySelector('#btn-cancel-designer')?.addEventListener('click', () => dialog.hide());
+      dialog.addEventListener('sl-after-hide', (e) => {
+        if (e.target === dialog) dialog.remove();
+      });
     };
 
     document.body.appendChild(dialog);

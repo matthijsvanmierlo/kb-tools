@@ -58,7 +58,15 @@ async function nodeReqToWebRequest(req, host, isEncrypted) {
   let body = null;
   if (method !== 'GET' && method !== 'HEAD') {
     const chunks = [];
+    let bytesRead = 0;
+    const MAX_REQ_BYTES = 34 * 1024 * 1024; // 34MB (safely accommodates max 32MB sync snapshots)
     for await (const chunk of req) {
+      bytesRead += chunk.length;
+      if (bytesRead > MAX_REQ_BYTES) {
+        const err = new Error('PAYLOAD_TOO_LARGE');
+        err.code = 413;
+        throw err;
+      }
       chunks.push(chunk);
     }
     body = Buffer.concat(chunks);
@@ -178,7 +186,7 @@ export function createRelayServer(opts = {}) {
       const host = req.headers.host || `localhost:${DEFAULT_PORT}`;
       const isEncrypted = Boolean(req.socket?.encrypted || opts.tls);
       const webReq = await nodeReqToWebRequest(req, host, isEncrypted);
-      const clientIp = req.socket.remoteAddress || '127.0.0.1';
+      const clientIp = (req.headers['cf-connecting-ip'] || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket.remoteAddress || '127.0.0.1');
 
       const webRes = await fetchHandler(webReq, { clientIp });
       await sendWebResponse(webRes, res);

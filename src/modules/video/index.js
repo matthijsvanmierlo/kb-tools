@@ -1552,12 +1552,13 @@ async function renderKioskCompletion(assessment, student, responseLogs, containe
 
   const fingerprint = assessment.secure?.key_fingerprint || '';
   const pct = maxScore > 0 ? Math.round((earnedScore / maxScore) * 100) : 0;
+  const resolvedCourseName = assessment.course_meta?.course_name || assessment.course_name || 'Class Assessment';
 
   // Persist submission into student ledger
   StudentLedger.recordSubmission({
     assignmentId: assessment.id,
     courseId: assessment.class_id || assessment.course_meta?.course_id || null,
-    courseName: isPractice ? 'Self-Study' : (assessment.course_meta?.course_name || className || 'Class Assessment'),
+    courseName: isPractice ? 'Self-Study' : resolvedCourseName,
     title: assessment.title || 'Video Assessment',
     studentId: student.studentId || (isPractice ? 'self_study' : ''),
     studentName: student.studentName || 'Student',
@@ -1572,7 +1573,7 @@ async function renderKioskCompletion(assessment, student, responseLogs, containe
       fullName: student.studentName,
       accessCode: student.accessCode,
       courseId: assessment.class_id || assessment.course_meta?.course_id || null,
-      courseName: assessment.course_meta?.course_name || className || '',
+      courseName: isPractice ? 'Self-Study' : resolvedCourseName,
       section: assessment.course_meta?.section || '',
       teacherFingerprint: fingerprint
     }).catch(() => {});

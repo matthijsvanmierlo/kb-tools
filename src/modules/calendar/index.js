@@ -261,6 +261,7 @@ export async function renderCalendarView(params, router, container) {
               const color = Sanitizer.safeColor(ev.courseColor, '#2563eb');
               return `
                 <div class="px-2 py-1 rounded text-[11px] font-medium text-white truncate cursor-pointer shadow-2xs hover:opacity-90 transition-opacity cal-event-chip"
+                     draggable="true"
                      style="background-color: ${color};"
                      data-id="${esc(ev.id)}"
                      data-kind="${esc(ev.kind)}"
@@ -292,8 +293,20 @@ export async function renderCalendarView(params, router, container) {
     html += `</div>`;
     mount.innerHTML = html;
 
-    // Attach Click on Event Chips
+    // Attach Click and DragStart on Event Chips
     mount.querySelectorAll('.cal-event-chip').forEach(chip => {
+      chip.addEventListener('dragstart', (e) => {
+        const evId = chip.dataset.id;
+        const ev = events.find(item => item.id === evId);
+        if (ev) {
+          e.dataTransfer.setData('application/json', JSON.stringify({
+            id: ev.id,
+            kind: ev.kind,
+            sourceId: ev.sourceId,
+            time: ev.time
+          }));
+        }
+      });
       chip.addEventListener('click', (e) => {
         e.stopPropagation();
         const evId = chip.dataset.id;
@@ -452,6 +465,9 @@ export async function renderCalendarView(params, router, container) {
   };
 
   await render();
+  return () => {
+    window.removeEventListener('kb-class-filter-changed', onFilterChange);
+  };
 }
 
 export function openEventDetailDialog(ev, onUpdated) {

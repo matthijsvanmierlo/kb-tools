@@ -56,7 +56,7 @@ export class VirtualGradebookGrid {
     this.ROW_HEIGHT = 40;
     this.HEADER_HEIGHT = 56;
     this.FOOTER_HEIGHT = 44;
-    this.STUDENT_COL_WIDTH = 220;
+    this.STUDENT_COL_WIDTH = (typeof window !== 'undefined' && window.innerWidth < 640) ? 140 : 220;
     this.CELL_WIDTH = 120;
     this.MIN_CELL_WIDTH = 120;
     this.MAX_CELL_WIDTH = 180;

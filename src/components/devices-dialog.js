@@ -223,6 +223,7 @@ export async function openDevicesDialog() {
         <div class="flex flex-wrap gap-2">
           <sl-button size="small" data-value="link"><sl-icon slot="prefix" name="phone"></sl-icon>Link a new device</sl-button>
           <sl-button size="small" data-value="setup"><sl-icon slot="prefix" name="laptop"></sl-icon>Set up this device from another one</sl-button>
+          <sl-button size="small" data-value="connect-relay"><sl-icon slot="prefix" name="hdd-network"></sl-icon>School server settings…</sl-button>
           ${ws && ws.channel.type !== 'none' ? '<sl-button size="small" data-value="sync"><sl-icon slot="prefix" name="arrow-repeat"></sl-icon>Sync now</sl-button>' : ''}
           ${policy.allowDirectTransfer ? `<sl-button size="small" data-value="send-nearby"><sl-icon slot="prefix" name="wifi"></sl-icon>Send your data to a nearby device</sl-button>
           <sl-button size="small" data-value="receive-nearby"><sl-icon slot="prefix" name="download"></sl-icon>Receive data from a nearby device</sl-button>` : ''}
@@ -255,6 +256,10 @@ export async function openDevicesDialog() {
   switch (r?.value) {
     case 'link': return linkNewDevice();
     case 'setup': return setUpFromOtherDevice();
+    case 'connect-relay': {
+      const { openRelayConfigDialog } = await import('../main.js');
+      return openRelayConfigDialog();
+    }
     case 'share': return shareClass();
     case 'join': return joinClass();
     case 'conflicts': return reviewConflicts();

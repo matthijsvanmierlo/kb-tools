@@ -745,7 +745,14 @@ export async function renderEditor(assignment, router, container) {
     openImportQuestionsDialog();
   });
 
-  on('#asg-back', 'click', async () => { await save(true); router.navigate('#/assessments'); });
+  on('#asg-back', 'click', async () => {
+    await save(true);
+    if (params?.returnCourseId) {
+      router.navigate(`#/course?id=${encodeURIComponent(params.returnCourseId)}`);
+    } else {
+      router.navigate('#/assessments');
+    }
+  });
   on('#asg-preview', 'click', async () => { await save(true); router.navigate(`#/assessments/take?preview=${a.id}`); });
   on('#asg-submissions', 'click', async () => { await save(true); router.navigate(`#/assessments/submissions?id=${a.id}`); });
   on('#asg-publish', 'click', async () => {

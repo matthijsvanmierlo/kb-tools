@@ -1184,6 +1184,7 @@ html.kb-theme-projector .kb-nav-link {
 /* ------------------------------------------------------------------ */
 body[data-chrome="minimal"] .kb-header,
 body[data-chrome="minimal"] .kb-nav,
+body[data-chrome="minimal"] #kb-context-bar,
 body[data-chrome="minimal"] .kb-footer { display: none !important; }
 body[data-mode="student"] .kb-brand-name span::after { content: ' · Student'; }
 

@@ -128,6 +128,9 @@ export class CommandPalette {
       { category: 'Actions', title: 'Load sample workspace', icon: 'box-arrow-in-down', run: async () => { const { loadDemoWorkspace } = await import('../core/demo.js'); await loadDemoWorkspace(); router.handleRoute(); } },
       { category: 'Actions', title: 'Remove sample data', icon: 'trash', run: async () => { const { removeDemoData } = await import('../core/demo.js'); await removeDemoData(); router.handleRoute(); } },
       { category: 'Actions', title: 'Export Encrypted Backup File', icon: 'download', run: () => sync.exportManualBackup() },
+      { category: 'Actions', title: 'Connect to School Relay Server (Settings & Setup Guide)', icon: 'hdd-network', run: async () => { const { openRelayConfigDialog } = await import('../main.js'); openRelayConfigDialog(); } },
+      { category: 'Actions', title: 'Devices & Multi-Device Sync', icon: 'laptop', run: async () => { const { default: openDevicesDialog } = await import('./devices-dialog.js'); openDevicesDialog(); } },
+      { category: 'Actions', title: 'Data Safety Checkup', icon: 'shield-check', run: async () => { const { default: openDataSafetyDialog } = await import('./data-safety.js'); openDataSafetyDialog(); } },
       { category: 'Actions', title: 'Keyboard Shortcuts Cheat Sheet', icon: 'question-circle', run: () => this.openShortcutsModal() }
     ];
 

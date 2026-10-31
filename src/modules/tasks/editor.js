@@ -256,10 +256,20 @@ export async function renderTaskEditor(task, router, container) {
               <sl-input id="task-max-points" label="Max Points" type="number" min="1" max="1000" size="small" value="${esc(t.grading.max_points ?? 100)}"></sl-input>
             </div>
 
-            <sl-select id="task-rubric-select" label="Grading Rubric (optional)" size="small" value="${esc(t.grading.rubric_id || '')}" clearable>
-              <sl-option value="">No rubric</sl-option>
-              ${rubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title || 'Untitled rubric')}</sl-option>`).join('')}
-            </sl-select>
+            <div class="space-y-1">
+              <sl-select id="task-rubric-select" label="Grading Rubric (optional)" size="small" value="${esc(t.grading.rubric_id || '')}" clearable>
+                <sl-option value="">No rubric</sl-option>
+                ${rubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title || 'Untitled rubric')}</sl-option>`).join('')}
+              </sl-select>
+              <div class="flex items-center gap-2 pt-1">
+                <sl-button size="small" variant="default" id="btn-task-new-rubric">
+                  <sl-icon slot="prefix" name="plus"></sl-icon> New Rubric
+                </sl-button>
+                <sl-button size="small" variant="default" id="btn-task-edit-rubric" class="${t.grading.rubric_id ? '' : 'hidden'}">
+                  <sl-icon slot="prefix" name="pencil"></sl-icon> Edit Rubric
+                </sl-button>
+              </div>
+            </div>
 
             <!-- Standards Multi-Select Mount -->
             <div id="task-standards-mount" class="space-y-1.5"></div>
@@ -308,7 +318,11 @@ export async function renderTaskEditor(task, router, container) {
 
   // Wire header buttons
   container.querySelector('#task-back-btn').addEventListener('click', () => {
-    router.navigate('#/assignments');
+    if (params?.returnCourseId) {
+      router.navigate(`#/course?id=${encodeURIComponent(params.returnCourseId)}`);
+    } else {
+      router.navigate('#/assignments');
+    }
   });
 
   container.querySelector('#task-preview-btn').addEventListener('click', () => {
@@ -434,12 +448,73 @@ export async function renderTaskEditor(task, router, container) {
 
   // Wire Rubric
   const rubricSelect = container.querySelector('#task-rubric-select');
+  const btnNewRubric = container.querySelector('#btn-task-new-rubric');
+  const btnEditRubric = container.querySelector('#btn-task-edit-rubric');
+
+  const updateRubricEditVisibility = () => {
+    if (btnEditRubric) {
+      btnEditRubric.classList.toggle('hidden', !rubricSelect?.value);
+    }
+  };
+
   if (rubricSelect) {
-    rubricSelect.addEventListener('sl-change', () => {
+    rubricSelect.addEventListener('sl-change', async () => {
       t.grading.rubric_id = rubricSelect.value || null;
+      updateRubricEditVisibility();
       save();
+      const courseId = resolveTaskCourseId(t);
+      if (courseId) {
+        await syncContentClassLink(t, 'tasks', courseId);
+      }
     });
   }
+
+  btnNewRubric?.addEventListener('click', async () => {
+    const { RubricDesigner } = await import('../gradebook/rubric-builder.js');
+    const courseId = resolveTaskCourseId(t);
+    RubricDesigner.openDesignerModal({
+      courseId,
+      onSave: async (savedRubric) => {
+        t.grading.rubric_id = savedRubric.id;
+        const freshRubrics = await storage.table('gradebook_rubrics').toArray();
+        if (rubricSelect) {
+          rubricSelect.innerHTML = `
+            <sl-option value="">No rubric</sl-option>
+            ${freshRubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title || 'Untitled rubric')}</sl-option>`).join('')}
+          `;
+          rubricSelect.value = savedRubric.id;
+        }
+        updateRubricEditVisibility();
+        save();
+        if (courseId) {
+          await syncContentClassLink(t, 'tasks', courseId);
+        }
+      }
+    });
+  });
+
+  btnEditRubric?.addEventListener('click', async () => {
+    const currentId = rubricSelect?.value;
+    if (!currentId) return;
+    const currentRubric = await storage.table('gradebook_rubrics').get(currentId);
+    if (!currentRubric) return;
+    const { RubricDesigner } = await import('../gradebook/rubric-builder.js');
+    RubricDesigner.openDesignerModal({
+      courseId: currentRubric.course_id || resolveTaskCourseId(t),
+      rubric: currentRubric,
+      onSave: async (savedRubric) => {
+        const freshRubrics = await storage.table('gradebook_rubrics').toArray();
+        if (rubricSelect) {
+          rubricSelect.innerHTML = `
+            <sl-option value="">No rubric</sl-option>
+            ${freshRubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title || 'Untitled rubric')}</sl-option>`).join('')}
+          `;
+          rubricSelect.value = savedRubric.id;
+        }
+        save();
+      }
+    });
+  });
 
   // Wire Schedule & Settings
   const dueDateInput = container.querySelector('#task-due-date');

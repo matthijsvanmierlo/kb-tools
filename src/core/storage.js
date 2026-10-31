@@ -39,12 +39,12 @@ export function scopeOf(tableName, record) {
     case 'gradebook_grades':
     case 'gradebook_rubrics': return { course_id: record.course_id || null };
     case 'assignments':
-    case 'tasks':
+    case 'tasks': return { course_id: record.class_id || record.gradebook?.course_id || null };
     case 'flashcards':
     case 'timelines':
     case 'video_assessments': return { course_id: record.class_id || null };
     case 'assignment_submissions': return { assignment_id: record.assignment_id || null };
-    case 'task_submissions': return { task_id: record.task_id || null };
+    case 'task_submissions': return { task_id: record.task_id || null, course_id: record.course_id || null };
     case 'student_courses': return { course_id: record.course_id || record.id };
     case 'student_ledger':
     case 'course_units':

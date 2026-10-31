@@ -1009,7 +1009,7 @@ export async function renderTaskTake(params = {}, router = null, container = nul
           saveLocalDraft();
           toast.success(`Draft restored to checkpoint from ${new Date(targetCp.saved_at).toLocaleTimeString()}!`);
           dialog.hide();
-          renderWorkspace();
+          renderComposer();
         }
       });
     }

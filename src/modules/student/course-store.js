@@ -53,7 +53,7 @@ export async function mergeCourseFeed(feedEnvelope, { accessCode, etag, relayUrl
       courseId: course.id,
       courseName: course.name,
       section: course.section || '',
-      accessCode: courseRecord.access_code
+      courseCode: courseRecord.access_code
     });
   } catch (_) {}
 

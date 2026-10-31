@@ -70,6 +70,7 @@ export class StudentProfile {
     fullName,
     email = '',
     accessCode = '',
+    courseCode = '',
     courseId = null,
     courseName = '',
     section = '',
@@ -80,6 +81,7 @@ export class StudentProfile {
     const name = String(fullName || '').trim();
     const em = String(email || '').trim();
     const normCode = normalizeAccessCode(accessCode);
+    const normCourseCode = normalizeAccessCode(courseCode);
 
     if (sid || name) {
       profile.defaultIdentity = {
@@ -89,7 +91,7 @@ export class StudentProfile {
       };
     }
 
-    if (courseId || courseName || normCode) {
+    if (courseId || courseName || normCode || normCourseCode) {
       const cKey = normalizeCourseKey(courseId, courseName, section);
       const existing = profile.classes[cKey] || {};
       profile.classes[cKey] = {
@@ -99,7 +101,8 @@ export class StudentProfile {
         teacher_fingerprint: teacherFingerprint || existing.teacher_fingerprint || '',
         student_id: sid || existing.student_id || profile.defaultIdentity.student_id,
         full_name: name || existing.full_name || profile.defaultIdentity.full_name,
-        access_code: normCode || existing.access_code || '',
+        course_code: normCourseCode || existing.course_code || '',
+        access_code: normCode || existing.access_code || normCourseCode || '',
         updated_at: new Date().toISOString()
       };
     }

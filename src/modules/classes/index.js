@@ -615,8 +615,9 @@ export async function renderClassesView(params, router, container) {
       toast.success('Class export downloaded.');
     });
 
-    container.querySelector('#btn-open-sync-settings')?.addEventListener('click', () => {
-      window.location.hash = '#/sync';
+    container.querySelector('#btn-open-sync-settings')?.addEventListener('click', async () => {
+      const { openRelayConfigDialog } = await import('../../main.js');
+      openRelayConfigDialog();
     });
 
     // Danger Tab Handlers

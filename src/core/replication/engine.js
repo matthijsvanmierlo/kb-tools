@@ -15,6 +15,7 @@
  */
 import { scopeOf } from '../storage.js';
 import { bytesToB64, b64ToBytes } from '../submission-crypto.js';
+import { mergeRecords } from './merge.js';
 
 export const SYNC_TABLES = [
   'flashcards', 'timelines', 'video_assessments', 'gradebook_courses', 'gradebook_students',
@@ -92,6 +93,7 @@ export class ReplicationEngine {
   constructor({ store, channel, channelId, key, deviceId, courseId = null, onVaultOp = null }) {
     Object.assign(this, { store, channel, channelId, key, deviceId, courseId, onVaultOp });
     this._assignmentCourse = new Map();
+    this._taskCourse = new Map();
   }
 
   get _cursorKey() { return `repl_cursor:${this.channelId}`; }
@@ -118,9 +120,16 @@ export class ReplicationEngine {
     if (s.assignment_id) {
       if (!this._assignmentCourse.has(s.assignment_id)) {
         const a = await this.store.getByChangeKey('assignments', s.assignment_id);
-        this._assignmentCourse.set(s.assignment_id, a?.class_id || null);
+        this._assignmentCourse.set(s.assignment_id, a?.class_id || a?.gradebook?.course_id || null);
       }
       return this._assignmentCourse.get(s.assignment_id);
+    }
+    if (s.task_id) {
+      if (!this._taskCourse.has(s.task_id)) {
+        const t = await this.store.getByChangeKey('tasks', s.task_id);
+        this._taskCourse.set(s.task_id, t?.class_id || t?.gradebook?.course_id || null);
+      }
+      return this._taskCourse.get(s.task_id);
     }
     return null;
   }
@@ -269,14 +278,22 @@ export class ReplicationEngine {
 
     const incomingWins = !local || this._newer(op.record, sourceDevice, local);
     let conflict = 0;
-    const conflictTables = ['gradebook_grades', 'assignments', 'tasks', 'gradebook_assignments'];
+    const conflictTables = ['gradebook_grades', 'assignments', 'tasks', 'gradebook_assignments', 'assignment_submissions', 'task_submissions'];
     if (local && conflictTables.includes(op.table) && pending.has(`${op.table}|${keyString(op.key)}`)
       && comparable(local) !== comparable(op.record)) {
       await this._recordConflict(op, local, incomingWins, sourceDevice);
       conflict = 1;
     }
-    if (!incomingWins) return { applied: 0, conflict };
-    await this.store.applyRemoteChange(op.table, 'put', op.key, op.record);
+
+    // Clamp op.record.updated_at if in the future
+    const maxFuture = new Date(Date.now() + 5 * 60 * 1000).toISOString();
+    if (op.record.updated_at && op.record.updated_at > maxFuture) {
+      op.record = { ...op.record, updated_at: maxFuture };
+    }
+
+    const mergedRecord = mergeRecords(op.table, local, op.record, sourceDevice, this.deviceId, incomingWins);
+    if (!incomingWins && mergedRecord === local) return { applied: 0, conflict };
+    await this.store.applyRemoteChange(op.table, 'put', op.key, mergedRecord);
     return { applied: 1, conflict };
   }
 

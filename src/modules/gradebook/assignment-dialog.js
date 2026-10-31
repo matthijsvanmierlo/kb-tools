@@ -108,10 +108,20 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
             <sl-select id="as-term" label="Term" value="${esc(current.term_id)}">
               ${course.terms.map(t => `<sl-option value="${esc(t.id)}">${esc(t.name)}</sl-option>`).join('')}
             </sl-select>` : '<div class="hidden sm:block"></div>'}
-          <sl-select id="as-rubric" label="Rubric" value="${esc(current.rubric_id)}" class="sm:col-span-2">
-            <sl-option value="">No rubric</sl-option>
-            ${rubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title)}</sl-option>`).join('')}
-          </sl-select>
+          <div class="sm:col-span-2 space-y-1">
+            <sl-select id="as-rubric" label="Rubric" value="${esc(current.rubric_id)}">
+              <sl-option value="">No rubric</sl-option>
+              ${rubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title)}</sl-option>`).join('')}
+            </sl-select>
+            <div class="flex items-center gap-2 pt-0.5">
+              <sl-button size="small" variant="default" id="as-btn-new-rubric">
+                <sl-icon slot="prefix" name="plus"></sl-icon> New Rubric
+              </sl-button>
+              <sl-button size="small" variant="default" id="as-btn-edit-rubric" class="${current.rubric_id ? '' : 'hidden'}">
+                <sl-icon slot="prefix" name="pencil"></sl-icon> Edit Rubric
+              </sl-button>
+            </div>
+          </div>
         </div>
 
         <div class="space-y-2">
@@ -398,6 +408,59 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
       } else {
         window.location.hash = `#/video/edit?id=${current.source.id}`;
       }
+    });
+
+    const rubricEl = dialog.querySelector('#as-rubric');
+    const btnNewRubric = dialog.querySelector('#as-btn-new-rubric');
+    const btnEditRubric = dialog.querySelector('#as-btn-edit-rubric');
+
+    rubricEl?.addEventListener('sl-change', () => {
+      readForm();
+      if (btnEditRubric) btnEditRubric.classList.toggle('hidden', !rubricEl.value);
+    });
+
+    btnNewRubric?.addEventListener('click', async () => {
+      readForm();
+      const { RubricDesigner } = await import('./rubric-builder.js');
+      RubricDesigner.openDesignerModal({
+        courseId: course.id,
+        onSave: async (savedRubric) => {
+          current.rubric_id = savedRubric.id;
+          const freshRubrics = (await storage.table('gradebook_rubrics').toArray())
+            .filter(r => !course.id || r.course_id === course.id || !r.course_id);
+          if (rubricEl) {
+            rubricEl.innerHTML = `
+              <sl-option value="">No rubric</sl-option>
+              ${freshRubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title)}</sl-option>`).join('')}
+            `;
+            rubricEl.value = savedRubric.id;
+          }
+          if (btnEditRubric) btnEditRubric.classList.remove('hidden');
+        }
+      });
+    });
+
+    btnEditRubric?.addEventListener('click', async () => {
+      readForm();
+      if (!current.rubric_id) return;
+      const r = await storage.table('gradebook_rubrics').get(current.rubric_id);
+      if (!r) return;
+      const { RubricDesigner } = await import('./rubric-builder.js');
+      RubricDesigner.openDesignerModal({
+        courseId: r.course_id || course.id,
+        rubric: r,
+        onSave: async (savedRubric) => {
+          const freshRubrics = (await storage.table('gradebook_rubrics').toArray())
+            .filter(rb => !course.id || rb.course_id === course.id || !rb.course_id);
+          if (rubricEl) {
+            rubricEl.innerHTML = `
+              <sl-option value="">No rubric</sl-option>
+              ${freshRubrics.map(rb => `<sl-option value="${esc(rb.id)}">${esc(rb.title)}</sl-option>`).join('')}
+            `;
+            rubricEl.value = savedRubric.id;
+          }
+        }
+      });
     });
 
     dialog.querySelector('#as-scoring')?.addEventListener('sl-change', (e) => {

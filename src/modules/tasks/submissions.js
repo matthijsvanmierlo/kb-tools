@@ -844,7 +844,7 @@ function openLinkStudentModal(sub, roster, courseId, onLinked) {
 
     try {
       // 1. Save alias in IndexedDB gradebook_students
-      await StudentMatcher.saveAlias(storage, targetStudent.student_id, sub.student_id, courseId);
+      await StudentMatcher.addStudentAlias(targetStudent.student_id, courseId, sub.student_id);
 
       // 2. Re-key submission in task_submissions
       const priorId = sub.student_id;

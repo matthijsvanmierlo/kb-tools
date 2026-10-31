@@ -180,13 +180,27 @@ export async function renderStudentCoursesView(params, router, container) {
               relayUrl
             });
             const { StudentProfile } = await import('../../core/student-profile.js');
+            const urlSid = params?.sid || hashSearch.get('sid');
+            const urlSname = params?.sname || hashSearch.get('sname');
+            const urlScode = params?.scode || hashSearch.get('scode');
             if (merged?.course?.id) {
               await StudentProfile.saveClassAccessCode(merged.course.id, normalizedCode);
+              if (urlSid && urlSname) {
+                await StudentProfile.saveIdentity({
+                  courseId: merged.course.id,
+                  courseName: merged.course.name,
+                  section: merged.course.section || '',
+                  studentId: urlSid,
+                  fullName: urlSname,
+                  accessCode: urlScode || '',
+                  courseCode: normalizedCode
+                }).catch(() => {});
+              }
             }
             toast.success('Successfully joined course and loaded course feed!');
             await render();
             const prof = StudentProfile.resolveForPayload({ course_id: merged?.course?.id });
-            if (!prof.hasSavedIdentity && merged?.course) {
+            if (!prof.hasSavedIdentity && merged?.course && !(urlSid && urlSname)) {
               openClaimSeatDialog(merged.course, () => {
                 router.navigate(`#/student/course?id=${encodeURIComponent(merged.course.id)}`);
               });

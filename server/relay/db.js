@@ -39,17 +39,49 @@ export function createDatabase(filePath = ':memory:') {
     pruneExpired({ retentionDays = null } = {}) {
       const now = new Date().toISOString();
       const prunePayloads = db.prepare('DELETE FROM payloads WHERE expires_at IS NOT NULL AND expires_at < ?');
+      
+      // Before deleting drops, collect any associated media keys so caller can prune blobs
+      const expiredDropIds = db.prepare('SELECT id FROM drops WHERE expires_at IS NOT NULL AND expires_at < ?').all(now).map(r => r.id);
+      let expiredMediaKeys = [];
+      if (expiredDropIds.length > 0) {
+        const placeholders = expiredDropIds.map(() => '?').join(',');
+        expiredMediaKeys = db.prepare(`SELECT key FROM drop_media WHERE drop_id IN (${placeholders})`).all(...expiredDropIds).map(r => r.key);
+      }
+
       const pruneDrops = db.prepare('DELETE FROM drops WHERE expires_at IS NOT NULL AND expires_at < ?');
       const pRes = prunePayloads.run(now);
       const dRes = pruneDrops.run(now);
       const pruneFeedback = db.prepare('DELETE FROM feedback_drops WHERE expires_at IS NOT NULL AND expires_at < ?');
       const fbRes = pruneFeedback.run(now);
-      const result = { payloadsPruned: pRes.changes, dropsPruned: dRes.changes, feedbackPruned: fbRes.changes, submissionsPruned: 0, draftsPruned: 0, chunksPruned: 0 };
+      const result = {
+        payloadsPruned: pRes.changes,
+        dropsPruned: dRes.changes,
+        feedbackPruned: fbRes.changes,
+        submissionsPruned: 0,
+        draftsPruned: 0,
+        chunksPruned: 0,
+        snapshotsPruned: 0,
+        expiredMediaKeys
+      };
       if (retentionDays > 0) {
         const cutoff = new Date(Date.now() - retentionDays * 86400000).toISOString();
         result.submissionsPruned = db.prepare('DELETE FROM submissions WHERE received_at < ?').run(cutoff).changes;
         result.draftsPruned = db.prepare('DELETE FROM drafts WHERE updated_at < ?').run(cutoff).changes;
         result.chunksPruned = db.prepare('DELETE FROM sync_chunks WHERE created_at < ?').run(cutoff).changes;
+        // Prune stale snapshots older than retentionDays, but always preserve the newest snapshot per workspace
+        try {
+          const snapStmt = db.prepare(`
+            DELETE FROM sync_snapshots
+            WHERE created_at < ?
+              AND rowid NOT IN (
+                SELECT rowid FROM (
+                  SELECT rowid, ROW_NUMBER() OVER (PARTITION BY workspace_id ORDER BY created_at DESC) as rn
+                  FROM sync_snapshots
+                ) WHERE rn = 1
+              )
+          `);
+          result.snapshotsPruned = snapStmt.run(cutoff).changes;
+        } catch (_) {}
       }
       return result;
     },
@@ -199,6 +231,12 @@ export function createDatabase(filePath = ':memory:') {
 
     feeds: {
       put({ courseId, teacherId, ciphertext, etag, updatedAt = new Date().toISOString() }) {
+        const existing = db.prepare('SELECT teacher_id FROM course_feeds WHERE course_id = ?').get(courseId);
+        if (existing && existing.teacher_id !== teacherId) {
+          const err = new Error('FEED_OWNERSHIP_CONFLICT');
+          err.code = 'FORBIDDEN';
+          throw err;
+        }
         const stmt = db.prepare(`
           INSERT INTO course_feeds (course_id, teacher_id, ciphertext, etag, updated_at)
           VALUES (?, ?, ?, ?, ?)
@@ -256,11 +294,17 @@ export function createDatabase(filePath = ':memory:') {
     },
 
     feedbackDrops: {
-      put({ dropId, ciphertext, expiresAt = null }) {
+      put({ dropId, teacherId = null, ciphertext, expiresAt = null }) {
         const now = new Date().toISOString();
-        db.prepare(`INSERT INTO feedback_drops (drop_id, ciphertext, created_at, expires_at) VALUES (?, ?, ?, ?)
-          ON CONFLICT (drop_id) DO UPDATE SET ciphertext = excluded.ciphertext, created_at = excluded.created_at, expires_at = excluded.expires_at`)
-          .run(dropId, ciphertext, now, expiresAt || null);
+        const existing = db.prepare('SELECT teacher_id FROM feedback_drops WHERE drop_id = ?').get(dropId);
+        if (existing && existing.teacher_id && teacherId && existing.teacher_id !== teacherId) {
+          const err = new Error('FEEDBACK_DROP_OWNERSHIP_CONFLICT');
+          err.code = 'FORBIDDEN';
+          throw err;
+        }
+        db.prepare(`INSERT INTO feedback_drops (drop_id, teacher_id, ciphertext, created_at, expires_at) VALUES (?, ?, ?, ?, ?)
+          ON CONFLICT (drop_id) DO UPDATE SET teacher_id = coalesce(excluded.teacher_id, feedback_drops.teacher_id), ciphertext = excluded.ciphertext, created_at = excluded.created_at, expires_at = excluded.expires_at`)
+          .run(dropId, teacherId || null, ciphertext, now, expiresAt || null);
         return { dropId, createdAt: now };
       },
       get(dropId) {
@@ -271,7 +315,15 @@ export function createDatabase(filePath = ':memory:') {
         }
         return row;
       },
-      delete(dropId) {
+      delete(dropId, teacherId = null) {
+        if (teacherId) {
+          const row = db.prepare('SELECT teacher_id FROM feedback_drops WHERE drop_id = ?').get(dropId);
+          if (row && row.teacher_id && row.teacher_id !== teacherId) {
+            const err = new Error('FEEDBACK_DROP_OWNERSHIP_CONFLICT');
+            err.code = 'FORBIDDEN';
+            throw err;
+          }
+        }
         return db.prepare('DELETE FROM feedback_drops WHERE drop_id = ?').run(dropId).changes > 0;
       }
     },

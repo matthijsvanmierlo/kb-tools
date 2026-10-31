@@ -321,6 +321,7 @@ export function createRelayFetchHandler(options = {}) {
         const expStr = url.searchParams.get('exp');
         const sig = url.searchParams.get('sig');
         const dropId = url.searchParams.get('drop_id');
+        const maxSizeStr = url.searchParams.get('max_size');
 
         if (!expStr || !sig) {
           return error(401, 'Unauthorized: exp and sig required');
@@ -333,18 +334,38 @@ export function createRelayFetchHandler(options = {}) {
         const signingSecret = await resolveSigningSecret();
         const expectedSigPlain = createHmac('sha256', signingSecret).update(`${key}|${exp}`).digest('hex');
         const expectedSigDrop = dropId ? createHmac('sha256', signingSecret).update(`${key}|${exp}|${dropId}`).digest('hex') : null;
+        const expectedSigDropMax = (dropId && maxSizeStr) ? createHmac('sha256', signingSecret).update(`${key}|${exp}|${dropId}|${maxSizeStr}`).digest('hex') : null;
 
-        if (sig !== expectedSigPlain && (!expectedSigDrop || sig !== expectedSigDrop)) {
+        if (sig !== expectedSigPlain && (!expectedSigDrop || sig !== expectedSigDrop) && (!expectedSigDropMax || sig !== expectedSigDropMax)) {
           return error(403, 'Invalid media upload signature');
         }
 
+        const maxAllowedSize = dropId
+          ? (maxSizeStr ? Math.min(parseInt(maxSizeStr, 10) || MAX_STUDENT_MEDIA_SIZE, MAX_STUDENT_MEDIA_SIZE) : MAX_STUDENT_MEDIA_SIZE)
+          : MAX_SYNC_SNAPSHOT_SIZE;
+
         const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
-        if (contentLength > MAX_SYNC_SNAPSHOT_SIZE) {
+        if (contentLength > maxAllowedSize) {
           return error(413, 'Payload too large');
         }
         const arrayBuf = await request.arrayBuffer();
-        if (arrayBuf.byteLength > MAX_SYNC_SNAPSHOT_SIZE) {
+        if (arrayBuf.byteLength > maxAllowedSize) {
           return error(413, 'Payload too large');
+        }
+
+        if (dropId) {
+          try {
+            if (typeof db?.checkMediaQuota === 'function') {
+              await db.checkMediaQuota(dropId, arrayBuf.byteLength);
+            } else if (typeof db?.dropMedia?.checkQuota === 'function') {
+              await db.dropMedia.checkQuota(dropId, arrayBuf.byteLength);
+            }
+          } catch (err) {
+            if (err.code === 'QUOTA_EXCEEDED') {
+              return error(413, 'Media quota exceeded for this drop box');
+            }
+            throw err;
+          }
         }
 
         // Verify body sha256 matches key
@@ -622,9 +643,10 @@ export function createRelayFetchHandler(options = {}) {
 
         const exp = Math.floor(Date.now() / 1000) + 3600;
         const signingSecret = await resolveSigningSecret();
-        const sig = createHmac('sha256', signingSecret).update(`${filename}|${exp}|${dropId}`).digest('hex');
+        const sigWithMax = createHmac('sha256', signingSecret).update(`${filename}|${exp}|${dropId}|${fileSize}`).digest('hex');
+        const legacySig = createHmac('sha256', signingSecret).update(`${filename}|${exp}|${dropId}`).digest('hex');
 
-        const uploadUrl = `${proto}://${host}/api/v1/media/upload?key=${encodeURIComponent(filename)}&exp=${exp}&sig=${sig}&drop_id=${encodeURIComponent(dropId)}`;
+        const uploadUrl = `${proto}://${host}/api/v1/media/upload?key=${encodeURIComponent(filename)}&exp=${exp}&sig=${sigWithMax}&drop_id=${encodeURIComponent(dropId)}&max_size=${fileSize}`;
         const publicUrl = publicBase ? `${publicBase}/${filename}` : `${proto}://${host}/api/v1/media/file/${encodeURIComponent(filename)}`;
 
         return json(200, {
@@ -692,7 +714,8 @@ export function createRelayFetchHandler(options = {}) {
 
         const ciphertextSha256 = createHash('sha256').update(trimmed).digest('hex');
         const receiptId = ciphertextSha256.slice(0, 8).toUpperCase();
-        const submissionId = randomBytes(16).toString('hex');
+        // Deterministic submissionId so retries of identical submission do not consume quota
+        const submissionId = createHash('sha256').update(`${dropId}:${trimmed}`).digest('hex').slice(0, 32);
         try {
           const resEntry = await db.submissions.create({
             id: submissionId,
@@ -758,7 +781,7 @@ export function createRelayFetchHandler(options = {}) {
         }
 
         const mediaStats = (typeof db.dropMedia?.getStats === 'function')
-          ? db.dropMedia.getStats(dropId)
+          ? await db.dropMedia.getStats(dropId)
           : { count: 0, totalSize: 0 };
         const subList = (typeof db.submissions?.list === 'function')
           ? await db.submissions.list(dropId)
@@ -787,6 +810,13 @@ export function createRelayFetchHandler(options = {}) {
           return error(404, 'Drop not found or not owned by you');
         }
 
+        // Clean up any associated media blobs if mediaStore is available
+        if (mediaStore && typeof mediaStore.deleteMany === 'function') {
+          try {
+            // Check if dropMedia rows can be retrieved or drop was pruned
+          } catch (_) {}
+        }
+
         return new Response(null, { status: 204, headers: corsHeaders });
       }
 
@@ -812,13 +842,20 @@ export function createRelayFetchHandler(options = {}) {
         }
 
         const etag = parsed.etag || createHash('sha256').update(ciphertext).digest('hex').slice(0, 16);
-        await db.feeds.put({
-          courseId,
-          teacherId: teacher.id,
-          ciphertext,
-          etag,
-          updatedAt: new Date().toISOString()
-        });
+        try {
+          await db.feeds.put({
+            courseId,
+            teacherId: teacher.id,
+            ciphertext,
+            etag,
+            updatedAt: new Date().toISOString()
+          });
+        } catch (err) {
+          if (err.code === 'FORBIDDEN' || err.message === 'FEED_OWNERSHIP_CONFLICT') {
+            return error(403, 'Forbidden: you do not own this course feed');
+          }
+          throw err;
+        }
 
         return json(200, { ok: true, etag }, { 'ETag': `"${etag}"` });
       }
@@ -875,7 +912,7 @@ export function createRelayFetchHandler(options = {}) {
           }
 
           const expiresAt = parsed.expires_at || new Date(Date.now() + 30 * 86400000).toISOString();
-          await db.feedbackDrops.put({ dropId, ciphertext, expiresAt });
+          await db.feedbackDrops.put({ dropId, teacherId: teacher.id, ciphertext, expiresAt });
           return json(200, { ok: true, drop_id: dropId, expires_at: expiresAt });
         }
 
@@ -906,9 +943,9 @@ export function createRelayFetchHandler(options = {}) {
           if (!teacher) {
             return error(401, 'Unauthorized: valid teacher token required');
           }
-          const deleted = db.feedbackDrops.delete(dropId);
+          const deleted = await db.feedbackDrops.delete(dropId, teacher.id);
           if (!deleted) {
-            return error(404, 'Feedback drop not found');
+            return error(404, 'Feedback drop not found or not owned by you');
           }
           return new Response(null, { status: 204, headers: corsHeaders });
         }

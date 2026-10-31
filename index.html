@@ -231,14 +231,39 @@
         <button type="button" id="btn-header-import-content" class="hidden" aria-hidden="true"></button>
         <button type="button" id="btn-header-import-content-mobile" class="hidden" aria-hidden="true"></button>
         <div id="kb-nav-class-selector" class="hidden" aria-hidden="true"></div>
-        <sl-dropdown id="kb-header-more" class="hidden" aria-hidden="true"><button slot="trigger" type="button"></button><sl-menu id="kb-header-more-menu"></sl-menu></sl-dropdown>
+        <sl-dropdown id="kb-header-more">
+          <button slot="trigger" type="button" class="w-9 h-9 flex items-center justify-center rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 transition-colors" aria-label="More options">
+            <sl-icon name="three-dots-vertical"></sl-icon>
+          </button>
+          <sl-menu id="kb-header-more-menu">
+            <sl-menu-item value="guide">
+              <sl-icon slot="prefix" name="book"></sl-icon> Teacher Guide
+            </sl-menu-item>
+            <sl-menu-item value="safety">
+              <sl-icon slot="prefix" name="shield-check"></sl-icon> Data Safety Checkup
+            </sl-menu-item>
+            <sl-menu-item value="devices">
+              <sl-icon slot="prefix" name="laptop"></sl-icon> Sync & Devices
+            </sl-menu-item>
+            <sl-menu-item value="relay">
+              <sl-icon slot="prefix" name="hdd-network"></sl-icon> Connect to School Server…
+            </sl-menu-item>
+            <sl-divider></sl-divider>
+            <sl-menu-item value="backup-export">
+              <sl-icon slot="prefix" name="download"></sl-icon> Export Backup (.json)
+            </sl-menu-item>
+            <sl-menu-item value="backup-restore">
+              <sl-icon slot="prefix" name="upload"></sl-icon> Restore Backup…
+            </sl-menu-item>
+          </sl-menu>
+        </sl-dropdown>
         <input type="file" id="input-backup-file" accept=".json" class="hidden" aria-hidden="true" />
       </div>
     </div>
   </header>
 
   <!-- Universal Class Context Bar & Workspace Breadcrumbs (#3) -->
-  <div id="kb-context-bar" class="kb-context-bar-container border-b border-slate-200 bg-white/95 backdrop-blur-xs sticky top-[57px] md:top-[64px] z-20"></div>
+  <div id="kb-context-bar" class="kb-context-bar-container border-b border-slate-200 bg-white/95 backdrop-blur-xs sticky top-[64px] z-20"></div>
 
   <!-- Main Dynamic SPA View Container -->
   <main id="app-view-container" class="kb-main" role="main" tabindex="-1">

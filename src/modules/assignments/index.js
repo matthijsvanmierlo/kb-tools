@@ -46,7 +46,8 @@ export async function renderAssignmentsView(params, router, container) {
   }
 
   if (hash.startsWith('#/assessments/submissions')) {
-    const assignment = params.id ? await storage.table('assignments').get(params.id) : null;
+    const asgId = params.id || params.assignmentId;
+    const assignment = asgId ? await storage.table('assignments').get(asgId) : null;
     if (!assignment) {
       toast.warning('Assessment not found.');
       router.navigate('#/assessments');

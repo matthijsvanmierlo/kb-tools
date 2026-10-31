@@ -43,6 +43,30 @@ import {
 export async function renderGradebookView(params, router, container) {
   let courses = await storage.table('gradebook_courses').toArray();
 
+  // Support deep-link rubric actions even before rendering
+  if (params?.action === 'new-rubric' || params?.action === 'rubrics') {
+    const targetCourse = courses.find(c => c.id === params.courseId) || null;
+    const { RubricDesigner } = await import('./rubric-builder.js');
+    if (params.action === 'new-rubric') {
+      RubricDesigner.openDesignerModal({
+        courseId: targetCourse?.id || params.courseId || null,
+        onSave: (saved) => {
+          if (params.returnTo) {
+            const sep = params.returnTo.includes('?') ? '&' : '?';
+            router.navigate(`${params.returnTo}${sep}selectedRubricId=${encodeURIComponent(saved.id)}`);
+          }
+        }
+      });
+    } else {
+      RubricDesigner.openManagerModal(targetCourse, (saved) => {
+        if (params.returnTo && saved?.id) {
+          const sep = params.returnTo.includes('?') ? '&' : '?';
+          router.navigate(`${params.returnTo}${sep}selectedRubricId=${encodeURIComponent(saved.id)}`);
+        }
+      });
+    }
+  }
+
   // If no courses exist, show friendly empty state
   if (courses.length === 0) {
     container.innerHTML = `

@@ -36,9 +36,10 @@ export class GradebookBridge {
 
     const resolvedMaxScore = maxPoints !== undefined ? maxPoints : (maxScore !== undefined ? maxScore : 100);
 
+    const deterministicId = `gbcol_${courseId}_${actualSource.type}_${actualSource.id}`;
     const record = {
       ...(existing || {}),
-      id: existing?.id || generateUUID(),
+      id: existing?.id || deterministicId,
       course_id: courseId,
       term_id: existing?.term_id || course.terms?.[0]?.id || null,
       category_id: categoryId || existing?.category_id || course.categories?.[0]?.id || null,

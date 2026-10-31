@@ -486,6 +486,8 @@ export async function renderGuideView(params, router, container) {
               { title: 'What stays private', text: 'Zero-knowledge encryption is preserved. The server never sees lesson plaintext, student answers, or student names. Lessons are encrypted with random keys stored only in URL fragments, and student submissions are encrypted to your teacher key before transmission.' }
             ])}
             <div class="flex flex-wrap gap-2 pt-4 border-t border-slate-100">
+              <sl-button size="small" variant="primary" id="guide-connect-relay"><sl-icon slot="prefix" name="hdd-network"></sl-icon> Connect to a school server…</sl-button>
+              <sl-button size="small" id="guide-view-server-instructions"><sl-icon slot="prefix" name="book"></sl-icon> View Server Setup & Deployment Guide</sl-button>
               <sl-button size="small" href="#/about"><sl-icon slot="prefix" name="info-circle"></sl-icon> About KennisBoost</sl-button>
             </div>
           </section>
@@ -691,6 +693,16 @@ export async function renderGuideView(params, router, container) {
 
   container.querySelector('#guide-backup')?.addEventListener('click', () => {
     document.getElementById('menu-btn-export-backup')?.click();
+  });
+
+  container.querySelector('#guide-connect-relay')?.addEventListener('click', async () => {
+    const { openRelayConfigDialog } = await import('../../main.js');
+    openRelayConfigDialog('connect');
+  });
+
+  container.querySelector('#guide-view-server-instructions')?.addEventListener('click', async () => {
+    const { openRelayConfigDialog } = await import('../../main.js');
+    openRelayConfigDialog('guide');
   });
 
   const faqSearch = container.querySelector('#faq-search');

@@ -257,18 +257,22 @@ async function bootstrapApp() {
     });
 
     // Header More options proxy clicks (<1024px)
-    document.getElementById('kb-header-more-menu')?.addEventListener('sl-select', (e) => {
+    document.getElementById('kb-header-more-menu')?.addEventListener('sl-select', async (e) => {
       const val = e.detail.item.value;
-      if (val === 'import') {
-        document.getElementById('btn-header-import-content')?.click();
-      } else if (val === 'backup') {
-        document.querySelector('.kb-storage-menu button[slot="trigger"]')?.click();
+      if (val === 'guide') {
+        router.navigate('#/guide');
       } else if (val === 'safety') {
-        document.getElementById('kb-data-safety-chip')?.click();
-      } else if (val === 'theme') {
-        document.querySelector('#icon-active-theme')?.closest('button')?.click();
-      } else if (val === 'help') {
-        document.querySelector('.kb-guide-link button[slot="trigger"]')?.click();
+        const { default: openDataSafetyDialog } = await import('./components/data-safety.js');
+        openDataSafetyDialog();
+      } else if (val === 'devices') {
+        const { default: openDevicesDialog } = await import('./components/devices-dialog.js');
+        openDevicesDialog();
+      } else if (val === 'relay') {
+        openRelayConfigDialog();
+      } else if (val === 'backup-export') {
+        document.getElementById('menu-btn-export-backup')?.click();
+      } else if (val === 'backup-restore') {
+        document.getElementById('input-backup-file')?.click();
       }
     });
 
@@ -671,22 +675,36 @@ function confirmRestore(fileName, counts, exportedAt, { plaintext = false } = {}
   });
 }
 
-export async function openRelayConfigDialog() {
+export async function openRelayConfigDialog(defaultTab = 'connect') {
   const currentConfig = (await storage.getMetadata('sync_config')) || (typeof window !== 'undefined' ? window.KB_CONFIG : null) || {};
+  const { renderRelaySetupGuideHTML } = await import('./components/relay-setup-guide.js');
   const dialog = document.createElement('sl-dialog');
-  dialog.label = 'Connect to a school server';
-  dialog.style.setProperty('--width', '520px');
+  dialog.label = 'School Sync & Relay Server';
+  dialog.style.setProperty('--width', '680px');
   dialog.innerHTML = `
-    <div class="space-y-4 text-sm">
-      <p class="text-xs text-slate-500 leading-relaxed">
-        Connecting to a school-hosted KennisBoost relay server unlocks short links and automatic server-assisted hand-in. All lesson payloads and student submissions remain end-to-end encrypted so the server never sees student data or answer keys.
-      </p>
-      <sl-input id="input-relay-url" label="Server Base URL" placeholder="https://relay.myschool.edu or http://localhost:3000" value="${Sanitizer.escapeHTML(currentConfig.baseUrl)}"></sl-input>
-      <sl-input id="input-relay-token" type="password" password-toggle label="Teacher Bearer Token" placeholder="Paste 64-character token" value="${Sanitizer.escapeHTML(currentConfig.token)}"></sl-input>
-      <sl-input id="input-relay-teacher-id" label="Teacher ID (optional)" placeholder="e.g. T-101" value="${Sanitizer.escapeHTML(currentConfig.teacherId)}"></sl-input>
+    <sl-tab-group id="relay-tabs">
+      <sl-tab slot="nav" panel="tab-connect" ${defaultTab === 'connect' ? 'active' : ''}>Connect to Server</sl-tab>
+      <sl-tab slot="nav" panel="tab-guide" ${defaultTab === 'guide' ? 'active' : ''}>Setup & Deployment Guide</sl-tab>
 
-      <div id="relay-test-result" class="hidden p-3 rounded-xl text-xs space-y-1"></div>
-    </div>
+      <sl-tab-panel name="tab-connect" class="pt-3">
+        <div class="space-y-4 text-sm">
+          <p class="text-xs text-slate-500 leading-relaxed">
+            Connecting to a school-hosted KennisBoost relay server unlocks short links, cross-device multi-teacher sync, and server-assisted student hand-in. All lesson payloads and student submissions remain end-to-end encrypted.
+          </p>
+          <sl-input id="input-relay-paste-link" label="Paste 1-Click Onboarding Link (optional)" placeholder="Paste #/connect?relay=...&token=... link to auto-fill"></sl-input>
+          <sl-input id="input-relay-url" label="Server Base URL" placeholder="https://relay.myschool.edu or http://localhost:8000" value="${Sanitizer.escapeHTML(currentConfig.baseUrl)}"></sl-input>
+          <sl-input id="input-relay-token" type="password" password-toggle label="Teacher Bearer Token" placeholder="Paste 64-character token" value="${Sanitizer.escapeHTML(currentConfig.token)}"></sl-input>
+          <sl-input id="input-relay-teacher-id" label="Teacher ID (optional)" placeholder="e.g. T-101" value="${Sanitizer.escapeHTML(currentConfig.teacherId)}"></sl-input>
+
+          <div id="relay-test-result" class="hidden p-3 rounded-xl text-xs space-y-1"></div>
+        </div>
+      </sl-tab-panel>
+
+      <sl-tab-panel name="tab-guide" class="pt-3">
+        ${renderRelaySetupGuideHTML()}
+      </sl-tab-panel>
+    </sl-tab-group>
+
     <div slot="footer" class="flex flex-wrap justify-between items-center gap-2">
       ${currentConfig.baseUrl ? `<sl-button variant="danger" size="small" id="btn-relay-disconnect">Disconnect</sl-button>` : `<span></span>`}
       <div class="flex gap-2">
@@ -698,10 +716,29 @@ export async function openRelayConfigDialog() {
   document.body.appendChild(dialog);
   dialog.show();
 
+  dialog.addEventListener('sl-after-hide', (e) => {
+    if (e.target === dialog) dialog.remove();
+  });
+
+  const pasteLinkInput = dialog.querySelector('#input-relay-paste-link');
   const urlInput = dialog.querySelector('#input-relay-url');
   const tokenInput = dialog.querySelector('#input-relay-token');
   const idInput = dialog.querySelector('#input-relay-teacher-id');
   const testResult = dialog.querySelector('#relay-test-result');
+
+  pasteLinkInput?.addEventListener('sl-input', () => {
+    const val = (pasteLinkInput.value || '').trim();
+    if (val.includes('relay=') && val.includes('token=')) {
+      try {
+        const queryPart = val.includes('?') ? val.split('?')[1] : val;
+        const search = new URLSearchParams(queryPart);
+        if (search.get('relay')) urlInput.value = search.get('relay');
+        if (search.get('token')) tokenInput.value = search.get('token');
+        if (search.get('id') || search.get('teacherId')) idInput.value = search.get('id') || search.get('teacherId');
+        toast.info('Auto-filled server credentials from onboarding link!');
+      } catch (_) {}
+    }
+  });
 
   dialog.querySelector('#btn-relay-test')?.addEventListener('click', async () => {
     const btn = dialog.querySelector('#btn-relay-test');

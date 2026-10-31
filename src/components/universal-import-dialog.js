@@ -758,9 +758,9 @@ export class UniversalImportDialog {
         saved.push(upper);
         await storage.setMetadata('student_saved_class_codes', saved);
       }
-      toast.success(`Added class code: ${upper}`);
+      toast.success(`Joining class: ${upper}`);
       dialog?.hide();
-      r.navigate('#/student');
+      r.navigate(`#/student/courses?code=${encodeURIComponent(upper)}`);
       return true;
     }
 

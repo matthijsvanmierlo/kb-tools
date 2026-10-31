@@ -706,7 +706,7 @@ export async function renderCoursePage(courseId, container) {
         if (kind === 'task') {
           router.navigate(`#/assignments/submissions?id=${encodeURIComponent(sourceId)}`);
         } else if (kind === 'assignment') {
-          router.navigate(`#/assessments/submissions?assignmentId=${encodeURIComponent(sourceId)}`);
+          router.navigate(`#/assessments/submissions?id=${encodeURIComponent(sourceId)}`);
         }
       });
     });
