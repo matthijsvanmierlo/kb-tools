@@ -296,6 +296,7 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
                     ${s.access_code ? (revealCodes ? esc(s.access_code) : '••••-••••') : '<span class="font-sans text-xs text-amber-700">Not set</span>'}
                   </td>
                   <td class="px-2 py-1 text-right whitespace-nowrap">
+                    ${s.previous_access_codes?.length ? `<button type="button" class="kb-icon-btn cs-code-history text-amber-600 hover:text-amber-800" data-i="${i}" aria-label="Past access codes for ${esc(s.full_name)}" title="Code history (${s.previous_access_codes.length} past codes)"><sl-icon name="clock-history"></sl-icon></button>` : ''}
                     ${s.access_code ? `<button type="button" class="kb-icon-btn cs-code-copy" data-i="${i}" aria-label="Copy code for ${esc(s.full_name)}" title="Copy"><sl-icon name="clipboard"></sl-icon></button>` : ''}
                     <button type="button" class="kb-icon-btn cs-code-set" data-i="${i}" aria-label="Set a custom code for ${esc(s.full_name)}" title="Set custom code"><sl-icon name="pencil"></sl-icon></button>
                     <button type="button" class="kb-icon-btn cs-code-regen" data-i="${i}" aria-label="Generate a new code for ${esc(s.full_name)}" title="New random code"><sl-icon name="arrow-repeat"></sl-icon></button>
@@ -549,6 +550,16 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
     dialog.querySelectorAll('.cs-code-copy').forEach(b => b.addEventListener('click', async () => {
       const s = students[Number(b.dataset.i)];
       try { await navigator.clipboard.writeText(s.access_code); toast.success(`Copied ${s.full_name}'s code.`); } catch (_) { toast.warning('Copy failed — reveal the code and copy it manually.'); }
+    }));
+    dialog.querySelectorAll('.cs-code-history').forEach(b => b.addEventListener('click', async () => {
+      const s = students[Number(b.dataset.i)];
+      const { openAccessCodeHistoryDialog } = await import('./access-code-history-dialog.js');
+      openAccessCodeHistoryDialog(s, draft, {
+        onUpdated: () => {
+          accessChanged = true;
+          render();
+        }
+      });
     }));
     dialog.querySelectorAll('.cs-code-regen').forEach(b => b.addEventListener('click', async () => {
       const s = students[Number(b.dataset.i)];

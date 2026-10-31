@@ -248,6 +248,68 @@ export class StudentProfile {
       section: course?.section
     });
   }
+
+  /**
+   * Build a complete multi-class Student Passcard payload.
+   * Encodes student identity + all enrolled classes & codes into a portable token.
+   * @returns {object}
+   */
+  static createFullStudentPass() {
+    const profile = this.get();
+    return {
+      version: 1,
+      kind: 'student_passcard',
+      created_at: new Date().toISOString(),
+      student: {
+        student_id: profile.defaultIdentity.student_id || '',
+        full_name: profile.defaultIdentity.full_name || '',
+        email: profile.defaultIdentity.email || ''
+      },
+      classes: Object.values(profile.classes || {}).map(c => ({
+        course_id: c.course_id || null,
+        course_name: c.course_name || 'Class',
+        section: c.section || '',
+        student_id: c.student_id || profile.defaultIdentity.student_id || '',
+        full_name: c.full_name || profile.defaultIdentity.full_name || '',
+        access_code: c.access_code ? normalizeAccessCode(c.access_code) : ''
+      }))
+    };
+  }
+
+  /**
+   * Import a complete Student Passcard into local keychain.
+   * @param {object} passPayload
+   * @returns {Promise<object>}
+   */
+  static async importFullStudentPass(passPayload) {
+    if (!passPayload || (passPayload.kind !== 'student_passcard' && passPayload.kind !== 'student_pass')) {
+      throw new Error('INVALID_STUDENT_PASS');
+    }
+    if (passPayload.kind === 'student_pass') {
+      return this.importOnboardingPass(passPayload);
+    }
+    const { student, classes } = passPayload;
+    if (student) {
+      await this.saveIdentity({
+        studentId: student.student_id,
+        fullName: student.full_name,
+        email: student.email || ''
+      });
+    }
+    if (Array.isArray(classes)) {
+      for (const cls of classes) {
+        await this.saveIdentity({
+          courseId: cls.course_id,
+          courseName: cls.course_name,
+          section: cls.section || '',
+          studentId: cls.student_id || student?.student_id,
+          fullName: cls.full_name || student?.full_name,
+          accessCode: cls.access_code || ''
+        });
+      }
+    }
+    return this.get();
+  }
 }
 
 export default StudentProfile;

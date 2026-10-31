@@ -11,7 +11,7 @@ import { StudentProfile } from '../../core/student-profile.js';
 import { StudentLedger } from './ledger.js';
 import { RoleMode } from '../../state/role-mode.js';
 import { openIncomingFiles } from '../../core/pwa.js';
-import { exportStudentSession, importStudentSession, wipeStudentKioskSession } from './session-portability.js';
+import { exportStudentSession, importStudentSession, wipeStudentKioskSession, openExportSessionDialog } from './session-portability.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -160,14 +160,19 @@ export async function renderStudentHubView(params, router, container) {
 
       <!-- My Enrolled Classes & Access Keychain -->
       <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-xs space-y-4">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between flex-wrap gap-2">
           <div class="flex items-center gap-2">
             <sl-icon name="key" class="text-slate-600 text-lg"></sl-icon>
             <h2 class="font-bold text-slate-900 text-base">My Class Keychain</h2>
           </div>
-          <sl-button size="small" id="btn-add-class-code">
-            <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add Access Code
-          </sl-button>
+          <div class="flex items-center gap-2 flex-wrap">
+            <sl-button size="small" variant="default" id="btn-show-passcard">
+              <sl-icon slot="prefix" name="person-badge"></sl-icon> My Passcard
+            </sl-button>
+            <sl-button size="small" id="btn-add-class-code">
+              <sl-icon slot="prefix" name="plus-lg"></sl-icon> Add Access Code
+            </sl-button>
+          </div>
         </div>
 
         ${Object.keys(profile.classes).length === 0 ? `
@@ -292,7 +297,7 @@ export async function renderStudentHubView(params, router, container) {
 
   // Export / Import session
   container.querySelector('#btn-export-hub-session')?.addEventListener('click', () => {
-    exportStudentSession({ studentId, format: 'encrypted' });
+    openExportSessionDialog();
   });
 
   container.querySelector('#btn-wipe-hub-session')?.addEventListener('click', async () => {
@@ -308,10 +313,18 @@ export async function renderStudentHubView(params, router, container) {
   hubFileInput?.addEventListener('change', async (e) => {
     const file = e.target.files?.[0];
     if (file) {
-      await importStudentSession(file);
-      renderStudentHubView(params, router, container);
+      try {
+        await importStudentSession(file);
+        renderStudentHubView(params, router, container);
+      } catch (_) {}
     }
     hubFileInput.value = '';
+  });
+
+  // Passcard button
+  container.querySelector('#btn-show-passcard')?.addEventListener('click', async () => {
+    const { StudentPasscardDialog } = await import('../../components/student-passcard-dialog.js');
+    StudentPasscardDialog.open();
   });
 
   // Add class code dialog

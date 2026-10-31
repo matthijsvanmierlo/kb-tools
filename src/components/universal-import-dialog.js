@@ -749,6 +749,23 @@ export class UniversalImportDialog {
       return true;
     }
 
+    // 2b. Student Passcard / Onboarding Pass JSON
+    if (trimmed.startsWith('{') && (trimmed.includes('"student_passcard"') || trimmed.includes('"student_pass"'))) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed.kind === 'student_passcard' || parsed.kind === 'student_pass') {
+          const { StudentProfile } = await import('../core/student-profile.js');
+          await StudentProfile.importFullStudentPass(parsed);
+          const studentName = parsed.student?.full_name || 'Student';
+          const { toast } = await import('../utils/toast.js');
+          toast.success(`Restored student passcard for ${studentName}!`);
+          dialog?.hide();
+          r.navigate('#/student');
+          return true;
+        }
+      } catch (_) {}
+    }
+
     // 3. Raw class access code (short alphanumeric 3-10 chars like MATH101 or 4A7B)
     if (/^[A-Z0-9_-]{3,10}$/i.test(trimmed) && !trimmed.startsWith('{') && !trimmed.startsWith('[')) {
       const { storage } = await import('../core/storage.js');

@@ -2,7 +2,7 @@ import { storage } from '../../core/storage.js';
 import { Sanitizer } from '../../core/sanitizer.js';
 import { toast } from '../../utils/toast.js';
 import { PromptDialog } from '../../utils/dialogs.js';
-import { exportStudentSession, importStudentSession } from './session-portability.js';
+import { exportStudentSession, importStudentSession, openExportSessionDialog } from './session-portability.js';
 import { getTransport, PublicFeedTransport, getStudentRelayUrl } from '../../core/transport.js';
 import { deriveCourseFeedId } from '../../core/course-feed.js';
 import { mergeCourseFeed, getStudentCourses, reconcileStudentCoursesWithProfile, joinCourseByCode } from './course-store.js';
@@ -31,6 +31,9 @@ export async function renderStudentCoursesView(params, router, container) {
           </div>
 
           <div class="flex items-center gap-2 flex-wrap">
+            <sl-button size="small" variant="default" id="btn-courses-passcard">
+              <sl-icon slot="prefix" name="person-badge"></sl-icon> My Passcard
+            </sl-button>
             <sl-button size="small" variant="default" id="btn-export-session">
               <sl-icon slot="prefix" name="download"></sl-icon> Save Session (.kbsession)
             </sl-button>
@@ -99,9 +102,14 @@ export async function renderStudentCoursesView(params, router, container) {
       </div>
     `;
 
-    // Session Export & Import
+    // Session Export & Import & Passcard
+    container.querySelector('#btn-courses-passcard')?.addEventListener('click', async () => {
+      const { StudentPasscardDialog } = await import('../../components/student-passcard-dialog.js');
+      StudentPasscardDialog.open();
+    });
+
     container.querySelector('#btn-export-session')?.addEventListener('click', () => {
-      exportStudentSession();
+      openExportSessionDialog();
     });
 
     const fileInput = container.querySelector('#input-session-file');
@@ -112,8 +120,10 @@ export async function renderStudentCoursesView(params, router, container) {
     fileInput?.addEventListener('change', async (e) => {
       const file = e.target.files?.[0];
       if (file) {
-        await importStudentSession(file);
-        render();
+        try {
+          await importStudentSession(file);
+          render();
+        } catch (_) {}
       }
       fileInput.value = '';
     });

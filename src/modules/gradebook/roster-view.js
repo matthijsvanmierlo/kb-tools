@@ -288,6 +288,11 @@ export async function renderRosterView({
                             <button type="button" class="btn-copy-student-pass text-blue-500 hover:text-blue-700 p-0.5 rounded cursor-pointer" data-id="${safeId}" data-code="${Sanitizer.escapeHTML(s.access_code)}" data-name="${safeName}" title="Copy Student Invite Pass (1-Click Join)">
                               <sl-icon name="link-45deg"></sl-icon>
                             </button>
+                            ${(Array.isArray(s.previous_access_codes) && s.previous_access_codes.length > 0) ? `
+                              <button type="button" class="btn-code-history text-amber-600 hover:text-amber-800 p-0.5 rounded cursor-pointer" data-id="${safeId}" title="Access Code History (${s.previous_access_codes.length} past codes)">
+                                <sl-icon name="clock-history"></sl-icon>
+                              </button>
+                            ` : ''}
                           </div>
                         ` : `
                           <button type="button" class="btn-gen-code px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-[11px] font-medium hover:bg-amber-200 cursor-pointer" data-id="${safeId}">
@@ -313,6 +318,9 @@ export async function renderRosterView({
                           <sl-menu class="roster-row-menu" data-id="${safeId}">
                             <sl-menu-item value="profile">
                               <sl-icon slot="prefix" name="person-badge"></sl-icon> Student Profile
+                            </sl-menu-item>
+                            <sl-menu-item value="code-history">
+                              <sl-icon slot="prefix" name="clock-history"></sl-icon> Access Code History
                             </sl-menu-item>
                             <sl-menu-item value="report-link">
                               <sl-icon slot="prefix" name="shield-lock"></sl-icon> Encrypted Report Link
@@ -539,6 +547,18 @@ export async function renderRosterView({
       });
     });
 
+    // Code history button
+    container.querySelectorAll('.btn-code-history').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.id;
+        const student = students.find(s => s.student_id === id);
+        if (student) {
+          const { openAccessCodeHistoryDialog } = await import('./access-code-history-dialog.js');
+          openAccessCodeHistoryDialog(student, course, { onUpdated: () => onRefresh() });
+        }
+      });
+    });
+
     // Single generate code button
     container.querySelectorAll('.btn-gen-code').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -574,6 +594,9 @@ export async function renderRosterView({
 
         if (action === 'profile') {
           if (onOpenStudentDrawer) onOpenStudentDrawer(student);
+        } else if (action === 'code-history') {
+          const { openAccessCodeHistoryDialog } = await import('./access-code-history-dialog.js');
+          openAccessCodeHistoryDialog(student, course, { onUpdated: () => onRefresh() });
         } else if (action === 'report-link') {
           const rubrics = await storage.table('gradebook_rubrics').where('course_id').equals(course.id).toArray();
           const linkData = await GradebookReportGenerator.createStudentShareLink(student, course, allAssignments, gradesMap, rubrics);
