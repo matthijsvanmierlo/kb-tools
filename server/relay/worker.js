@@ -1,15 +1,13 @@
 import { createD1Database } from './d1-db.js';
-import { createR2MediaStore } from './media-store.js';
+import { createR2MediaStore, createDbPartsStore } from './media-store.js';
 import {
   createRelayFetchHandler,
   RateLimiter,
   DRAFT_RATE_LIMIT_MAX,
-  DEFAULT_RETENTION_DAYS
+  DEFAULT_RETENTION_DAYS,
+  RATE_LIMIT_MAX,
+  RATE_LIMIT_WINDOW_MS
 } from './handler.js';
-
-// Per-isolate rate limiters (salted SHA-256 IP hashes in memory)
-const limiter = new RateLimiter();
-const draftLimiter = new RateLimiter(DRAFT_RATE_LIMIT_MAX);
 
 export default {
   async fetch(request, env, ctx) {
@@ -21,18 +19,30 @@ export default {
     }
 
     const db = createD1Database(env.DB);
+    // Initialize schema if not already initialized
+    await db.initSchema();
+
     const originsEnv = env.KB_RELAY_ORIGINS || '*';
     const allowedOrigins = originsEnv.split(',').map(s => s.trim()).filter(Boolean);
-    const mediaStore = env.MEDIA_BUCKET ? createR2MediaStore(env.MEDIA_BUCKET) : null;
+
+    // Select BlobStore: R2 if MEDIA_BUCKET bound, otherwise DbPartsStore
+    const blobStore = env.MEDIA_BUCKET
+      ? createR2MediaStore(env.MEDIA_BUCKET)
+      : createDbPartsStore(db);
+
+    const limiter = new RateLimiter(RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, db);
+    const draftLimiter = new RateLimiter(DRAFT_RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, db);
 
     const handler = createRelayFetchHandler({
       db,
       limiter,
       draftLimiter,
       allowedOrigins,
-      mediaStore,
+      blobStore,
+      backend: 'd1',
+      mediaSigningSecret: env.KB_MEDIA_SIGNING_SECRET || null,
       cdnConfig: {
-        enabled: Boolean(mediaStore || env.KB_CDN_ENDPOINT || env.KB_CDN_PUBLIC_URL),
+        enabled: Boolean(blobStore || env.KB_CDN_ENDPOINT || env.KB_CDN_PUBLIC_URL),
         endpoint: env.KB_CDN_ENDPOINT,
         bucket: env.KB_CDN_BUCKET,
         accessKeyId: env.KB_CDN_ACCESS_KEY_ID,
@@ -52,13 +62,25 @@ export default {
   async scheduled(event, env, ctx) {
     if (!env?.DB) return;
     const db = createD1Database(env.DB);
+    const blobStore = env.MEDIA_BUCKET
+      ? createR2MediaStore(env.MEDIA_BUCKET)
+      : createDbPartsStore(db);
+
     const retentionDays = env.KB_RELAY_RETENTION_DAYS !== undefined
       ? Number(env.KB_RELAY_RETENTION_DAYS)
       : DEFAULT_RETENTION_DAYS;
+
+    const doPrune = async () => {
+      const pruneRes = await db.pruneExpired({ retentionDays });
+      if (pruneRes?.expiredBlobKeys?.length > 0 && blobStore) {
+        await blobStore.deleteMany(pruneRes.expiredBlobKeys);
+      }
+    };
+
     if (ctx?.waitUntil) {
-      ctx.waitUntil(db.pruneExpired({ retentionDays }));
+      ctx.waitUntil(doPrune());
     } else {
-      await db.pruneExpired({ retentionDays });
+      await doPrune();
     }
   }
 };

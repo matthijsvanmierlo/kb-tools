@@ -13,6 +13,7 @@
 import { KeyVault, VAULT_DEVICE_METADATA } from './keyvault.js';
 import { SubmissionCrypto, bytesToB64, b64ToBytes } from './submission-crypto.js';
 import { deflateRaw, inflateRaw, supportsCompressionStreams } from './crypto-share.js';
+import { generateUUID } from '../utils/uuid.js';
 
 export const ARCHIVE_VERSION = 1;
 const enc = new TextEncoder();
@@ -36,7 +37,7 @@ async function aesGcm(op, key, bytes, aad, iv) {
 export async function createTermArchive(store, { label, schoolPublicJwk = null, teacherName = '' }) {
   const vault = await KeyVault.ensure(store);
   const snapshot = await store.dumpMasterSnapshot();
-  const id = crypto.randomUUID();
+  const id = generateUUID();
   const rawKey = crypto.getRandomValues(new Uint8Array(32));
   const key = await crypto.subtle.importKey('raw', rawKey, 'AES-GCM', false, ['encrypt']);
 

@@ -57,6 +57,8 @@ export class ReplicationManager {
     this._running = null;
     this._timer = null;
     this._debounce = null;
+    this._backoffs = new Map();
+    this._lastFailedAt = new Map();
   }
 
   get deviceId() {
@@ -179,29 +181,78 @@ export class ReplicationManager {
       const channels = problems.map(p => ({ name: p.name, ok: false, error: p.error.message, code: p.error.code }));
       let applied = 0;
       for (const { name, engine } of engines) {
+        const currentBackoff = this._backoffs.get(engine.channelId) || 0;
+        const lastFailedAt = this._lastFailedAt.get(engine.channelId) || 0;
+        if (currentBackoff > 0 && Date.now() - lastFailedAt < currentBackoff) {
+          channels.push({ name, ok: false, error: 'In backoff window', skipped: true });
+          continue;
+        }
+
+        let pullOk = false;
+        let pushOk = false;
+        let pullErr = null;
+        let pushErr = null;
+
+        // Decouple pull from push: run push even if pull throws
         try {
           const pulled = await engine.pull();
           applied += pulled.applied;
+          pullOk = true;
+          if (typeof engine.channel.ackVector === 'function') {
+            const vec = await engine.vector();
+            await engine.channel.ackVector(vec);
+          }
+        } catch (err) {
+          pullErr = err;
+          console.warn(`[sync pull] ${name}:`, err);
+        }
+
+        try {
           await engine.push();
+          pushOk = true;
+        } catch (err) {
+          pushErr = err;
+          console.warn(`[sync push] ${name}:`, err);
+        }
+
+        const channelOk = pullOk && pushOk;
+        if (channelOk) {
+          this._backoffs.delete(engine.channelId);
           const snapKey = `repl_snapshot_at:${engine.channelId}`;
           const last = Number(await this.store.getMetadata(snapKey)) || 0;
           if (forceSnapshot || Date.now() - last > SNAPSHOT_EVERY_MS) {
-            const extra = engine.courseId ? null : { vault_ops: await this._sharedSecretOps() };
-            const { vector } = await engine.writeSnapshot({ extra });
-            await this.store.setMetadata(snapKey, Date.now());
-            await engine.pruneOwnChunks(vector[this.deviceId] || 0);
+            try {
+              const extra = engine.courseId ? null : { vault_ops: await this._sharedSecretOps() };
+              await engine.writeSnapshot({ extra });
+              await this.store.setMetadata(snapKey, Date.now());
+            } catch (err) {
+              console.warn(`[sync snapshot] ${name}:`, err);
+              // Backoff snapshot retry so it is not retried every minute on failure
+              await this.store.setMetadata(snapKey, Date.now() - SNAPSHOT_EVERY_MS + 10 * 60 * 1000);
+            }
           }
-          channels.push({ name, ok: true });
-        } catch (err) {
-          console.warn(`[sync] ${name}:`, err);
-          channels.push({ name, ok: false, error: err.message, code: err.code });
+          channels.push({ name, channelId: engine.channelId, ok: true, pullOk, pushOk });
+        } else {
+          const nextBackoff = Math.min(15 * 60 * 1000, Math.max(1000, (currentBackoff || 1000) * 2)) + Math.floor(Math.random() * 1000);
+          this._backoffs.set(engine.channelId, nextBackoff);
+          this._lastFailedAt.set(engine.channelId, Date.now());
+
+          const combinedError = (pullErr && pushErr) ? `${pullErr.message}; ${pushErr.message}` : (pullErr || pushErr)?.message;
+          const combinedCode = (pullErr || pushErr)?.code;
+          channels.push({ name, channelId: engine.channelId, ok: false, pullOk, pushOk, error: combinedError, code: combinedCode });
         }
       }
-      // Rows every working channel has pushed are no longer needed
-      if (engines.length && channels.every(c => c.ok)) {
-        const cursors = await Promise.all(engines.map(({ engine }) => engine.pushedThrough()));
+
+      // Outbox pruning: prune based on the minimum cursor across channels that pushed
+      const pushedEngines = engines.filter(({ name, engine }) => {
+        const ch = channels.find(c => c.channelId === engine.channelId || c.name === name);
+        return ch ? ch.pushOk : false;
+      });
+      if (pushedEngines.length > 0) {
+        const cursors = await Promise.all(pushedEngines.map(({ engine }) => engine.pushedThrough()));
         await this.store.outbox.pruneThrough(Math.min(...cursors));
       }
+
       const conflicts = ((await this.store.getMetadata(CONFLICTS_METADATA)) || []).length;
       const failed = channels.find(c => !c.ok);
       this._setStatus({
@@ -239,6 +290,10 @@ export class ReplicationManager {
       this._debounce = setTimeout(tick, 15 * 1000);
     });
     document.addEventListener('visibilitychange', tick);
+    window.addEventListener('online', () => {
+      this._backoffs.clear();
+      this.syncNow().catch(() => {});
+    });
     setTimeout(tick, 3000);
   }
 

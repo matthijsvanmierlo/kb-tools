@@ -112,6 +112,10 @@ up by scanning two codes, with no STUN/TURN servers, so nothing leaves the local
 school Wi-Fi networks isolate clients from each other; then the app says so and suggests the
 other ways.
 
+### Expected Storage Footprint
+A typical teacher with 5 classes and 150 students, compressed, should be about 20–80 MB. The formula is:
+`snapshot ≈ compressed workspace size × devices, plus retained submissions`.
+
 ## Content Security Policy
 
 The app's CSP only allows network requests to its own origin (`connect-src 'self'`). If the relay
@@ -132,6 +136,7 @@ The "Connect to a school server" dialog tells teachers when a relay is blocked b
 | `KB_RELAY_ORIGINS` | `*` | Comma-separated list of allowed CORS origins |
 | `KB_RELAY_HOST` | all interfaces | Address to listen on |
 | `KB_RELAY_RETENTION_DAYS` | `180` | Delete submissions, drafts and sync chunks older than this (`0` keeps all) |
+| `KB_RELAY_TEACHER_QUOTA_MB` | `1024` | Storage quota in megabytes per teacher (default 1024 MB / 1 GB) |
 | `KB_RELAY_TLS_CERT` / `KB_RELAY_TLS_KEY` | unset | PEM files; when both are set the relay serves HTTPS |
 | `KB_RELAY_SERVE_APP` | unset | `1` also serves the KennisBoost app (same origin as the relay) |
 | `KB_MEDIA_SIGNING_SECRET` | auto-generated | Secret key for HMAC-signed media upload URLs (persisted in DB) |
@@ -147,25 +152,34 @@ The "Connect to a school server" dialog tells teachers when a relay is blocked b
 
 | Method | Path | Auth | Body / Query | Description |
 |---|---|---|---|---|
-| GET | `/health` | None | — | Health check & capabilities |
+| GET | `/health` | None | — | Health check, backend, schema version & limits |
+| GET | `/whoami` | Teacher | — | Validate teacher token, return teacher id and quota |
+| GET | `/usage` | Teacher | — | Storage breakdown by category, quota, and active workspaces/devices |
 | POST | `/media/presign` | Teacher | `{ sha256, mime, ext, size }` | Request HMAC-signed upload URL for media asset |
 | POST | `/drops/:dropId/media/presign` | Drop secret | `{ sha256, mime, ext, size }` | Request HMAC-signed upload URL for student file attachment (max 25MB, drop quota enforced) |
 | PUT | `/media/upload?key=&exp=&sig=[&drop_id=]` | HMAC sig | Raw binary | Upload media asset (verifies signature, expiry, and body SHA-256 match) |
-| GET | `/media/file/:filename` | None | — | Download immutable media asset |
+| GET | `/media/file/:filename` | None | — | Download immutable media asset (served with nosniff and default-src none CSP) |
 | POST | `/payloads` | Teacher | `{ kind, ciphertext, expires_at, meta }` | Store encrypted short link payload (max 512KB) |
 | GET | `/payloads/:ref` | None | — | Retrieve encrypted lesson payload |
 | POST | `/drops` | Teacher | `{ assignment_id, publish_version, expires_at }` | Create submission drop box; returns `{ drop_id, drop_secret }` |
-| POST | `/drops/:dropId/submissions` | Drop secret | Raw `KBSUB1.` envelope (text/plain) | Submit student work (rate-limited, max 256KB). Header `X-KB-Drop-Secret` (drops created before secrets existed accept submissions without it) |
-| GET | `/drops/:dropId/submissions?since=<iso>` | Teacher | — | List submissions for a drop box |
-| DELETE | `/drops/:dropId` | Teacher | — | Delete drop box and submissions |
-| PUT | `/drops/:dropId/drafts/:draftId` | Drop secret | Raw `KBDRAFT1.` ciphertext (text/plain) | Save a student's encrypted draft (64-hex id derived from their access code; max 256KB) |
+| POST | `/drops/:dropId/submissions` | Drop secret | Raw `KBSUB1.` envelope (text/plain) | Submit student work (rate-limited 120/min per IP, max 5MB, idempotent). Inlined if < 256KB, blob-backed if >= 256KB. |
+| GET | `/drops/:dropId/submissions?since=&after=&limit=` | Teacher | — | List submissions for a drop box (paged) |
+| GET | `/drops/:dropId/stats` | Teacher | — | Get submission count and media metrics |
+| DELETE | `/drops/:dropId` | Teacher | — | Delete drop box, media, and submissions |
+| PUT | `/drops/:dropId/drafts/:draftId` | Drop secret | Raw `KBDRAFT1.` ciphertext (text/plain) | Save a student's encrypted draft (max 64KB) |
 | GET | `/drops/:dropId/drafts/:draftId` | Drop secret | — | Load that draft |
+| PUT | `/feed/:courseId` | Teacher | `{ ciphertext, etag, expires_at }` | Publish encrypted class feed (max 512KB) |
+| GET | `/feed/:courseId` | None | — | Fetch class feed (conditional ETag) |
+| DELETE | `/feed/:courseId` | Teacher | — | Delete class feed |
 | POST | `/sync` | Teacher | — | Create a sync workspace; returns `{ workspace_id, workspace_key }` |
-| POST | `/sync/:ws/chunks` | Teacher + workspace key | `{ device_id, start, end, body }` | Store an encrypted change chunk (idempotent, max 4MB) |
-| GET | `/sync/:ws/chunks?after=<seq>` | Teacher + workspace key | — | List chunks after a server sequence (`{ items, more }`) |
-| DELETE | `/sync/:ws/chunks?device_id=&through=` | Teacher + workspace key | — | Prune a device's chunks covered by its snapshot |
-| PUT | `/sync/:ws/snapshots/:deviceId` | Teacher + workspace key | `{ created_at, body }` | Replace a device's encrypted snapshot (max 32MB) |
+| DELETE | `/sync/:ws` | Teacher | — | Forget this sync workspace (removes workspace, chunks, snapshots, and blobs) |
+| POST | `/sync/:ws/chunks` | Teacher + workspace key | `{ device_id, start, end, body }` | Store an encrypted change chunk (max 1MB, client splits, blob-backed) |
+| GET | `/sync/:ws/chunks?after=<seq>` | Teacher + workspace key | — | List chunks after sequence (capped at 50 items and 8MB per page) |
+| DELETE | `/sync/:ws/chunks?device_id=&through=` | Teacher + workspace key | — | Prune a device's chunks |
+| POST | `/sync/:ws/ack` | Teacher + workspace key | `{ deviceId, vector }` | Acknowledge sync vector for server chunk GC |
+| PUT | `/sync/:ws/snapshots/:deviceId` | Teacher + workspace key | `{ created_at, body }` | Store a device's encrypted snapshot (max 64MB, blob-backed) |
 | GET | `/sync/:ws/snapshots[/:deviceId]` | Teacher + workspace key | — | List snapshots / fetch one |
+| DELETE | `/sync/:ws/devices/:deviceId` | Teacher + workspace key | — | Remove a device and its sync data |
 
 ### Sync workspaces
 

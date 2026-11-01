@@ -59,7 +59,7 @@ export async function renderClassesView(params, router, container) {
     }
 
     container.innerHTML = `
-      <div class="h-full flex flex-col md:flex-row bg-slate-50 min-h-[calc(100vh-4rem)]">
+      <div class="h-full flex flex-col md:flex-row bg-slate-50 min-h-[calc(100dvh-4rem)]">
         <!-- Master Pane: Class List -->
         <aside class="w-full md:w-80 lg:w-96 flex-shrink-0 bg-white border-r border-slate-200 flex flex-col h-auto md:h-full">
           <!-- Master Header -->
@@ -476,7 +476,7 @@ export async function renderClassesView(params, router, container) {
             await storage.table('gradebook_students').put(updated);
             render();
           },
-          onDeleteStudent: async () => {
+          onDeleteStudent: async (deletedId) => {
             render();
           }
         }),

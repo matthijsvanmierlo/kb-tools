@@ -125,6 +125,7 @@ export function buildClickableHtmlFile({
       color: var(--text-main);
       display: flex;
       min-height: 100vh;
+      min-height: 100dvh;
       align-items: center;
       justify-content: center;
       padding: 24px;
@@ -324,7 +325,7 @@ ${serialized}
           copyBtn.textContent = 'Copied to Clipboard!';
           setTimeout(() => { copyBtn.textContent = orig; }, 2000);
         } catch (_) {
-          alert('Could not copy automatically. Select and copy from the page source.');
+          copyBtn.textContent = 'Select & copy from source';
         }
       });
 

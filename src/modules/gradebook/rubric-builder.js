@@ -3,7 +3,7 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { GradebookMathEngine } from './engine-calc.js';
 import { storage } from '../../core/storage.js';
 import { toast } from '../../utils/toast.js';
-import { ConfirmDialog } from '../../utils/dialogs.js';
+import { ConfirmDialog, kbModal } from '../../utils/dialogs.js';
 
 /**
  * Multi-Criteria Rubric Designer & Real-Time Scoring Matrix (KB-GRAD-003)
@@ -31,7 +31,10 @@ export class RubricScorer {
       let maxPts = 0;
       for (const tier of (rubric.tiers || [])) {
         const cell = crit.cells ? crit.cells[tier.id] : null;
-        const pts = cell ? (cell.points ?? tier.default_points ?? 0) : (tier.default_points ?? 0);
+        // Fix: use cell.points ?? tier.default_points so 0 pts is preserved
+        const pts = (cell && cell.points !== undefined && cell.points !== null)
+          ? Number(cell.points)
+          : (tier && tier.default_points !== undefined && tier.default_points !== null ? Number(tier.default_points) : 0);
         if (pts > maxPts) maxPts = pts;
       }
       totalPossible += maxPts * weight;
@@ -40,7 +43,9 @@ export class RubricScorer {
       if (tierId) {
         const tier = (rubric.tiers || []).find(t => t.id === tierId);
         const cell = crit.cells ? crit.cells[tierId] : null;
-        const pts = cell ? (cell.points ?? tier?.default_points ?? 0) : (tier?.default_points ?? 0);
+        const pts = (cell && cell.points !== undefined && cell.points !== null)
+          ? Number(cell.points)
+          : (tier && tier.default_points !== undefined && tier.default_points !== null ? Number(tier.default_points) : 0);
         totalEarned += pts * weight;
       }
     }
@@ -98,55 +103,66 @@ export class RubricScorer {
 
     drawer.innerHTML = `
       <div class="space-y-4">
-        <!-- Live Score Summary Banner -->
-        <div class="bg-blue-50 border border-blue-200 p-3 rounded-xl flex items-center justify-between">
-          <span class="text-xs font-semibold uppercase text-blue-800 tracking-wider">Evaluation Score</span>
-          <div id="rubric-score-badge"></div>
+        <!-- Live Score Summary Header -->
+        <div class="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center justify-between">
+          <div>
+            <span class="text-xs font-semibold text-slate-500 uppercase tracking-wider block">Calculated Rubric Score</span>
+            <div id="rubric-score-badge" class="mt-0.5"></div>
+          </div>
+          <sl-button size="small" variant="default" id="btn-clear-rubric-eval">
+            <sl-icon slot="prefix" name="arrow-counterclockwise"></sl-icon> Reset
+          </sl-button>
         </div>
 
-        <!-- Rubric Interactive Grid Table -->
-        <div class="overflow-x-auto border rounded-xl">
-          <table class="w-full text-left text-xs border-collapse">
-            <thead class="bg-slate-100 font-semibold text-slate-700">
-              <tr>
-                <th class="p-2.5 border-b border-r w-36">Criteria</th>
-                ${(rubric.tiers || []).map(t => `
-                  <th class="p-2.5 border-b border-r text-center">
-                    <div>${Sanitizer.escapeHTML(t.label)}</div>
-                    <span class="text-[10px] text-slate-400 font-mono">(${Sanitizer.escapeHTML(Sanitizer.safeNumber(t.default_points))} pts)</span>
-                  </th>
-                `).join('')}
-              </tr>
-            </thead>
-            <tbody>
-              ${(rubric.criteria || []).map(c => `
-                <tr class="border-b">
-                  <td class="p-2.5 border-r font-medium text-slate-900 bg-slate-50">
-                    <div>${Sanitizer.escapeHTML(c.name)}</div>
-                    <span class="text-[10px] text-slate-400">Weight: ${Sanitizer.escapeHTML(Sanitizer.safeNumber(c.weight || 1.0))}x</span>
-                  </td>
-                  ${(rubric.tiers || []).map(t => {
-                    const cell = c.cells ? c.cells[t.id] : null;
-                    const pts = cell ? (cell.points ?? t.default_points ?? 0) : (t.default_points ?? 0);
-                    const desc = cell ? (cell.descriptor || '') : '';
-                    return `
-                      <td class="p-1 border-r text-center align-top">
-                        <button type="button" data-crit-id="${Sanitizer.escapeHTML(c.id)}" data-tier-id="${Sanitizer.escapeHTML(t.id)}" data-desc="${Sanitizer.escapeHTML(desc)}" data-crit-name="${Sanitizer.escapeHTML(c.name)}" data-tier-label="${Sanitizer.escapeHTML(t.label)}"
-                                class="rubric-cell-btn w-full h-full p-2 rounded border border-slate-200 text-left hover:bg-slate-50 transition-colors flex flex-col justify-between min-h-[70px]">
-                          <span class="text-[11px] text-slate-700 leading-tight">${Sanitizer.escapeHTML(desc || 'No descriptor')}</span>
-                          <span class="text-[10px] font-bold text-blue-600 font-mono self-end mt-1">${Sanitizer.escapeHTML(Sanitizer.safeNumber(pts))} pts</span>
-                        </button>
-                      </td>
-                    `;
-                  }).join('')}
-                </tr>
-              `).join('')}
-            </tbody>
-          </table>
+        <!-- Rubric Grid Matrix -->
+        <div class="space-y-4 max-h-[500px] overflow-y-auto pr-1">
+          ${(rubric.criteria || []).map(crit => `
+            <div class="border border-slate-200 rounded-xl p-3 bg-white space-y-2">
+              <div class="flex items-center justify-between">
+                <div>
+                  <span class="font-bold text-slate-900 text-sm">${Sanitizer.escapeHTML(crit.name)}</span>
+                  ${crit.weight && crit.weight !== 1.0 ? `
+                    <span class="text-xs text-slate-400 font-mono ml-2">(Weight: ${Sanitizer.escapeHTML(crit.weight)}x)</span>
+                  ` : ''}
+                </div>
+              </div>
+
+              <!-- Tiers row for this criterion -->
+              <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                ${(rubric.tiers || []).map(tier => {
+                  const cell = crit.cells ? crit.cells[tier.id] : null;
+                  const pts = (cell && cell.points !== undefined && cell.points !== null)
+                    ? Number(cell.points)
+                    : (tier.default_points !== undefined && tier.default_points !== null ? Number(tier.default_points) : 0);
+                  const desc = cell ? cell.descriptor || '' : '';
+                  return `
+                    <button type="button"
+                      class="rubric-cell-btn text-left p-2.5 rounded-lg border border-slate-200 hover:border-blue-400 hover:bg-slate-50 transition-all cursor-pointer flex flex-col justify-between"
+                      data-crit-id="${Sanitizer.escapeHTML(crit.id)}"
+                      data-tier-id="${Sanitizer.escapeHTML(tier.id)}"
+                      data-desc="${Sanitizer.escapeHTML(desc)}"
+                      data-crit-name="${Sanitizer.escapeHTML(crit.name)}"
+                      data-tier-label="${Sanitizer.escapeHTML(tier.label)}"
+                    >
+                      <div>
+                        <div class="flex items-center justify-between text-xs font-semibold text-slate-800">
+                          <span>${Sanitizer.escapeHTML(tier.label)}</span>
+                          <span class="text-blue-600 font-mono">${Sanitizer.escapeHTML(Sanitizer.safeNumber(pts))} pts</span>
+                        </div>
+                        <p class="text-xs text-slate-500 mt-1 line-clamp-3 leading-relaxed">
+                          ${desc ? Sanitizer.escapeHTML(desc) : '<span class="italic text-slate-300">No descriptor</span>'}
+                        </p>
+                      </div>
+                    </button>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          `).join('')}
         </div>
 
-        <!-- Student Feedback Auto-Append Box -->
-        <div>
+        <!-- Qualitative Feedback Box -->
+        <div class="pt-2 border-t border-slate-100">
           <label class="text-xs font-semibold text-slate-700 block mb-1">Qualitative Feedback to Student</label>
           <sl-textarea id="rubric-feedback-textarea" rows="4" placeholder="Feedback notes auto-generate from clicked rubric criteria..."></sl-textarea>
         </div>
@@ -172,9 +188,7 @@ export class RubricScorer {
 
         selectedEval[cId] = tId;
 
-        // Auto-append feedback descriptor: "[Criteria - Tier]: Descriptor text"
         const descriptorSnippet = `[${cName} - ${tLabel}]: ${desc}`;
-        // Remove prior descriptor for this criterion if present
         const safeName = String(cName ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const regex = new RegExp(`\\[${safeName} - [^\\]]+\\]: [^\\n]+`, 'g');
         if (currentFeedback.match(regex)) {
@@ -185,6 +199,11 @@ export class RubricScorer {
 
         updateUI();
       });
+    });
+
+    drawer.querySelector('#btn-clear-rubric-eval')?.addEventListener('click', () => {
+      for (const k of Object.keys(selectedEval)) delete selectedEval[k];
+      updateUI();
     });
 
     const feedbackEl = drawer.querySelector('#rubric-feedback-textarea');
@@ -217,6 +236,57 @@ export class RubricScorer {
  * Multi-Criteria Rubric Designer Modal & Manager (KB-GRAD-004)
  */
 export class RubricDesigner {
+  /**
+   * Create a new rubric via modal dialog. Returns Promise<rubric | null>.
+   * @param {object} options
+   * @param {string|null} [options.courseId=null]
+   * @param {string} [options.initialTitle='New Rubric']
+   * @returns {Promise<object|null>}
+   */
+  static async create({ courseId = null, initialTitle = 'New Rubric' } = {}) {
+    const newRubric = {
+      id: generateUUID(),
+      course_id: courseId,
+      title: initialTitle,
+      tiers: [
+        { id: generateUUID(), label: 'Developing', default_points: 10 },
+        { id: generateUUID(), label: 'Proficient', default_points: 20 },
+        { id: generateUUID(), label: 'Mastery', default_points: 25 }
+      ],
+      criteria: [
+        {
+          id: generateUUID(),
+          name: 'Content & Accuracy',
+          weight: 1.0,
+          cells: {}
+        }
+      ]
+    };
+    return this._showDesignerModal(newRubric, false);
+  }
+
+  /**
+   * Edit an existing rubric via modal dialog. Returns Promise<rubric | null>.
+   * @param {object} rubric
+   * @returns {Promise<object|null>}
+   */
+  static async edit(rubric) {
+    if (!rubric) return null;
+    const clone = JSON.parse(JSON.stringify(rubric));
+    return this._showDesignerModal(clone, true);
+  }
+
+  /**
+   * Backwards compatible helper for existing callers.
+   */
+  static async openDesignerModal({ courseId, rubric, onSave }) {
+    const result = rubric ? await this.edit(rubric) : await this.create({ courseId });
+    if (result && typeof onSave === 'function') {
+      onSave(result);
+    }
+    return result;
+  }
+
   /**
    * Open Rubric Management / Catalog Modal
    */
@@ -280,9 +350,10 @@ export class RubricDesigner {
       if (e.target === dialog) dialog.remove();
     });
 
-    dialog.querySelector('#btn-new-rubric')?.addEventListener('click', () => {
+    dialog.querySelector('#btn-new-rubric')?.addEventListener('click', async () => {
       dialog.hide();
-      this.openDesignerModal({ courseId: course?.id || null, onSave: (saved) => onUpdate && onUpdate(saved) });
+      const saved = await this.create({ courseId: course?.id || null });
+      if (saved && onUpdate) onUpdate(saved);
     });
 
     dialog.querySelectorAll('.btn-edit-rubric').forEach(btn => {
@@ -291,7 +362,8 @@ export class RubricDesigner {
         const rubric = rubrics.find(r => r.id === id);
         if (rubric) {
           dialog.hide();
-          this.openDesignerModal({ courseId: course?.id || null, rubric, onSave: (saved) => onUpdate && onUpdate(saved) });
+          const saved = await this.edit(rubric);
+          if (saved && onUpdate) onUpdate(saved);
         }
       });
     });
@@ -309,7 +381,7 @@ export class RubricDesigner {
           await storage.table('gradebook_rubrics').delete(id);
           toast.info('Rubric deleted.');
           dialog.remove();
-          onUpdate();
+          if (onUpdate) onUpdate();
         }
       });
     });
@@ -318,258 +390,306 @@ export class RubricDesigner {
   }
 
   /**
-   * Open Rubric Designer (Add/Edit Criteria & Tiers)
+   * Internal helper using kbModal returning Promise<rubric | null>
+   * @private
    */
-  static openDesignerModal({ courseId, rubric, onSave }) {
-    const isEditing = !!rubric;
-    const currentRubric = isEditing ? JSON.parse(JSON.stringify(rubric)) : {
-      id: generateUUID(),
-      course_id: courseId,
-      title: 'New Rubric',
-      tiers: [
-        { id: generateUUID(), label: 'Developing', default_points: 10 },
-        { id: generateUUID(), label: 'Proficient', default_points: 20 },
-        { id: generateUUID(), label: 'Mastery', default_points: 25 }
-      ],
-      criteria: [
+  static async _showDesignerModal(initialRubric, isEditing) {
+    const currentRubric = JSON.parse(JSON.stringify(initialRubric));
+    let savedRecord = null;
+    let focusTargetId = null;
+
+    const res = await kbModal({
+      title: isEditing ? `Edit Rubric: ${currentRubric.title}` : 'Design New Rubric',
+      width: '880px',
+      body: '<div id="rubric-designer-mount" class="space-y-4"></div>',
+      actions: [
+        { value: 'cancel', label: 'Cancel', dismiss: true },
         {
-          id: generateUUID(),
-          name: 'Content & Accuracy',
-          weight: 1.0,
-          cells: {}
-        }
-      ]
-    };
-
-    const dialog = document.createElement('sl-dialog');
-    dialog.label = isEditing ? `Edit Rubric: ${currentRubric.title}` : 'Design New Rubric';
-    dialog.style.setProperty('--width', '840px');
-
-    const render = () => {
-      dialog.innerHTML = `
-        <div class="space-y-4">
-          <!-- Title & Tiers Bar -->
-          <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-            <div class="md:col-span-8">
-              <sl-input id="input-rubric-title" label="Rubric Title" value="${Sanitizer.escapeHTML(currentRubric.title || '')}" required></sl-input>
-            </div>
-            <div class="md:col-span-4 flex justify-end">
-              <sl-button size="small" variant="default" id="btn-add-tier">
-                <sl-icon slot="prefix" name="plus"></sl-icon> Add Performance Tier
-              </sl-button>
-            </div>
-          </div>
-
-          <!-- Tiers Configuration List -->
-          <div class="bg-slate-50 p-3 rounded-xl border space-y-2">
-            <span class="text-xs font-semibold text-slate-700 block">Performance Tiers (Columns)</span>
-            <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2" id="tiers-list-mount">
-              ${currentRubric.tiers.map((t, idx) => `
-                <div class="p-2 border rounded-lg bg-white space-y-1">
-                  <div class="flex items-center justify-between">
-                    <span class="text-[10px] font-bold text-slate-400 font-mono">Tier ${idx + 1}</span>
-                    ${currentRubric.tiers.length > 1 ? `
-                      <button type="button" class="btn-del-tier text-slate-400 hover:text-red-600 p-0.5" data-tier-id="${Sanitizer.escapeHTML(t.id)}" title="Remove tier">
-                        <sl-icon name="x-lg" class="text-xs"></sl-icon>
-                      </button>
-                    ` : ''}
-                  </div>
-                  <sl-input size="small" class="tier-label-inp" data-tier-id="${Sanitizer.escapeHTML(t.id)}" value="${Sanitizer.escapeHTML(t.label)}" placeholder="Tier Name"></sl-input>
-                  <sl-input size="small" type="number" class="tier-pts-inp" data-tier-id="${Sanitizer.escapeHTML(t.id)}" value="${Sanitizer.escapeHTML(t.default_points)}" placeholder="Pts"></sl-input>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-
-          <!-- Criteria Matrix Table -->
-          <div class="space-y-2">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-semibold text-slate-700">Criteria &amp; Cell Descriptors (Rows)</span>
-              <sl-button size="small" variant="default" id="btn-add-crit">
-                <sl-icon slot="prefix" name="plus"></sl-icon> Add Criterion
-              </sl-button>
-            </div>
-
-            <div class="space-y-3 max-h-[380px] overflow-y-auto pr-1" id="criteria-list-mount">
-              ${currentRubric.criteria.map((c, cIdx) => `
-                <div class="p-3 border rounded-xl bg-slate-50 space-y-2" data-crit-id="${Sanitizer.escapeHTML(c.id)}">
-                  <div class="flex items-center justify-between gap-3">
-                    <div class="flex items-center gap-2 flex-1">
-                      <span class="font-bold text-slate-600 text-xs font-mono">#${cIdx + 1}</span>
-                      <sl-input size="small" class="crit-name-inp flex-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" value="${Sanitizer.escapeHTML(c.name)}" placeholder="Criterion Name"></sl-input>
-                      <sl-input size="small" type="number" step="0.1" class="crit-weight-inp w-24" data-crit-id="${Sanitizer.escapeHTML(c.id)}" value="${Sanitizer.escapeHTML(c.weight || 1.0)}" label="Weight"></sl-input>
-                    </div>
-                    ${currentRubric.criteria.length > 1 ? `
-                      <button type="button" class="btn-del-crit text-slate-400 hover:text-red-600 p-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" title="Delete Criterion">
-                        <sl-icon name="trash"></sl-icon>
-                      </button>
-                    ` : ''}
-                  </div>
-
-                  <!-- Per-Tier Descriptors -->
-                  <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                    ${currentRubric.tiers.map(t => {
-                      const cell = c.cells ? c.cells[t.id] : null;
-                      const desc = cell ? cell.descriptor || '' : '';
-                      const pts = cell && cell.points != null ? cell.points : t.default_points;
-                      return `
-                        <div class="p-2 border rounded-lg bg-white space-y-1">
-                          <div class="flex items-center justify-between text-[10px] text-slate-500 font-medium">
-                            <span>${Sanitizer.escapeHTML(t.label)}</span>
-                            <span class="font-mono text-blue-600">${Sanitizer.escapeHTML(Sanitizer.safeNumber(pts))} pts</span>
-                          </div>
-                          <sl-textarea size="small" class="cell-desc-inp" data-crit-id="${Sanitizer.escapeHTML(c.id)}" data-tier-id="${Sanitizer.escapeHTML(t.id)}" rows="2" placeholder="Quality descriptor..." value="${Sanitizer.escapeHTML(desc)}"></sl-textarea>
-                        </div>
-                      `;
-                    }).join('')}
-                  </div>
-                </div>
-              `).join('')}
-            </div>
-          </div>
-        </div>
-
-        <div slot="footer" class="flex justify-end gap-2">
-          <sl-button variant="default" id="btn-cancel-designer">Cancel</sl-button>
-          <sl-button variant="primary" id="btn-save-rubric">Save Rubric</sl-button>
-        </div>
-      `;
-
-      bindEvents();
-    };
-
-    const bindEvents = () => {
-      // Title
-      dialog.querySelector('#input-rubric-title')?.addEventListener('sl-input', (e) => {
-        currentRubric.title = e.target.value;
-      });
-
-      // Tier inputs
-      dialog.querySelectorAll('.tier-label-inp').forEach(inp => {
-        inp.addEventListener('sl-input', () => {
-          const tId = inp.getAttribute('data-tier-id');
-          const tier = currentRubric.tiers.find(t => t.id === tId);
-          if (tier) tier.label = inp.value;
-        });
-      });
-
-      dialog.querySelectorAll('.tier-pts-inp').forEach(inp => {
-        inp.addEventListener('sl-input', () => {
-          const tId = inp.getAttribute('data-tier-id');
-          const tier = currentRubric.tiers.find(t => t.id === tId);
-          if (tier) tier.default_points = Number(inp.value) || 0;
-        });
-      });
-
-      dialog.querySelectorAll('.btn-del-tier').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const tId = btn.getAttribute('data-tier-id');
-          currentRubric.tiers = currentRubric.tiers.filter(t => t.id !== tId);
-          render();
-        });
-      });
-
-      dialog.querySelector('#btn-add-tier')?.addEventListener('click', () => {
-        currentRubric.tiers.push({
-          id: generateUUID(),
-          label: `Tier ${currentRubric.tiers.length + 1}`,
-          default_points: (currentRubric.tiers.length + 1) * 10
-        });
-        render();
-      });
-
-      // Criteria inputs
-      dialog.querySelectorAll('.crit-name-inp').forEach(inp => {
-        inp.addEventListener('sl-input', () => {
-          const cId = inp.getAttribute('data-crit-id');
-          const crit = currentRubric.criteria.find(c => c.id === cId);
-          if (crit) crit.name = inp.value;
-        });
-      });
-
-      dialog.querySelectorAll('.crit-weight-inp').forEach(inp => {
-        inp.addEventListener('sl-input', () => {
-          const cId = inp.getAttribute('data-crit-id');
-          const crit = currentRubric.criteria.find(c => c.id === cId);
-          if (crit) crit.weight = parseFloat(inp.value) || 1.0;
-        });
-      });
-
-      dialog.querySelectorAll('.btn-del-crit').forEach(btn => {
-        btn.addEventListener('click', () => {
-          const cId = btn.getAttribute('data-crit-id');
-          currentRubric.criteria = currentRubric.criteria.filter(c => c.id !== cId);
-          render();
-        });
-      });
-
-      dialog.querySelector('#btn-add-crit')?.addEventListener('click', () => {
-        currentRubric.criteria.push({
-          id: generateUUID(),
-          name: `Criterion ${currentRubric.criteria.length + 1}`,
-          weight: 1.0,
-          cells: {}
-        });
-        render();
-      });
-
-      // Cell descriptors
-      dialog.querySelectorAll('.cell-desc-inp').forEach(area => {
-        area.addEventListener('sl-input', () => {
-          const cId = area.getAttribute('data-crit-id');
-          const tId = area.getAttribute('data-tier-id');
-          const crit = currentRubric.criteria.find(c => c.id === cId);
-          if (crit) {
-            if (!crit.cells) crit.cells = {};
-            if (!crit.cells[tId]) {
-              const tier = currentRubric.tiers.find(t => t.id === tId);
-              crit.cells[tId] = { points: tier ? tier.default_points : 0, descriptor: '' };
+          value: 'save',
+          label: 'Save Rubric',
+          variant: 'primary',
+          validate: async () => {
+            // Validate title
+            if (!currentRubric.title || !currentRubric.title.trim()) {
+              toast.warning('Please enter a rubric title.');
+              return false;
             }
-            crit.cells[tId].descriptor = area.value;
+            // Validate tiers: at least two
+            if (!currentRubric.tiers || currentRubric.tiers.length < 2) {
+              toast.warning('At least two performance rating levels are required.');
+              return false;
+            }
+            // Validate criteria: at least one
+            if (!currentRubric.criteria || currentRubric.criteria.length < 1) {
+              toast.warning('At least one criterion is required.');
+              return false;
+            }
+            // Validate criterion names
+            for (let i = 0; i < currentRubric.criteria.length; i++) {
+              const c = currentRubric.criteria[i];
+              if (!c.name || !c.name.trim()) {
+                toast.warning(`Criterion #${i + 1} requires a name.`);
+                return false;
+              }
+            }
+            // Validate non-negative points
+            for (const tier of currentRubric.tiers) {
+              if (tier.default_points < 0) {
+                toast.warning(`Points for "${tier.label}" must be non-negative.`);
+                return false;
+              }
+            }
+            for (const crit of currentRubric.criteria) {
+              if (crit.cells) {
+                for (const tId of Object.keys(crit.cells)) {
+                  const cell = crit.cells[tId];
+                  if (cell && cell.points !== undefined && cell.points < 0) {
+                    toast.warning('Criterion cell points cannot be negative.');
+                    return false;
+                  }
+                }
+              }
+            }
+
+            // Sync cells structure
+            currentRubric.criteria.forEach(c => {
+              if (!c.cells) c.cells = {};
+              currentRubric.tiers.forEach(t => {
+                if (!c.cells[t.id]) {
+                  c.cells[t.id] = { points: t.default_points, descriptor: '' };
+                }
+              });
+            });
+
+            await storage.table('gradebook_rubrics').put(currentRubric);
+            toast.success(`Rubric "${currentRubric.title}" saved!`);
+            savedRecord = currentRubric;
+            return true;
           }
-        });
-      });
+        }
+      ],
+      onReady: (dialog) => {
+        const mount = dialog.querySelector('#rubric-designer-mount');
 
-      // Save
-      dialog.querySelector('#btn-save-rubric')?.addEventListener('click', async () => {
-        if (!currentRubric.title || !currentRubric.title.trim()) {
-          toast.warning('Please enter a rubric title.');
-          return;
-        }
-        if (currentRubric.tiers.length === 0) {
-          toast.warning('At least one performance tier is required.');
-          return;
-        }
-        if (currentRubric.criteria.length === 0) {
-          toast.warning('At least one criterion is required.');
-          return;
-        }
+        const render = () => {
+          if (!mount) return;
+          mount.innerHTML = `
+            <!-- Title & Tiers Bar -->
+            <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+              <div class="md:col-span-8">
+                <sl-input id="input-rubric-title" label="Rubric Title" value="${Sanitizer.escapeHTML(currentRubric.title || '')}" required></sl-input>
+              </div>
+              <div class="md:col-span-4 flex justify-end">
+                <sl-button size="small" variant="default" id="btn-add-tier">
+                  <sl-icon slot="prefix" name="plus"></sl-icon> Add Performance Tier
+                </sl-button>
+              </div>
+            </div>
 
-        // Clean cells structure
-        currentRubric.criteria.forEach(c => {
-          if (!c.cells) c.cells = {};
-          currentRubric.tiers.forEach(t => {
-            if (!c.cells[t.id]) {
-              c.cells[t.id] = { points: t.default_points, descriptor: '' };
-            }
+            <!-- Tiers Configuration List -->
+            <div class="bg-slate-50 p-3 rounded-xl border border-slate-200 space-y-2">
+              <span class="text-xs font-semibold text-slate-700 block">Performance Tiers (Columns)</span>
+              <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2" id="tiers-list-mount">
+                ${currentRubric.tiers.map((t, idx) => `
+                  <div class="p-2 border rounded-lg bg-white space-y-1">
+                    <div class="flex items-center justify-between">
+                      <span class="text-[10px] font-bold text-slate-400 font-mono">Tier ${idx + 1}</span>
+                      ${currentRubric.tiers.length > 2 ? `
+                        <button type="button" class="btn-del-tier text-slate-400 hover:text-red-600 p-0.5" data-tier-id="${Sanitizer.escapeHTML(t.id)}" title="Remove tier">
+                          <sl-icon name="x-lg" class="text-xs"></sl-icon>
+                        </button>
+                      ` : ''}
+                    </div>
+                    <sl-input size="small" class="tier-label-inp" data-tier-id="${Sanitizer.escapeHTML(t.id)}" value="${Sanitizer.escapeHTML(t.label)}" placeholder="Tier Name"></sl-input>
+                    <sl-input size="small" type="number" min="0" class="tier-pts-inp" data-tier-id="${Sanitizer.escapeHTML(t.id)}" value="${Sanitizer.escapeHTML(t.default_points)}" placeholder="Pts"></sl-input>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+
+            <!-- Criteria Matrix Table -->
+            <div class="space-y-2">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-semibold text-slate-700">Criteria &amp; Cell Descriptors (Rows)</span>
+                <sl-button size="small" variant="default" id="btn-add-crit">
+                  <sl-icon slot="prefix" name="plus"></sl-icon> Add Criterion
+                </sl-button>
+              </div>
+
+              <div class="space-y-3 max-h-[360px] overflow-y-auto pr-1" id="criteria-list-mount">
+                ${currentRubric.criteria.map((c, cIdx) => `
+                  <div class="p-3 border border-slate-200 rounded-xl bg-slate-50 space-y-2 crit-row" data-crit-id="${Sanitizer.escapeHTML(c.id)}">
+                    <div class="flex items-center justify-between gap-3">
+                      <div class="flex items-center gap-2 flex-1">
+                        <span class="font-bold text-slate-600 text-xs font-mono">#${cIdx + 1}</span>
+                        <sl-input size="small" class="crit-name-inp flex-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" value="${Sanitizer.escapeHTML(c.name)}" placeholder="Criterion Name (press Enter to add row)"></sl-input>
+                        <sl-input size="small" type="number" step="0.1" min="0" class="crit-weight-inp w-24" data-crit-id="${Sanitizer.escapeHTML(c.id)}" value="${Sanitizer.escapeHTML(c.weight ?? 1.0)}" label="Weight"></sl-input>
+                      </div>
+                      ${currentRubric.criteria.length > 1 ? `
+                        <button type="button" class="btn-del-crit text-slate-400 hover:text-red-600 p-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" title="Delete Criterion">
+                          <sl-icon name="trash"></sl-icon>
+                        </button>
+                      ` : ''}
+                    </div>
+
+                    <!-- Per-Tier Descriptors -->
+                    <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+                      ${currentRubric.tiers.map(t => {
+                        const cell = c.cells ? c.cells[t.id] : null;
+                        const desc = cell ? cell.descriptor || '' : '';
+                        const pts = (cell && cell.points !== undefined && cell.points !== null)
+                          ? Number(cell.points)
+                          : (t.default_points !== undefined && t.default_points !== null ? Number(t.default_points) : 0);
+                        return `
+                          <div class="p-2 border rounded-lg bg-white space-y-1">
+                            <div class="flex items-center justify-between text-[10px] text-slate-500 font-medium">
+                              <span>${Sanitizer.escapeHTML(t.label)}</span>
+                              <span class="font-mono text-blue-600">${Sanitizer.escapeHTML(Sanitizer.safeNumber(pts))} pts</span>
+                            </div>
+                            <sl-textarea size="small" class="cell-desc-inp" data-crit-id="${Sanitizer.escapeHTML(c.id)}" data-tier-id="${Sanitizer.escapeHTML(t.id)}" rows="2" placeholder="Quality descriptor..." value="${Sanitizer.escapeHTML(desc)}"></sl-textarea>
+                          </div>
+                        `;
+                      }).join('')}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+          `;
+
+          bindEvents();
+
+          if (focusTargetId) {
+            setTimeout(() => {
+              const el = mount.querySelector(`.crit-name-inp[data-crit-id="${focusTargetId}"]`);
+              el?.focus();
+              focusTargetId = null;
+            }, 50);
+          }
+        };
+
+        const bindEvents = () => {
+          mount.querySelector('#input-rubric-title')?.addEventListener('sl-input', (e) => {
+            currentRubric.title = e.target.value;
           });
-        });
 
-        await storage.table('gradebook_rubrics').put(currentRubric);
-        toast.success(`Rubric "${currentRubric.title}" saved!`);
-        dialog.hide();
-        if (onSave) onSave(currentRubric);
-      });
+          mount.querySelectorAll('.tier-label-inp').forEach(inp => {
+            inp.addEventListener('sl-input', () => {
+              const tId = inp.getAttribute('data-tier-id');
+              const tier = currentRubric.tiers.find(t => t.id === tId);
+              if (tier) tier.label = inp.value;
+            });
+          });
 
-      dialog.querySelector('#btn-cancel-designer')?.addEventListener('click', () => dialog.hide());
-      dialog.addEventListener('sl-after-hide', (e) => {
-        if (e.target === dialog) dialog.remove();
-      });
-    };
+          mount.querySelectorAll('.tier-pts-inp').forEach(inp => {
+            inp.addEventListener('sl-input', () => {
+              const tId = inp.getAttribute('data-tier-id');
+              const tier = currentRubric.tiers.find(t => t.id === tId);
+              if (tier) tier.default_points = Math.max(0, Number(inp.value) || 0);
+            });
+          });
 
-    document.body.appendChild(dialog);
-    dialog.show();
-    render();
+          mount.querySelectorAll('.btn-del-tier').forEach(btn => {
+            btn.addEventListener('click', () => {
+              const tId = btn.getAttribute('data-tier-id');
+              currentRubric.tiers = currentRubric.tiers.filter(t => t.id !== tId);
+              render();
+            });
+          });
+
+          mount.querySelector('#btn-add-tier')?.addEventListener('click', () => {
+            currentRubric.tiers.push({
+              id: generateUUID(),
+              label: `Tier ${currentRubric.tiers.length + 1}`,
+              default_points: (currentRubric.tiers.length + 1) * 10
+            });
+            render();
+          });
+
+          // Criteria inputs with Enter / Backspace keyboard navigation
+          mount.querySelectorAll('.crit-name-inp').forEach((inp, idx) => {
+            const cId = inp.getAttribute('data-crit-id');
+
+            inp.addEventListener('sl-input', () => {
+              const crit = currentRubric.criteria.find(c => c.id === cId);
+              if (crit) crit.name = inp.value;
+            });
+
+            inp.addEventListener('keydown', (e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                const newCritId = generateUUID();
+                focusTargetId = newCritId;
+                currentRubric.criteria.splice(idx + 1, 0, {
+                  id: newCritId,
+                  name: `Criterion ${currentRubric.criteria.length + 1}`,
+                  weight: 1.0,
+                  cells: {}
+                });
+                render();
+              } else if (e.key === 'Backspace' && (!inp.value || inp.value.trim() === '') && currentRubric.criteria.length > 1) {
+                e.preventDefault();
+                const prevCrit = currentRubric.criteria[idx - 1] || currentRubric.criteria[idx + 1];
+                focusTargetId = prevCrit ? prevCrit.id : null;
+                currentRubric.criteria = currentRubric.criteria.filter(c => c.id !== cId);
+                render();
+              }
+            });
+          });
+
+          mount.querySelectorAll('.crit-weight-inp').forEach(inp => {
+            inp.addEventListener('sl-input', () => {
+              const cId = inp.getAttribute('data-crit-id');
+              const crit = currentRubric.criteria.find(c => c.id === cId);
+              if (crit) crit.weight = Math.max(0, parseFloat(inp.value) || 1.0);
+            });
+          });
+
+          mount.querySelectorAll('.btn-del-crit').forEach(btn => {
+            btn.addEventListener('click', () => {
+              const cId = btn.getAttribute('data-crit-id');
+              currentRubric.criteria = currentRubric.criteria.filter(c => c.id !== cId);
+              render();
+            });
+          });
+
+          mount.querySelector('#btn-add-crit')?.addEventListener('click', () => {
+            const newCritId = generateUUID();
+            focusTargetId = newCritId;
+            currentRubric.criteria.push({
+              id: newCritId,
+              name: `Criterion ${currentRubric.criteria.length + 1}`,
+              weight: 1.0,
+              cells: {}
+            });
+            render();
+          });
+
+          mount.querySelectorAll('.cell-desc-inp').forEach(area => {
+            area.addEventListener('sl-input', () => {
+              const cId = area.getAttribute('data-crit-id');
+              const tId = area.getAttribute('data-tier-id');
+              const crit = currentRubric.criteria.find(c => c.id === cId);
+              if (crit) {
+                if (!crit.cells) crit.cells = {};
+                if (!crit.cells[tId]) {
+                  const tier = currentRubric.tiers.find(t => t.id === tId);
+                  crit.cells[tId] = { points: tier ? tier.default_points : 0, descriptor: '' };
+                }
+                crit.cells[tId].descriptor = area.value;
+              }
+            });
+          });
+        };
+
+        render();
+      }
+    });
+
+    if (res?.value === 'save') {
+      return savedRecord;
+    }
+    return null;
   }
 }
 

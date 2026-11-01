@@ -320,6 +320,8 @@ describe('Phase 37: Cloudflare Worker, D1 Database, and Zero-Leak #/connect Rout
 
   describe('3. Zero-Leak Teacher Onboarding UX (#/connect)', () => {
     it('configures transport and scrubs URL fragment immediately on #/connect', async () => {
+      const { ConfirmDialog } = await import('../src/utils/dialogs.js');
+      const confirmSpy = vi.spyOn(ConfirmDialog, 'show').mockResolvedValue(true);
       const originalHistory = window.history;
       const replaceStateSpy = vi.spyOn(window.history, 'replaceState');
       const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
@@ -343,6 +345,8 @@ describe('Phase 37: Cloudflare Worker, D1 Database, and Zero-Leak #/connect Rout
       expect(dispatchSpy).toHaveBeenCalledWith(expect.objectContaining({
         type: 'kb-relay-connected'
       }));
+
+      confirmSpy.mockRestore();
     });
 
     it('rejects incomplete #/connect links gracefully', async () => {

@@ -680,6 +680,21 @@ export class UniversalImportDialog {
       } catch (_) {}
     }
 
+    // Check if this is a class join link or code
+    try {
+      const { parseJoinLink } = await import('../core/links.js');
+      const joinIntent = parseJoinLink(trimmed);
+      if (joinIntent && (joinIntent.classCode || joinIntent.feedId)) {
+        const { JoinService } = await import('../core/join-service.js');
+        const res = await JoinService.join(joinIntent);
+        if (res.status === 'joined' || res.status === 'joined_pending_content') {
+          toast.success(`Joined class "${res.course?.name || res.classCode}"!`);
+          if (r) r.navigate('#/student/courses');
+          return true;
+        }
+      }
+    } catch (_) {}
+
     // 1. Direct URL or Hash Route (#/... or https://domain/#/...)
     if (trimmed.startsWith('#/') || trimmed.includes('#/')) {
       const hashIndex = trimmed.indexOf('#/');

@@ -200,6 +200,11 @@ async function reviewConflicts() {
 
 /** Backup & storage → Devices & sharing */
 export async function openDevicesDialog() {
+  const { router } = await import('../router.js');
+  if (router?.navigate) {
+    router.navigate('#/settings?section=devices');
+    return;
+  }
   const ws = await replication.workspace();
   const status = replication.status;
   const shares = [];

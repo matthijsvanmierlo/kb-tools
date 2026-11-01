@@ -1175,13 +1175,26 @@ async function openStudentDrawer({ student, course, assignments, gradesMap, rubr
   drawer.querySelector('#btn-drawer-del-student')?.addEventListener('click', async () => {
     const confirmed = await ConfirmDialog.show({
       title: 'Remove Student',
-      message: `Are you sure you want to remove ${Sanitizer.escapeHTML(student.full_name)}? All associated grades for this student will be deleted.`,
+      message: `Are you sure you want to remove ${Sanitizer.escapeHTML(student.full_name)}? You can undo this within 10 seconds.`,
       confirmText: 'Remove',
       variant: 'danger'
     });
     if (confirmed) {
       drawer.remove();
-      onDeleteStudent(student.id);
+      if (course?.id) {
+        const { RosterData } = await import('../classes/roster-data.js');
+        const res = await RosterData.removeStudent(course.id, student.id);
+        onDeleteStudent(student.id);
+        if (res?.undo) {
+          const { toast } = await import('../../utils/toast.js');
+          toast.action(`Student ${student.full_name} removed.`, 'Undo', async () => {
+            await res.undo();
+            onUpdateStudent(student);
+          }, 10000);
+        }
+      } else {
+        onDeleteStudent(student.id);
+      }
     }
   });
 

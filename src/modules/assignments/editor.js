@@ -13,6 +13,7 @@ import { AssignmentQuestionRowSchema, Exporter } from '../../core/validator.js';
 import { ContentImporter } from '../../core/content-importer.js';
 import { downloadCSV } from '../../core/csv.js';
 import { setDue } from '../../core/due-dates.js';
+import '../../components/rubric-picker.js';
 
 export function resolveAssignmentCourseId(assignment) {
   if (!assignment) return null;
@@ -355,8 +356,15 @@ export async function renderEditor(assignment, router, container) {
             <div class="flex justify-end">${scoringSelect(q)}</div>
           </div>`;
       case 'long_text':
+      case 'file_upload':
         return `
-          <sl-textarea size="small" data-text="rubric_hint" rows="2" resize="auto" label="Grading notes (only you see these)" value="${esc(q.rubric_hint || '')}" placeholder="What does a full-credit answer include?"></sl-textarea>`;
+          <div class="space-y-3">
+            <sl-textarea size="small" data-text="rubric_hint" rows="2" resize="auto" label="Grading notes (only you see these)" value="${esc(q.rubric_hint || '')}" placeholder="What does a full-credit answer include?"></sl-textarea>
+            <div class="space-y-1">
+              <label class="text-xs font-semibold text-slate-700 block">Grading Rubric (optional)</label>
+              <kb-rubric-picker class="asg-rubric-picker" course-id="${esc(a.class_id || '')}" value="${esc(q.rubric_id || '')}"></kb-rubric-picker>
+            </div>
+          </div>`;
       default:
         return '';
     }
@@ -581,6 +589,10 @@ export async function renderEditor(assignment, router, container) {
       touch();
     }));
     body.querySelectorAll('[data-text]').forEach(el => el.addEventListener('sl-input', () => { q[el.dataset.text] = el.value; touch(); }));
+    body.querySelectorAll('.asg-rubric-picker').forEach(picker => picker.addEventListener('rubric-change', (e) => {
+      q.rubric_id = e.detail?.rubricId || null;
+      touch();
+    }));
 
     // Ordering
     body.querySelectorAll('[data-item-text]').forEach(el => el.addEventListener('sl-input', () => { q.items[Number(el.dataset.itemText)].text = el.value; touch(); }));

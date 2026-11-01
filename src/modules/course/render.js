@@ -10,6 +10,7 @@ import { isFeedDirty, markFeedPublished, markCourseFeedDirty } from '../../core/
 import { QRCode } from '../../core/qrcode.js';
 import { GradebookBridge } from '../gradebook/bridge.js';
 import { router } from '../../router.js';
+import '../../components/rubric-picker.js';
 
 const esc = (v) => Sanitizer.escapeHTML(v ?? '');
 
@@ -101,7 +102,7 @@ export async function renderCoursePage(courseId, container) {
     const hasRelay = isTeacherRelayConfigured(transport);
 
     container.innerHTML = `
-      <div class="min-h-[calc(100vh-4rem)] bg-slate-50 pb-16">
+      <div class="min-h-[calc(100dvh-4rem)] bg-slate-50 pb-16">
         <!-- Course Header Banner -->
         <header class="bg-white border-b border-slate-200">
           <div class="max-w-6xl mx-auto px-4 sm:px-6 py-6">
@@ -1138,6 +1139,11 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
           <sl-input type="number" id="new-item-points" label="Points" value="100"></sl-input>
         </div>
 
+        <div id="create-rubric-row" class="space-y-1">
+          <label class="text-xs font-semibold text-slate-700 block">Grading Rubric (optional)</label>
+          <kb-rubric-picker id="new-item-rubric" course-id="${esc(courseId)}" value=""></kb-rubric-picker>
+        </div>
+
         <div id="create-url-row" class="hidden">
           <sl-input id="new-item-url" label="Resource URL / Link" placeholder="https://..."></sl-input>
         </div>
@@ -1173,15 +1179,18 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
   // Handle Type Change in Panel 1
   const typeSelect = dialog.querySelector('#new-item-type');
   const scoringRow = dialog.querySelector('#create-scoring-row');
+  const rubricRow = dialog.querySelector('#create-rubric-row');
   const urlRow = dialog.querySelector('#create-url-row');
   typeSelect?.addEventListener('sl-change', () => {
     const val = typeSelect.value;
     if (val === 'link') {
       scoringRow?.classList.add('hidden');
+      rubricRow?.classList.add('hidden');
       urlRow?.classList.remove('hidden');
     } else {
       scoringRow?.classList.remove('hidden');
       urlRow?.classList.add('hidden');
+      rubricRow?.classList.toggle('hidden', val !== 'task' && val !== 'assignment');
     }
   });
 
@@ -1192,6 +1201,7 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
     const dueDate = dialog.querySelector('#new-item-due')?.value || null;
     const points = parseInt(dialog.querySelector('#new-item-points')?.value || '100', 10);
     const linkUrl = dialog.querySelector('#new-item-url')?.value?.trim() || '';
+    const rubricId = dialog.querySelector('#new-item-rubric')?.value || null;
 
     if (!title) {
       toast.warning('Please enter a title for the new item.');
@@ -1209,7 +1219,7 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
         class_id: courseId,
         gradebook: { course_id: courseId },
         submission_types: { text: { enabled: true }, code: { enabled: false }, drawing: { enabled: false }, files: { enabled: true } },
-        grading: { scoring: 'points', max_points: points || 100 },
+        grading: { scoring: 'points', max_points: points || 100, rubric_id: rubricId },
         settings: { due_date: dueDate, allow_resubmit: true },
         created_at: now,
         updated_at: now
@@ -1230,6 +1240,7 @@ async function openAddItemDialog(courseId, unitId, onAdded) {
         title,
         class_id: courseId,
         gradebook: { course_id: courseId },
+        rubric_id: rubricId,
         questions: [],
         settings: { due_date: dueDate },
         total_points: points || 100,

@@ -79,7 +79,7 @@ export class VirtualGradebookGrid {
     // The body is one coordinate space shared by the sticky student column and the virtual
     // cells, so row r is always at top = r * ROW_HEIGHT for both and they stay aligned.
     this.mountEl.innerHTML = `
-      <div id="grid-scroll-viewport" class="relative overflow-auto border border-slate-200 rounded-xl bg-white shadow-xs focus:outline-none" tabindex="0" style="max-height: min(640px, calc(100vh - 240px)); width: fit-content; max-width: 100%;">
+      <div id="grid-scroll-viewport" class="relative overflow-auto border border-slate-200 rounded-xl bg-white shadow-xs focus:outline-none" tabindex="0" style="max-height: min(640px, calc(100dvh - 240px)); width: fit-content; max-width: 100%;">
         <div id="grid-phantom-spacer" class="relative">
           <!-- Sticky Column Header Row (Top) -->
           <div id="grid-header-row" class="sticky top-0 z-20 flex bg-slate-100 border-b border-slate-200 text-xs font-semibold text-slate-700 select-none" style="height: ${this.HEADER_HEIGHT}px;">

@@ -13,6 +13,7 @@ import { importSubmissionTexts } from '../assignments/import.js';
 import { importVideoReceipts, receiptErrorText } from '../video/receipt-import.js';
 import { getTransport } from '../../core/transport.js';
 import { getPolicy } from '../../core/managed-config.js';
+import { generateUUID } from '../../utils/uuid.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -100,7 +101,7 @@ export async function renderInboxView(params, router, container) {
       }
 
       nextItems.push({
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         source,
         text,
         classification: c,

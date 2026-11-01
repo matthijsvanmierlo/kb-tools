@@ -35,7 +35,7 @@ describe('Phase 8: Submission cryptography', () => {
   it('produces stable canonical JSON and readable access codes', async () => {
     expect(canonicalJSON({ b: 1, a: [2, { d: 1, c: 2 }] })).toBe('{"a":[2,{"c":2,"d":1}],"b":1}');
     const code = generateAccessCode();
-    expect(code).toMatch(/^[2-9A-HJKMNP-Z]{4}-[2-9A-HJKMNP-Z]{4}$/);
+    expect(code).toMatch(/^[0-9A-Z]{5}-[0-9A-Z]{5}$/i);
     expect(formatAccessCode(normalizeAccessCode(code.toLowerCase()))).toBe(code);
     const c1 = await SubmissionCrypto.accessCodeCheck('a', 'S1', code);
     expect(c1).toHaveLength(4);

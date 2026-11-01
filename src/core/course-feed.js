@@ -5,6 +5,7 @@ import { getDue } from './due-dates.js';
 import { SubmissionCrypto } from './submission-crypto.js';
 import { buildStudentPayload } from '../modules/assignments/grading.js';
 import { buildStudentTaskPayload } from '../modules/tasks/publish-core.js';
+import { normalizeAccessCode, formatAccessCode } from './access-codes.js';
 
 /**
  * Course Feed Builder & Decryptor (KB-COURSE-001)
@@ -33,6 +34,11 @@ export async function buildCourseFeed(courseId, opts = {}) {
     SubmissionCrypto.getOrCreateTeacherKeys(storage)
   ]);
   const rosterWithCode = rosterStudents.filter(s => s.access_code);
+  const buildErrors = [];
+
+  // Roster cards let a student who only knows their personal code find their own seat from the feed
+  // (offline, on any device). Each card is encrypted with that student's code, so classmates learn nothing.
+  const rosterCards = rosterWithCode.length ? await SubmissionCrypto.buildRosterCards(courseId, rosterWithCode) : {};
 
   // Filter out items that are hidden or explicitly unpublished
   const visibleItems = items.filter(item => !item.hidden && item.published !== false);
@@ -59,10 +65,13 @@ export async function buildCourseFeed(courseId, opts = {}) {
               await storage.table('assignments').put(rawAsg).catch(() => {});
             }
             const asgSalt = rawAsg.publish?.salt || 'course-salt';
+            const asgRosterChecks = rosterWithCode.length ? await SubmissionCrypto.buildRosterChecks(sourceId, rosterWithCode) : null;
+            const asgRosterCards = rosterWithCode.length ? await SubmissionCrypto.buildRosterCards(sourceId, rosterWithCode) : null;
             itemPayload = await buildStudentPayload(rawAsg, {
               teacherKeys: keys,
               salt: asgSalt,
-              roster: { withCode: rosterWithCode },
+              rosterChecks: asgRosterChecks,
+              rosterCards: asgRosterCards,
               courseMeta: { id: course.id, course_id: course.id, name: course.name, course_name: course.name, section: course.section, access_code: course.access_code },
               relay: rawAsg.publish?.relay || null
             });
@@ -78,7 +87,7 @@ export async function buildCourseFeed(courseId, opts = {}) {
             let taskRosterChecks = null;
             let taskRosterCards = null;
             if (rosterWithCode.length > 0) {
-              taskRosterChecks = await SubmissionCrypto.buildRosterChecks(sourceId, taskSalt, rosterWithCode);
+              taskRosterChecks = await SubmissionCrypto.buildRosterChecks(sourceId, rosterWithCode);
               taskRosterCards = await SubmissionCrypto.buildRosterCards(sourceId, rosterWithCode);
             }
             itemPayload = await buildStudentTaskPayload(rawTask, {
@@ -97,7 +106,10 @@ export async function buildCourseFeed(courseId, opts = {}) {
           itemPayload = await storage.table('video_assessments').get(sourceId).catch(() => null);
         }
       } catch (err) {
+        // Never swallow this silently: a student would see an item with no content. Surface it in the
+        // build/publish status (stats.itemErrors) as well as the console.
         console.warn(`[course-feed] Failed to build payload for item ${sourceId}:`, err);
+        buildErrors.push({ item_id: item.id, source_id: sourceId, title: item.title || '', message: err?.message || String(err) });
       }
     }
 
@@ -120,7 +132,13 @@ export async function buildCourseFeed(courseId, opts = {}) {
     };
   }));
 
-  const revisionHash = await computeCourseRevisionHash(courseId).catch(() => 'rev-0');
+  const baseRevision = await computeCourseRevisionHash(courseId).catch(() => 'rev-0');
+  // The roster is part of the feed, so a roster change must change the ETag or students polling with
+  // If-None-Match would never see it (this is how "removed by teacher" is detected).
+  const rosterDigest = Object.keys(rosterCards).sort().join(',');
+  const revisionHash = rosterDigest
+    ? `${baseRevision}-${(await sha256Short(`roster|${rosterDigest}|${course.relay_moved_to || ''}`))}`
+    : baseRevision;
 
   const feedPayload = {
     v: 1,
@@ -131,8 +149,11 @@ export async function buildCourseFeed(courseId, opts = {}) {
       academic_year: course.academic_year,
       color: course.color || '#2563eb',
       access_code: course.access_code,
-      ...(relayUrl ? { relay_url: relayUrl } : {})
+      ...(keys?.fingerprint ? { teacher_fingerprint: keys.fingerprint } : {}),
+      ...(relayUrl ? { relay_url: relayUrl } : {}),
+      ...(course.relay_moved_to ? { relay_moved_to: course.relay_moved_to } : {})
     },
+    roster_cards: rosterCards,
     units: units.map(u => ({
       id: u.id,
       course_id: u.course_id,
@@ -149,7 +170,7 @@ export async function buildCourseFeed(courseId, opts = {}) {
   };
 
   const rawAccessCode = (opts.accessCode || opts.passphrase || course.access_code || course.passphrase || '').trim();
-  const normalizedAccessCode = rawAccessCode.toUpperCase().replace(/[^A-Z0-9]/g, '') || rawAccessCode;
+  const normalizedAccessCode = normalizeAccessCode(rawAccessCode) || rawAccessCode;
   const packed = await CryptoShareEngine.createSharePayload('course_feed', feedPayload, normalizedAccessCode);
   const parsedFile = CryptoShareEngine.parseShareFile(packed.rawFileContent);
 
@@ -166,9 +187,16 @@ export async function buildCourseFeed(courseId, opts = {}) {
     rawFileContent: packed.rawFileContent,
     stats: {
       unitsCount: feedPayload.units.length,
-      itemsCount: feedPayload.items.length
+      itemsCount: feedPayload.items.length,
+      rosterCardCount: Object.keys(rosterCards).length,
+      itemErrors: buildErrors
     }
   };
+}
+
+async function sha256Short(text) {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest)).slice(0, 6).map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 export async function decryptCourseFeed(feedEnvelope, accessCode) {
@@ -197,7 +225,7 @@ export async function decryptCourseFeed(feedEnvelope, accessCode) {
   }
 
   const rawCode = String(accessCode || '').trim();
-  const normalizedCode = rawCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const normalizedCode = normalizeAccessCode(rawCode);
 
   const candidateCodes = [];
   if (normalizedCode) candidateCodes.push(normalizedCode);
@@ -218,18 +246,88 @@ export async function decryptCourseFeed(feedEnvelope, accessCode) {
   throw lastError || new Error('Failed to decrypt course feed');
 }
 
+const FEED_ID_SALT = 'kb-feed-id-v2';
+const FEED_ID_ITERATIONS = 150000;
+const _feedIdCache = new Map();
+
 /**
- * Derive deterministic 24-hex feed ID from a course access code (or courseId if no code exists).
- * Both teacher publish and student lookup use this so students can locate feeds without knowing internal UUIDs.
- * @param {string} accessCodeOrCourseId
- * @returns {Promise<string>}
+ * Derive the feed ID from a class code: base64url(PBKDF2-SHA256(classCode, "kb-feed-id-v2", 150k)).
+ *
+ * The ID is public (it is the relay path). A slow KDF with 8-char codes (~10^12 values) makes
+ * brute-forcing the relay database for class codes impractical. The feed is encrypted with the class
+ * code through a different KDF salt (random per payload, see CryptoShareEngine), so knowing the ID
+ * reveals nothing about the key. Teachers publish and students look up with this same function.
+ * @param {string} accessCodeOrCourseId class code (any case, spaces/dashes allowed) or a course id fallback
+ * @returns {Promise<string>} 43-char base64url string (or 'feed-unknown' for empty input)
  */
 export async function deriveCourseFeedId(accessCodeOrCourseId) {
-  const norm = String(accessCodeOrCourseId || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  const norm = normalizeAccessCode(accessCodeOrCourseId);
   if (!norm) return 'feed-unknown';
-  const buf = new TextEncoder().encode(`kb-course-feed-v1|${norm}`);
-  const digest = await crypto.subtle.digest('SHA-256', buf);
-  return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 24);
+  if (_feedIdCache.has(norm)) return _feedIdCache.get(norm);
+  const material = await crypto.subtle.importKey('raw', new TextEncoder().encode(norm), { name: 'PBKDF2' }, false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits(
+    { name: 'PBKDF2', hash: 'SHA-256', salt: new TextEncoder().encode(FEED_ID_SALT), iterations: FEED_ID_ITERATIONS },
+    material,
+    256
+  );
+  let bin = '';
+  for (const byte of new Uint8Array(bits)) bin += String.fromCharCode(byte);
+  const id = btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  _feedIdCache.set(norm, id);
+  return id;
+}
+
+function feedApiBase(relayUrl) {
+  const base = String(relayUrl || '').replace(/\/+$/, '');
+  return base.endsWith('/api/v1') ? base : `${base}/api/v1`;
+}
+
+/**
+ * Fetch a course feed from a relay and report the outcome as a status instead of throwing, so the join
+ * flow can tell "no such class" from "relay unreachable".
+ * @returns {Promise<{ status: 'ok', ciphertext: string, etag: string }|{ status: 'not_found' }|{ status: 'offline', error: string }|{ status: 'error', httpStatus: number, error: string }>}
+ */
+export async function fetchCourseFeedByCode(relayUrl, classCode, { timeoutMs = 10000 } = {}) {
+  const feedId = await deriveCourseFeedId(classCode);
+  return fetchCourseFeedById(relayUrl, feedId, { timeoutMs });
+}
+
+export async function fetchCourseFeedById(relayUrl, feedId, { timeoutMs = 10000 } = {}) {
+  if (!relayUrl) return { status: 'offline', error: 'No relay configured' };
+  const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = ctrl ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+  try {
+    const res = await fetch(`${feedApiBase(relayUrl)}/feed/${encodeURIComponent(feedId)}`, ctrl ? { signal: ctrl.signal } : {});
+    if (res.status === 404 || res.status === 410) return { status: 'not_found' };
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      return { status: 'error', httpStatus: res.status, error: body.error || res.statusText || `HTTP ${res.status}` };
+    }
+    const data = await res.json();
+    if (!data?.ciphertext) return { status: 'not_found' };
+    const etag = (res.headers?.get?.('ETag') || '').replace(/^"|"$/g, '') || data.etag || '';
+    return { status: 'ok', ciphertext: data.ciphertext, etag, updatedAt: data.updated_at };
+  } catch (err) {
+    return { status: 'offline', error: err?.message || String(err) };
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Remove a feed from the relay (owner only). Used when a class code is rotated so the old code stops
+ * resolving. Resolves true when the feed is gone (including "already gone").
+ */
+export async function deleteCourseFeedById(relayUrl, token, feedId) {
+  try {
+    const res = await fetch(`${feedApiBase(relayUrl)}/feed/${encodeURIComponent(feedId)}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    return res.ok || res.status === 404 || res.status === 410;
+  } catch (_) {
+    return false;
+  }
 }
 
 /**

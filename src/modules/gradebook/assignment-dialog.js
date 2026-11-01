@@ -7,6 +7,7 @@ import { storage } from '../../core/storage.js';
 import { openPublishDialog } from '../assignments/publish.js';
 import { openVideoShareDialog } from '../video/share-video.js';
 import { syncContentClassLink } from './bridge.js';
+import '../../components/rubric-picker.js';
 
 /**
  * Gradebook Assignment Dialog (create + edit) (KB-GRAD-009)
@@ -109,18 +110,8 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
               ${course.terms.map(t => `<sl-option value="${esc(t.id)}">${esc(t.name)}</sl-option>`).join('')}
             </sl-select>` : '<div class="hidden sm:block"></div>'}
           <div class="sm:col-span-2 space-y-1">
-            <sl-select id="as-rubric" label="Rubric" value="${esc(current.rubric_id)}">
-              <sl-option value="">No rubric</sl-option>
-              ${rubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title)}</sl-option>`).join('')}
-            </sl-select>
-            <div class="flex items-center gap-2 pt-0.5">
-              <sl-button size="small" variant="default" id="as-btn-new-rubric">
-                <sl-icon slot="prefix" name="plus"></sl-icon> New Rubric
-              </sl-button>
-              <sl-button size="small" variant="default" id="as-btn-edit-rubric" class="${current.rubric_id ? '' : 'hidden'}">
-                <sl-icon slot="prefix" name="pencil"></sl-icon> Edit Rubric
-              </sl-button>
-            </div>
+            <label class="text-[0.8125rem] font-medium text-slate-700 block">Grading Rubric</label>
+            <kb-rubric-picker id="as-rubric-picker" course-id="${esc(course.id)}" value="${esc(current.rubric_id || '')}"></kb-rubric-picker>
           </div>
         </div>
 
@@ -339,7 +330,7 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
     current.category_id = dialog.querySelector('#as-cat')?.value || current.category_id;
     current.due_date = dialog.querySelector('#as-due')?.value || '';
     current.term_id = dialog.querySelector('#as-term')?.value || current.term_id;
-    current.rubric_id = dialog.querySelector('#as-rubric')?.value || undefined;
+    current.rubric_id = dialog.querySelector('#as-rubric-picker')?.value || undefined;
     const stdSel = dialog.querySelector('#as-standards');
     if (stdSel) current.standard_ids = Array.isArray(stdSel.value) ? stdSel.value : [];
     if (current.scoring === 'proficiency') current.max_score = maxLevel;
@@ -410,57 +401,9 @@ export function openAssignmentDialog({ assignment = null, course, rubrics = [], 
       }
     });
 
-    const rubricEl = dialog.querySelector('#as-rubric');
-    const btnNewRubric = dialog.querySelector('#as-btn-new-rubric');
-    const btnEditRubric = dialog.querySelector('#as-btn-edit-rubric');
-
-    rubricEl?.addEventListener('sl-change', () => {
+    const rubricPicker = dialog.querySelector('#as-rubric-picker');
+    rubricPicker?.addEventListener('rubric-change', (e) => {
       readForm();
-      if (btnEditRubric) btnEditRubric.classList.toggle('hidden', !rubricEl.value);
-    });
-
-    btnNewRubric?.addEventListener('click', async () => {
-      readForm();
-      const { RubricDesigner } = await import('./rubric-builder.js');
-      RubricDesigner.openDesignerModal({
-        courseId: course.id,
-        onSave: async (savedRubric) => {
-          current.rubric_id = savedRubric.id;
-          const freshRubrics = (await storage.table('gradebook_rubrics').toArray())
-            .filter(r => !course.id || r.course_id === course.id || !r.course_id);
-          if (rubricEl) {
-            rubricEl.innerHTML = `
-              <sl-option value="">No rubric</sl-option>
-              ${freshRubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title)}</sl-option>`).join('')}
-            `;
-            rubricEl.value = savedRubric.id;
-          }
-          if (btnEditRubric) btnEditRubric.classList.remove('hidden');
-        }
-      });
-    });
-
-    btnEditRubric?.addEventListener('click', async () => {
-      readForm();
-      if (!current.rubric_id) return;
-      const r = await storage.table('gradebook_rubrics').get(current.rubric_id);
-      if (!r) return;
-      const { RubricDesigner } = await import('./rubric-builder.js');
-      RubricDesigner.openDesignerModal({
-        courseId: r.course_id || course.id,
-        rubric: r,
-        onSave: async (savedRubric) => {
-          const freshRubrics = (await storage.table('gradebook_rubrics').toArray())
-            .filter(rb => !course.id || rb.course_id === course.id || !rb.course_id);
-          if (rubricEl) {
-            rubricEl.innerHTML = `
-              <sl-option value="">No rubric</sl-option>
-              ${freshRubrics.map(rb => `<sl-option value="${esc(rb.id)}">${esc(rb.title)}</sl-option>`).join('')}
-            `;
-            rubricEl.value = savedRubric.id;
-          }
-        }
-      });
     });
 
     dialog.querySelector('#as-scoring')?.addEventListener('sl-change', (e) => {

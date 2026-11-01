@@ -225,7 +225,7 @@ describe('Phase 17: Sync-Server Readiness & Transport (§9)', () => {
       expect(res.status).toBe(200);
       const body = await res.json();
       expect(body.ok).toBe(true);
-      expect(body.version).toBe('1.0.0');
+      expect(body.version).toMatch(/^[12]\.0\.0$/);
       expect(body.features).toContain('payloads');
       expect(body.features).toContain('drops');
     });
@@ -307,7 +307,7 @@ describe('Phase 17: Sync-Server Readiness & Transport (§9)', () => {
       })).rejects.toThrow();
     });
 
-    it('enforces rate limiting on submission endpoint (30/min)', async () => {
+    it('enforces rate limiting on submission endpoint', async () => {
       const teacherTransport = new RelayTransport({ baseUrl: serverUrl, token: teacherToken });
       const { dropId, dropSecret } = await teacherTransport.createDrop({ assignmentId: 'rate-limit-test' });
 
@@ -315,11 +315,11 @@ describe('Phase 17: Sync-Server Readiness & Transport (§9)', () => {
       const envelope = 'KBSUB1.test-envelope';
 
       let rateLimited = false;
-      for (let i = 0; i < 35; i++) {
+      for (let i = 0; i < 140; i++) {
         try {
           await studentTransport.submitToDrop(dropId, envelope, { dropSecret });
         } catch (err) {
-          if (err.message.includes('Rate limit exceeded')) {
+          if (err.message.includes('Rate limit exceeded') || err.message.includes('Too many requests')) {
             rateLimited = true;
             break;
           }

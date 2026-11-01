@@ -7,6 +7,7 @@ import {
   RateLimiter,
   generateS3PresignedPutUrl,
   VERSION,
+  SCHEMA_VERSION,
   DEFAULT_PORT,
   MAX_PAYLOAD_SIZE,
   MAX_SUBMISSION_SIZE,
@@ -14,9 +15,15 @@ import {
   MAX_SYNC_CHUNK_SIZE,
   MAX_SYNC_SNAPSHOT_SIZE,
   DEFAULT_RETENTION_DAYS,
+  DEFAULT_TEACHER_QUOTA_MB,
   DRAFT_RATE_LIMIT_MAX
 } from './handler.js';
-import { createFsMediaStore, createMemoryMediaStore } from './media-store.js';
+import {
+  createFsMediaStore,
+  createMemoryMediaStore,
+  createDbPartsStore,
+  createBlobStore
+} from './media-store.js';
 
 export {
   createDatabase,
@@ -24,6 +31,7 @@ export {
   RateLimiter,
   generateS3PresignedPutUrl,
   VERSION,
+  SCHEMA_VERSION,
   DEFAULT_PORT,
   MAX_PAYLOAD_SIZE,
   MAX_SUBMISSION_SIZE,
@@ -31,6 +39,7 @@ export {
   MAX_SYNC_CHUNK_SIZE,
   MAX_SYNC_SNAPSHOT_SIZE,
   DEFAULT_RETENTION_DAYS,
+  DEFAULT_TEACHER_QUOTA_MB,
   DRAFT_RATE_LIMIT_MAX
 };
 
@@ -59,7 +68,8 @@ async function nodeReqToWebRequest(req, host, isEncrypted) {
   if (method !== 'GET' && method !== 'HEAD') {
     const chunks = [];
     let bytesRead = 0;
-    const MAX_REQ_BYTES = 34 * 1024 * 1024; // 34MB (safely accommodates max 32MB sync snapshots)
+    // 70MB (safely accommodates max 64MB sync snapshots plus JSON overhead)
+    const MAX_REQ_BYTES = 70 * 1024 * 1024;
     for await (const chunk of req) {
       bytesRead += chunk.length;
       if (bytesRead > MAX_REQ_BYTES) {
@@ -105,14 +115,6 @@ async function sendWebResponse(webRes, nodeRes) {
 
 /**
  * Create and configure the relay server.
- * @param {object} [opts]
- * @param {string} [opts.dbPath]
- * @param {string} [opts.origins] - comma-separated CORS origins (default *)
- * @param {number} [opts.retentionDays] - delete submissions, drafts and sync chunks older than this (0 = keep)
- * @param {{ cert: string|Buffer, key: string|Buffer }} [opts.tls] - serve HTTPS (needed on a LAN for PWAs)
- * @param {(req, res) => void} [opts.appHandler] - also serve the KennisBoost app for non-/api/ paths
- * @param {object} [opts.cdn]
- * @returns {{ server: http.Server|https.Server, db: any, limiters: RateLimiter[], close: () => Promise<void> }}
  */
 export function createRelayServer(opts = {}) {
   const dbPath = opts.dbPath || process.env.KB_RELAY_DB || ':memory:';
@@ -125,10 +127,26 @@ export function createRelayServer(opts = {}) {
   const limiter = new RateLimiter();
   const draftLimiter = new RateLimiter(DRAFT_RATE_LIMIT_MAX);
 
-  // Hourly pruning of expired data and rate-limit entries
-  const prune = () => {
+  // Configure unified BlobStore
+  let blobStore = null;
+  if (opts.cdn?.mediaStore) {
+    blobStore = createMemoryMediaStore(opts.cdn.mediaStore);
+  } else if (opts.cdn?.localDir || process.env.KB_CDN_LOCAL_DIR) {
+    const dir = opts.cdn?.localDir || process.env.KB_CDN_LOCAL_DIR;
+    blobStore = createFsMediaStore(dir);
+  } else if (db) {
+    blobStore = createDbPartsStore(db);
+  } else {
+    blobStore = createMemoryMediaStore();
+  }
+
+  // Hourly pruning of expired data and blobs
+  const prune = async () => {
     try {
-      db.pruneExpired({ retentionDays });
+      const pruneRes = await db.pruneExpired({ retentionDays });
+      if (pruneRes?.expiredBlobKeys?.length > 0 && blobStore) {
+        await blobStore.deleteMany(pruneRes.expiredBlobKeys);
+      }
       limiter.sweep();
       draftLimiter.sweep();
     } catch (e) {
@@ -138,17 +156,6 @@ export function createRelayServer(opts = {}) {
   prune();
   const pruneInterval = setInterval(prune, 3600 * 1000);
   if (pruneInterval.unref) pruneInterval.unref();
-
-  // Configure Media Store
-  let mediaStore = null;
-  if (opts.cdn?.mediaStore) {
-    mediaStore = createMemoryMediaStore(opts.cdn.mediaStore);
-  } else if (opts.cdn?.localDir || process.env.KB_CDN_LOCAL_DIR) {
-    const dir = opts.cdn?.localDir || process.env.KB_CDN_LOCAL_DIR;
-    mediaStore = createFsMediaStore(dir);
-  } else if (opts.cdn) {
-    mediaStore = createMemoryMediaStore();
-  }
 
   const cdnConfig = {
     enabled: Boolean(
@@ -172,7 +179,8 @@ export function createRelayServer(opts = {}) {
     draftLimiter,
     allowedOrigins,
     cdnConfig,
-    mediaStore,
+    blobStore,
+    backend: 'node',
     presignHook: opts.cdn?.presign
   });
 
@@ -191,6 +199,13 @@ export function createRelayServer(opts = {}) {
       const webRes = await fetchHandler(webReq, { clientIp });
       await sendWebResponse(webRes, res);
     } catch (err) {
+      if (err.code === 413 || err.message === 'PAYLOAD_TOO_LARGE') {
+        if (!res.headersSent) {
+          res.writeHead(413, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Payload too large' }));
+        }
+        return;
+      }
       console.error('[Relay Adapter Error]', err);
       if (!res.headersSent) {
         res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -204,11 +219,16 @@ export function createRelayServer(opts = {}) {
   return {
     server,
     db,
+    blobStore,
     limiters: [limiter, draftLimiter],
     close: () => {
       clearInterval(pruneInterval);
-      return new Promise((resolve, reject) => {
-        server.close(err => (err ? reject(err) : resolve()));
+      return new Promise((resolve) => {
+        if (server.listening) {
+          server.close(() => resolve());
+        } else {
+          resolve();
+        }
       });
     }
   };

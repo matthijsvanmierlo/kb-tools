@@ -47,7 +47,7 @@ export async function renderStudentCourseDetailView(params, router, container) {
   const now = new Date().toISOString().slice(0, 10);
 
   container.innerHTML = `
-    <div class="min-h-[calc(100vh-4rem)] bg-slate-50 pb-16">
+    <div class="min-h-[calc(100dvh-4rem)] bg-slate-50 pb-16">
       <!-- Course Banner -->
       <header class="bg-white border-b border-slate-200">
         <div class="max-w-5xl mx-auto px-4 sm:px-6 py-6 flex flex-col md:flex-row md:items-center justify-between gap-4">

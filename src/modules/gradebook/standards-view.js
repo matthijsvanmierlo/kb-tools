@@ -40,7 +40,7 @@ export function renderStandardsView(mount, { course, students, aggregates, onOpe
         <span class="font-medium text-slate-700">${esc(SBG_CALCULATION_METHODS[cfg.calculation]?.name || '')}</span>
         ${levels.map(l => `<span class="inline-flex items-center gap-1.5"><span class="w-2.5 h-2.5 rounded-sm" style="background:${Sanitizer.safeColor(l.color)}"></span>${esc(l.value)} ${esc(l.label)}</span>`).join('')}
       </div>
-      <div class="overflow-auto rounded-xl border border-slate-200 bg-white shadow-xs" style="max-height: min(640px, calc(100vh - 260px));">
+      <div class="overflow-auto rounded-xl border border-slate-200 bg-white shadow-xs" style="max-height: min(640px, calc(100dvh - 260px));">
         <table class="text-sm border-separate border-spacing-0">
           <thead>
             <tr>

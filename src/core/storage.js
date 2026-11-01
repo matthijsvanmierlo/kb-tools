@@ -1,5 +1,7 @@
 import Dexie from 'dexie';
 import { splitName } from './names.js';
+import { hlc, HLC } from './replication/hlc.js';
+import { generateUUID } from '../utils/uuid.js';
 import {
   BACKUP_TABLES, BACKUP_VERSION, isDeviceBoundKey, parseBackup, stripDeviceMetadata, blobToBase64, base64ToBlob
 } from './backup.js';
@@ -85,28 +87,57 @@ function wrapDexieTable(rawTable, tableName, storageManager) {
     if (prop === 'put') {
       return async (record, ...rest) => {
         const now = new Date().toISOString();
+        const stamp = (record._mergeWrite && record._hlc) ? record._hlc : hlc.generate(storageManager.deviceId);
+        delete record._mergeWrite;
         record.updated_at = now;
         record.created_at = record.created_at || now;
+        record._hlc = stamp;
         if (!record.id) {
-          record.id = crypto.randomUUID();
+          record.id = generateUUID();
         }
 
         if (storageManager._outboxEnabled && target.db.outbox) {
           const key = tableName === 'gradebook_grades'
             ? [record.student_id, record.assignment_id]
             : (record.id || record.key);
-          return target.db.transaction('rw', [target, target.db.outbox], async () => {
+          const txTables = [target, target.db.outbox];
+          if (target.db.repl_tombstones) txTables.push(target.db.repl_tombstones);
+
+          return target.db.transaction('rw', txTables, async () => {
             const res = await target.put(record, ...rest);
-            await target.db.outbox.add({
-              table: tableName,
-              key,
-              op: 'put',
-              record,
-              scope: scopeOf(tableName, record),
-              created_at: now,
-              pushed_at: null,
-              device_id: storageManager.deviceId || null
-            });
+            // Clear any tombstone if reviving
+            const keyStr = Array.isArray(key) ? key.join('+') : String(key);
+            if (target.db.repl_tombstones) {
+              await target.db.repl_tombstones.delete([tableName, keyStr]).catch(() => {});
+            }
+
+            // Outbox coalescing: consecutive unpushed puts to the same key replace earlier row
+            const unpushed = await target.db.outbox
+              .where({ table: tableName })
+              .filter(r => r.pushed_at === null && r.op === 'put' && (Array.isArray(key) ? (Array.isArray(r.key) && r.key[0] === key[0] && r.key[1] === key[1]) : r.key === key))
+              .first();
+
+            if (unpushed) {
+              await target.db.outbox.update(unpushed.seq, {
+                op: 'put',
+                record,
+                hlc: stamp,
+                created_at: now,
+                scope: scopeOf(tableName, record)
+              });
+            } else {
+              await target.db.outbox.add({
+                table: tableName,
+                key,
+                op: 'put',
+                record,
+                hlc: stamp,
+                scope: scopeOf(tableName, record),
+                created_at: now,
+                pushed_at: null,
+                device_id: storageManager.deviceId || null
+              });
+            }
             return res;
           });
         }
@@ -120,23 +151,33 @@ function wrapDexieTable(rawTable, tableName, storageManager) {
         for (const r of records) {
           r.updated_at = now;
           r.created_at = r.created_at || now;
+          r._hlc = (r._mergeWrite && r._hlc) ? r._hlc : hlc.generate(storageManager.deviceId);
+          delete r._mergeWrite;
           if (!r.id) {
-            r.id = crypto.randomUUID();
+            r.id = generateUUID();
           }
         }
 
         if (storageManager._outboxEnabled && target.db.outbox) {
-          return target.db.transaction('rw', [target, target.db.outbox], async () => {
+          const txTables = [target, target.db.outbox];
+          if (target.db.repl_tombstones) txTables.push(target.db.repl_tombstones);
+
+          return target.db.transaction('rw', txTables, async () => {
             const res = await target.bulkPut(records, ...rest);
             for (const r of records) {
               const key = tableName === 'gradebook_grades'
                 ? [r.student_id, r.assignment_id]
                 : (r.id || r.key);
+              const keyStr = Array.isArray(key) ? key.join('+') : String(key);
+              if (target.db.repl_tombstones) {
+                await target.db.repl_tombstones.delete([tableName, keyStr]).catch(() => {});
+              }
               await target.db.outbox.add({
                 table: tableName,
                 key,
                 op: 'put',
                 record: r,
+                hlc: r._hlc,
                 scope: scopeOf(tableName, r),
                 created_at: now,
                 pushed_at: null,
@@ -152,15 +193,44 @@ function wrapDexieTable(rawTable, tableName, storageManager) {
 
     if (prop === 'delete') {
       return async (key, ...rest) => {
+        const now = new Date().toISOString();
+        const stamp = hlc.generate(storageManager.deviceId);
+        const keyStr = Array.isArray(key) ? key.join('+') : String(key);
+
+        if (storageManager.ephemeralMode) {
+          if (storageManager.memoryStore.has('repl_tombstones')) {
+            storageManager.memoryStore.get('repl_tombstones').set(`${tableName}|${keyStr}`, {
+              table: tableName,
+              key: keyStr,
+              hlc: stamp,
+              deviceId: storageManager.deviceId || null,
+              deleted_at: now
+            });
+          }
+        }
+
         if (storageManager._outboxEnabled && target.db.outbox) {
-          const now = new Date().toISOString();
-          return target.db.transaction('rw', [target, target.db.outbox], async () => {
+          const txTables = [target, target.db.outbox];
+          if (target.db.repl_tombstones) txTables.push(target.db.repl_tombstones);
+
+          return target.db.transaction('rw', txTables, async () => {
             const prior = await target.get(key);
             const res = await target.delete(key, ...rest);
+            if (target.db.repl_tombstones) {
+              await target.db.repl_tombstones.put({
+                table: tableName,
+                key: keyStr,
+                hlc: stamp,
+                deviceId: storageManager.deviceId || null,
+                deleted_at: now
+              });
+            }
+
             await target.db.outbox.add({
               table: tableName,
               key,
               op: 'delete',
+              hlc: stamp,
               scope: scopeOf(tableName, prior),
               created_at: now,
               pushed_at: null,
@@ -175,16 +245,32 @@ function wrapDexieTable(rawTable, tableName, storageManager) {
 
     if (prop === 'bulkDelete') {
       return async (keys, ...rest) => {
+        const now = new Date().toISOString();
+        const stamp = hlc.generate(storageManager.deviceId);
+
         if (storageManager._outboxEnabled && target.db.outbox) {
-          const now = new Date().toISOString();
-          return target.db.transaction('rw', [target, target.db.outbox], async () => {
+          const txTables = [target, target.db.outbox];
+          if (target.db.repl_tombstones) txTables.push(target.db.repl_tombstones);
+
+          return target.db.transaction('rw', txTables, async () => {
             const priors = await target.bulkGet(keys);
             const res = await target.bulkDelete(keys, ...rest);
             for (const [i, key] of keys.entries()) {
+              const keyStr = Array.isArray(key) ? key.join('+') : String(key);
+              if (target.db.repl_tombstones) {
+                await target.db.repl_tombstones.put({
+                  table: tableName,
+                  key: keyStr,
+                  hlc: stamp,
+                  deviceId: storageManager.deviceId || null,
+                  deleted_at: now
+                });
+              }
               await target.db.outbox.add({
                 table: tableName,
                 key,
                 op: 'delete',
+                hlc: stamp,
                 scope: scopeOf(tableName, priors[i]),
                 created_at: now,
                 pushed_at: null,
@@ -334,7 +420,7 @@ export class StorageManager {
         await tx.table(name).toCollection().modify(stamp);
       }
       await tx.table('gradebook_grades').toCollection().modify((g) => {
-        g.id = g.id || crypto.randomUUID();
+        g.id = g.id || generateUUID();
         stamp(g);
       });
       await tx.table('gradebook_students').toCollection().modify((s) => {
@@ -395,6 +481,12 @@ export class StorageManager {
       gradebook_students: 'id, course_id, student_id, access_code, full_name'
     });
 
+    // v10: Tombstones and Quarantine for HLC-based replication
+    this.db.version(10).stores({
+      repl_tombstones: '[table+key], hlc, deleted_at',
+      repl_quarantine: '++id, channel_id, device_id, start_seq, end_seq, quarantined_at, reason'
+    });
+
     // Initialize in-memory tables for ephemeral mode
     const tables = [
       'flashcards', 'timelines', 'video_assessments', 'gradebook_courses',
@@ -402,7 +494,8 @@ export class StorageManager {
       'gradebook_rubrics', 'assignments', 'assignment_submissions',
       'tasks', 'task_submissions',
       'student_courses', 'student_ledger', 'course_units', 'course_items', 'student_items',
-      'app_metadata', 'binary_blobs', 'outbox', 'draft_history'
+      'app_metadata', 'binary_blobs', 'outbox', 'draft_history',
+      'repl_tombstones', 'repl_quarantine'
     ];
     for (const t of tables) {
       this.memoryStore.set(t, new Map());
@@ -455,7 +548,7 @@ export class StorageManager {
     // Initialize device_id and schema_version
     let devId = await this.getMetadata('device_id');
     if (!devId) {
-      devId = crypto.randomUUID();
+      devId = generateUUID();
       await this.setMetadata('device_id', devId);
     }
     this.deviceId = devId;
@@ -615,6 +708,54 @@ export class StorageManager {
       this.reportWriteError(err);
       throw err;
     }
+  }
+
+  // --- Replication Tombstones ---
+  async getTombstone(table, key) {
+    const keyStr = Array.isArray(key) ? key.join('+') : String(key);
+    if (this.ephemeralMode) {
+      return this.memoryStore.get('repl_tombstones')?.get(`${table}|${keyStr}`) || null;
+    }
+    return (await this.db.repl_tombstones.get([table, keyStr])) || null;
+  }
+
+  async putTombstone({ table, key, hlc, deviceId, deleted_at = new Date().toISOString() }) {
+    const keyStr = Array.isArray(key) ? key.join('+') : String(key);
+    const entry = { table, key: keyStr, hlc, deviceId, deleted_at };
+    if (this.ephemeralMode) {
+      this.memoryStore.get('repl_tombstones')?.set(`${table}|${keyStr}`, entry);
+      return;
+    }
+    await this.db.repl_tombstones.put(entry);
+  }
+
+  async deleteTombstone(table, key) {
+    const keyStr = Array.isArray(key) ? key.join('+') : String(key);
+    if (this.ephemeralMode) {
+      this.memoryStore.get('repl_tombstones')?.delete(`${table}|${keyStr}`);
+      return;
+    }
+    await this.db.repl_tombstones.delete([table, keyStr]);
+  }
+
+  async listTombstones() {
+    if (this.ephemeralMode) {
+      return Array.from(this.memoryStore.get('repl_tombstones')?.values() || []);
+    }
+    return (await this.db.repl_tombstones.toArray()) || [];
+  }
+
+  async pruneTombstones(cutoffIso) {
+    if (this.ephemeralMode) {
+      const store = this.memoryStore.get('repl_tombstones');
+      if (store) {
+        for (const [k, v] of store.entries()) {
+          if (v.deleted_at < cutoffIso) store.delete(k);
+        }
+      }
+      return;
+    }
+    await this.db.repl_tombstones.where('deleted_at').below(cutoffIso).delete();
   }
 
   /**
@@ -903,7 +1044,7 @@ export class StorageManager {
           return Array.isArray(item.id) ? item.id.join('+') : String(item.id);
         }
         if (item.key) return String(item.key);
-        return crypto.randomUUID();
+        return generateUUID();
       };
 
       const stampRecord = (item) => {
@@ -911,7 +1052,7 @@ export class StorageManager {
         item.updated_at = now;
         item.created_at = item.created_at || now;
         if (!item.id && DATA_TABLES.has(tableName)) {
-          item.id = crypto.randomUUID();
+          item.id = generateUUID();
         }
       };
 
@@ -1104,7 +1245,7 @@ export class StorageManager {
     for (const tbl of tables) {
       let rows = valid.data[tbl].map(r => ({ ...r }));
       if (tbl === 'app_metadata') {
-        const keep = (await this.table('app_metadata').toArray()).filter(r => isDeviceBoundKey(r.key));
+        const keep = (await this.table('app_metadata').toArray()).filter(r => isDeviceBoundKey(r.key) && !String(r.key).startsWith('repl_'));
         rows = [...stripDeviceMetadata(rows), ...keep];
       } else if (DATA_TABLES.has(tbl)) {
         for (const r of rows) {

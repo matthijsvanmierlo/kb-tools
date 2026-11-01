@@ -45,8 +45,8 @@ describe('Phase 36: Relay Sync UX, Deterministic Feeds, and CDN Media Offloading
       const id2 = await deriveCourseFeedId('  K7M2QX  ');
       const id3 = await deriveCourseFeedId('K7-M2-QX');
 
-      expect(id1).toHaveLength(24);
-      expect(/^[0-9a-f]{24}$/.test(id1)).toBe(true);
+      expect(id1).toHaveLength(43);
+      expect(/^[A-Za-z0-9_-]{43}$/.test(id1)).toBe(true);
       expect(id1).toBe(id2);
       expect(id1).toBe(id3);
     });

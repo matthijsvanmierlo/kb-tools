@@ -50,6 +50,33 @@ async function loadTasksModule(...args) {
   return mod.default(...args);
 }
 
+async function loadRubricRoute(params, router, container) {
+  const { RubricDesigner } = await import('./modules/gradebook/rubric-builder.js');
+  const hash = window.location.hash || '';
+  const isEdit = hash.includes('/rubrics/edit');
+  const returnTo = params?.return_to ? decodeURIComponent(params.return_to) : null;
+
+  let rubric = null;
+  if (isEdit && params?.id) {
+    rubric = await storage.table('gradebook_rubrics').get(params.id).catch(() => null);
+  }
+
+  const result = isEdit
+    ? (rubric ? await RubricDesigner.edit(rubric) : null)
+    : await RubricDesigner.create({ courseId: params?.course_id || null, initialTitle: params?.title || 'New Rubric' });
+
+  if (returnTo) {
+    if (result) {
+      const sep = returnTo.includes('?') ? '&' : '?';
+      router.navigate(`${returnTo}${sep}rubric_id=${encodeURIComponent(result.id)}`);
+    } else {
+      router.navigate(returnTo);
+    }
+  } else {
+    router.navigate('#/gradebook');
+  }
+}
+
 async function loadStudentReportModule(...args) {
   const mod = await import('./modules/gradebook/student-report.js');
   return mod.renderStudentReportView(...args);
@@ -156,6 +183,8 @@ async function bootstrapApp() {
     router.register('#/video/edit', loadVideoModule);
     router.register('#/video/kiosk', loadVideoModule);
     router.register('#/gradebook', loadGradebookModule);
+    router.register('#/rubrics/new', loadRubricRoute);
+    router.register('#/rubrics/edit', loadRubricRoute);
     router.register('#/classes', loadClassesModule);
     router.register('#/course', loadCourseModule);
     router.register('#/calendar', loadCalendarModule);
@@ -178,6 +207,12 @@ async function bootstrapApp() {
     router.register('#/student/courses', loadStudentCoursesModule);
     router.register('#/student/course', loadStudentCourseDetailModule);
     router.register('#/student/gradebook', loadStudentGradebookModule);
+
+    const loadSettingsModule = async (params, router, container) => {
+      const { renderSettingsView } = await import('./modules/settings/index.js');
+      return renderSettingsView(params, router, container);
+    };
+    router.register('#/settings', loadSettingsModule);
 
     // Global drag-and-drop listener for home, assessments, assignments, and student hub (§6.4)
     if (typeof window !== 'undefined') {
@@ -308,12 +343,12 @@ async function bootstrapApp() {
     registerServiceWorker();
     await initLaunchHandlers(router);
 
-    // 8. Execute initial route
-    await router.handleRoute();
-
-    // 9. Startup coordinator: First-run role chooser & route preloading
+    // 8. Startup coordinator: First-run role chooser & route preloading
     await WelcomeRoleChooser.checkAndShow(router);
     router.preloadPrimaryRoutes(RoleMode.get());
+
+    // 9. Execute initial route
+    await router.handleRoute();
 
     // 9. Sync unreviewed submissions badge in navigation
     const syncInboxBadge = async () => {
@@ -403,14 +438,13 @@ function bindStorageControls() {
     RecoveryKit.open();
   });
 
-  document.getElementById('menu-btn-devices')?.addEventListener('click', async () => {
-    const { openDevicesDialog } = await import('./components/devices-dialog.js');
-    openDevicesDialog();
+  document.getElementById('menu-btn-devices')?.addEventListener('click', () => {
+    router.navigate('#/settings?section=devices');
   });
 
   const btnRelayConnect = document.getElementById('menu-btn-relay-connect');
   btnRelayConnect?.addEventListener('click', () => {
-    openRelayConfigDialog();
+    router.navigate('#/settings?section=relay');
   });
 
   btnStorageInfo?.addEventListener('click', async () => {
@@ -676,6 +710,11 @@ function confirmRestore(fileName, counts, exportedAt, { plaintext = false } = {}
 }
 
 export async function openRelayConfigDialog(defaultTab = 'connect') {
+  const { router } = await import('./router.js');
+  if (router?.navigate) {
+    router.navigate(`#/settings?section=${defaultTab === 'guide' ? 'guide' : 'relay'}`);
+    return;
+  }
   const currentConfig = (await storage.getMetadata('sync_config')) || (typeof window !== 'undefined' ? window.KB_CONFIG : null) || {};
   const { renderRelaySetupGuideHTML } = await import('./components/relay-setup-guide.js');
   const dialog = document.createElement('sl-dialog');

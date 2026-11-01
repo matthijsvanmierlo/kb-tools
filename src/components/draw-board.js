@@ -262,8 +262,9 @@ export class DrawBoard {
     }
   }
 
-  _promptText(x, y) {
-    const text = prompt('Enter text for canvas:');
+  async _promptText(x, y) {
+    const { PromptDialog } = await import('../utils/dialogs.js');
+    const text = await PromptDialog.show({ title: 'Add Text', message: 'Enter text for canvas:', placeholder: 'Text' });
     if (text && text.trim()) {
       const el = {
         id: generateUUID(),

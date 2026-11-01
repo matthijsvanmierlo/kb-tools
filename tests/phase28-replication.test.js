@@ -150,7 +150,10 @@ describe('Phase 28: Replication engine', () => {
     const box = JSON.parse(c.body);
     box.ct = box.ct.slice(0, -4) + 'AAAA';
     c.body = JSON.stringify(box);
-    await expect(eb.pull()).rejects.toMatchObject({ code: 'UNREADABLE' });
+    const pullRes = await eb.pull();
+    expect(pullRes.applied).toBe(0);
+    const quarantined = await b.table('repl_quarantine').toArray();
+    expect(quarantined.length).toBeGreaterThanOrEqual(1);
   });
 
   it('a class channel carries one class only, and ignores anything else a co-teacher sends', async () => {

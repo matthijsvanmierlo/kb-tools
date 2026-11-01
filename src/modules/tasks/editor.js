@@ -3,6 +3,7 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { toast } from '../../utils/toast.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { syncContentClassLink } from '../gradebook/bridge.js';
+import '../../components/rubric-picker.js';
 import { setDue, getDue } from '../../core/due-dates.js';
 import { isCdnUploadConfigured } from '../../core/transport.js';
 import { RichTextEditor } from '../../components/rich-text-editor.js';
@@ -257,18 +258,8 @@ export async function renderTaskEditor(task, router, container) {
             </div>
 
             <div class="space-y-1">
-              <sl-select id="task-rubric-select" label="Grading Rubric (optional)" size="small" value="${esc(t.grading.rubric_id || '')}" clearable>
-                <sl-option value="">No rubric</sl-option>
-                ${rubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title || 'Untitled rubric')}</sl-option>`).join('')}
-              </sl-select>
-              <div class="flex items-center gap-2 pt-1">
-                <sl-button size="small" variant="default" id="btn-task-new-rubric">
-                  <sl-icon slot="prefix" name="plus"></sl-icon> New Rubric
-                </sl-button>
-                <sl-button size="small" variant="default" id="btn-task-edit-rubric" class="${t.grading.rubric_id ? '' : 'hidden'}">
-                  <sl-icon slot="prefix" name="pencil"></sl-icon> Edit Rubric
-                </sl-button>
-              </div>
+              <label class="text-xs font-semibold text-slate-700 block">Grading Rubric (optional)</label>
+              <kb-rubric-picker id="task-rubric-picker" course-id="${esc(resolveTaskCourseId(t) || '')}" value="${esc(t.grading.rubric_id || '')}"></kb-rubric-picker>
             </div>
 
             <!-- Standards Multi-Select Mount -->
@@ -423,6 +414,7 @@ export async function renderTaskEditor(task, router, container) {
   classSelect.addEventListener('sl-change', async () => {
     const newCourseId = classSelect.value || null;
     syncTaskCourseId(t, newCourseId);
+    if (rubricPicker) rubricPicker.courseId = newCourseId;
     await syncContentClassLink(t, 'tasks', newCourseId);
     renderStandards();
     save();
@@ -446,21 +438,11 @@ export async function renderTaskEditor(task, router, container) {
     });
   }
 
-  // Wire Rubric
-  const rubricSelect = container.querySelector('#task-rubric-select');
-  const btnNewRubric = container.querySelector('#btn-task-new-rubric');
-  const btnEditRubric = container.querySelector('#btn-task-edit-rubric');
-
-  const updateRubricEditVisibility = () => {
-    if (btnEditRubric) {
-      btnEditRubric.classList.toggle('hidden', !rubricSelect?.value);
-    }
-  };
-
-  if (rubricSelect) {
-    rubricSelect.addEventListener('sl-change', async () => {
-      t.grading.rubric_id = rubricSelect.value || null;
-      updateRubricEditVisibility();
+  // Wire Rubric Picker
+  const rubricPicker = container.querySelector('#task-rubric-picker');
+  if (rubricPicker) {
+    rubricPicker.addEventListener('rubric-change', async (e) => {
+      t.grading.rubric_id = e.detail?.rubricId || null;
       save();
       const courseId = resolveTaskCourseId(t);
       if (courseId) {
@@ -468,53 +450,6 @@ export async function renderTaskEditor(task, router, container) {
       }
     });
   }
-
-  btnNewRubric?.addEventListener('click', async () => {
-    const { RubricDesigner } = await import('../gradebook/rubric-builder.js');
-    const courseId = resolveTaskCourseId(t);
-    RubricDesigner.openDesignerModal({
-      courseId,
-      onSave: async (savedRubric) => {
-        t.grading.rubric_id = savedRubric.id;
-        const freshRubrics = await storage.table('gradebook_rubrics').toArray();
-        if (rubricSelect) {
-          rubricSelect.innerHTML = `
-            <sl-option value="">No rubric</sl-option>
-            ${freshRubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title || 'Untitled rubric')}</sl-option>`).join('')}
-          `;
-          rubricSelect.value = savedRubric.id;
-        }
-        updateRubricEditVisibility();
-        save();
-        if (courseId) {
-          await syncContentClassLink(t, 'tasks', courseId);
-        }
-      }
-    });
-  });
-
-  btnEditRubric?.addEventListener('click', async () => {
-    const currentId = rubricSelect?.value;
-    if (!currentId) return;
-    const currentRubric = await storage.table('gradebook_rubrics').get(currentId);
-    if (!currentRubric) return;
-    const { RubricDesigner } = await import('../gradebook/rubric-builder.js');
-    RubricDesigner.openDesignerModal({
-      courseId: currentRubric.course_id || resolveTaskCourseId(t),
-      rubric: currentRubric,
-      onSave: async (savedRubric) => {
-        const freshRubrics = await storage.table('gradebook_rubrics').toArray();
-        if (rubricSelect) {
-          rubricSelect.innerHTML = `
-            <sl-option value="">No rubric</sl-option>
-            ${freshRubrics.map(r => `<sl-option value="${esc(r.id)}">${esc(r.title || 'Untitled rubric')}</sl-option>`).join('')}
-          `;
-          rubricSelect.value = savedRubric.id;
-        }
-        save();
-      }
-    });
-  });
 
   // Wire Schedule & Settings
   const dueDateInput = container.querySelector('#task-due-date');

@@ -164,8 +164,10 @@ export class DrawBoardUI {
 
       wrapper.querySelector('#btn-draw-undo')?.addEventListener('click', () => board.undo());
       wrapper.querySelector('#btn-draw-redo')?.addEventListener('click', () => board.redo());
-      wrapper.querySelector('#btn-draw-clear')?.addEventListener('click', () => {
-        if (confirm('Clear the entire canvas?')) board.clear();
+      wrapper.querySelector('#btn-draw-clear')?.addEventListener('click', async () => {
+        const { ConfirmDialog } = await import('../utils/dialogs.js');
+        const confirmed = await ConfirmDialog.show({ title: 'Clear Canvas', message: 'Clear the entire canvas?', confirmText: 'Clear', variant: 'danger' });
+        if (confirmed) board.clear();
       });
     }
 

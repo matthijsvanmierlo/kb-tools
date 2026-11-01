@@ -19,6 +19,9 @@ import { CryptoShareEngine } from '../../core/crypto-share.js';
 import { replication } from '../../core/replication/manager.js';
 import { StudentMatcher } from '../../core/student-matcher.js';
 import { AccessCodes } from '../../core/access-codes.js';
+import { generateUUID } from '../../utils/uuid.js';
+import '../../components/rubric-picker.js';
+import { RubricScorer } from '../gradebook/rubric-builder.js';
 
 /**
  * Submissions Inbox (KB-ASSIGN-006)
@@ -649,6 +652,24 @@ export async function renderSubmissions(assignment, router, container) {
                   </sl-input>
                   <sl-textarea size="small" rows="1" resize="auto" class="flex-1" data-manual-feedback label="Feedback on this answer" value="${esc(m.feedback || '')}"></sl-textarea>
                 </div>
+                ${(auto.needs_manual || q.type === 'long_text' || q.type === 'file_upload') ? `
+                  <div class="rubric-review-mount pt-1 border-t border-slate-100 flex flex-col gap-1.5" data-q-id="${esc(q.id)}">
+                    <div class="flex items-center justify-between text-xs">
+                      <span class="text-slate-500 font-medium">Rubric:</span>
+                      <div class="flex items-center gap-2">
+                        <button type="button" class="btn-open-rubric-scorer text-blue-600 hover:underline text-xs flex items-center gap-1 ${q.rubric_id ? '' : 'hidden'}" data-rubric-id="${esc(q.rubric_id || '')}" data-q-id="${esc(q.id)}" data-possible="${auto.possible}">
+                          <sl-icon name="grid-3x3"></sl-icon> Grade with Rubric
+                        </button>
+                        <button type="button" class="btn-attach-q-rubric text-slate-500 hover:text-slate-800 text-xs flex items-center gap-1">
+                          <sl-icon name="pencil"></sl-icon> ${q.rubric_id ? 'Change Rubric' : 'Attach Rubric'}
+                        </button>
+                      </div>
+                    </div>
+                    <div class="q-rubric-picker-container hidden mt-1">
+                      <kb-rubric-picker class="q-rubric-picker" course-id="${esc(a.class_id || '')}" value="${esc(q.rubric_id || '')}" data-q-id="${esc(q.id)}"></kb-rubric-picker>
+                    </div>
+                  </div>
+                ` : ''}
               </li>`;
           }).join('')}
         </ol>
@@ -679,6 +700,78 @@ export async function renderSubmissions(assignment, router, container) {
           drawer.hide();
           setTimeout(() => openReview(target), 120);
         }
+      });
+    });
+
+    // Rubric review & spot attachment for assessment questions
+    drawer.querySelectorAll('.btn-attach-q-rubric').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mount = btn.closest('.rubric-review-mount');
+        const container = mount?.querySelector('.q-rubric-picker-container');
+        container?.classList.toggle('hidden');
+      });
+    });
+
+    drawer.querySelectorAll('.q-rubric-picker').forEach(picker => {
+      picker.addEventListener('rubric-change', async (e) => {
+        const qId = picker.dataset.qId;
+        const q = (a.questions || []).find(x => x.id === qId);
+        const selected = e.detail?.rubric;
+        if (q) {
+          q.rubric_id = selected ? selected.id : null;
+          try {
+            await storage.table('assignments').put(a);
+            toast.success(selected ? `Rubric "${selected.title}" attached!` : 'Rubric detached.');
+          } catch (_) {}
+          const mount = picker.closest('.rubric-review-mount');
+          const scorerBtn = mount?.querySelector('.btn-open-rubric-scorer');
+          if (scorerBtn) {
+            scorerBtn.classList.toggle('hidden', !selected);
+            scorerBtn.dataset.rubricId = selected ? selected.id : '';
+          }
+          const attachBtn = mount?.querySelector('.btn-attach-q-rubric');
+          if (attachBtn) {
+            attachBtn.innerHTML = `<sl-icon name="pencil"></sl-icon> ${selected ? 'Change Rubric' : 'Attach Rubric'}`;
+          }
+        }
+      });
+    });
+
+    drawer.querySelectorAll('.btn-open-rubric-scorer').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const rubricId = btn.dataset.rubricId;
+        const qId = btn.dataset.qId;
+        const possible = parseFloat(btn.dataset.possible) || 1;
+        if (!rubricId) return;
+        const rubric = await storage.table('gradebook_rubrics').get(rubricId).catch(() => null);
+        if (!rubric) {
+          toast.warning('Rubric not found.');
+          return;
+        }
+
+        const m = draft.manual[qId] || {};
+        RubricScorer.openScoringDrawer(
+          rubric,
+          { rubric_eval: m.rubric_eval, feedback: m.feedback },
+          (scoreResult) => {
+            const scaled = scoreResult.max_score > 0
+              ? Math.round((scoreResult.raw_score / scoreResult.max_score) * possible * 10) / 10
+              : 0;
+
+            if (!draft.manual[qId]) draft.manual[qId] = {};
+            draft.manual[qId].points = scaled;
+            draft.manual[qId].feedback = scoreResult.feedback;
+            draft.manual[qId].rubric_eval = scoreResult.rubric_eval;
+
+            const qLi = drawer.querySelector(`[data-review-q="${qId}"]`);
+            if (qLi) {
+              const ptsInput = qLi.querySelector('[data-manual-points]');
+              const fbInput = qLi.querySelector('[data-manual-feedback]');
+              if (ptsInput) ptsInput.value = scaled;
+              if (fbInput) fbInput.value = scoreResult.feedback;
+            }
+          }
+        );
       });
     });
 
@@ -757,7 +850,7 @@ export async function renderSubmissions(assignment, router, container) {
       });
       const generatedCode = sub.access_code || crossMatch.canonicalCandidate?.access_code || AccessCodes.generateCode();
       const newStudent = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         course_id: courseId,
         student_id: sub.student_id,
         full_name: sub.claimed_name || sub.student_name || crossMatch.canonicalCandidate?.full_name || sub.student_id,
@@ -836,7 +929,7 @@ export async function renderSubmissions(assignment, router, container) {
         });
         const generatedCode = sub.access_code || crossMatch.canonicalCandidate?.access_code || AccessCodes.generateCode();
         const newStudent = {
-          id: crypto.randomUUID(),
+          id: generateUUID(),
           course_id: course.id,
           student_id: sub.student_id,
           full_name: sub.claimed_name || sub.student_name || crossMatch.canonicalCandidate?.full_name || sub.student_id,
@@ -1090,7 +1183,7 @@ export async function renderSubmissions(assignment, router, container) {
             });
             const generatedCode = sub.access_code || crossMatch.canonicalCandidate?.access_code || AccessCodes.generateCode();
             const newStudent = {
-              id: crypto.randomUUID(),
+              id: generateUUID(),
               course_id: course.id,
               student_id: sub.student_id,
               full_name: sub.claimed_name || sub.student_name || crossMatch.canonicalCandidate?.full_name || sub.student_id,
@@ -1209,16 +1302,22 @@ export async function renderSubmissions(assignment, router, container) {
         const res = await transport.listDrop(dropId, { since: a.publish?.relay?.last_pulled_at });
         const items = res?.items || [];
         const texts = [];
+        let maxReceivedAt = a.publish?.relay?.last_pulled_at || null;
         for (const item of items) {
           const raw = typeof item === 'string' ? item : (item.text || item.payload || '');
-          if (raw) texts.push({ text: raw, source: 'Server Dropbox' });
-        }
-        if (a.publish?.relay) {
-          a.publish.relay.last_pulled_at = new Date().toISOString();
-          await storage.table('assignments').put(a);
+          if (raw) {
+            texts.push({ text: raw, source: 'Server Dropbox' });
+            if (item.received_at && (!maxReceivedAt || item.received_at > maxReceivedAt)) {
+              maxReceivedAt = item.received_at;
+            }
+          }
         }
         if (texts.length) {
           await importTexts(texts);
+          if (a.publish?.relay && maxReceivedAt) {
+            a.publish.relay.last_pulled_at = maxReceivedAt;
+            await storage.table('assignments').put(a);
+          }
         } else {
           toast.info('No new submissions found on the server.');
         }

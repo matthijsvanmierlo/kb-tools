@@ -149,7 +149,12 @@ export async function openIncomingFiles(files, router) {
             if (cls.access_code) { code = cls.access_code; break; }
           }
           if (!code) {
-            code = (window.prompt('Enter your student access code to decrypt your feedback from this class pack:') || '').trim();
+            const { PromptDialog } = await import('../utils/dialogs.js');
+            code = (await PromptDialog.show({
+              title: 'Student Access Code',
+              message: 'Enter your student access code to decrypt your feedback from this class pack:',
+              placeholder: 'Access code'
+            }) || '').trim();
           }
           const res = await FeedbackCapsule.unpackClassCapsule(parsed, code);
           if (res.success) {

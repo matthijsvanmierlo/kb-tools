@@ -1,30 +1,96 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { extractBearerToken, hashToken, sameHash } from './auth.js';
 import { RateLimiter, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, DRAFT_RATE_LIMIT_MAX } from './rate-limiter.js';
+import { createDbPartsStore } from './media-store.js';
+import {
+  VERSION,
+  SCHEMA_VERSION,
+  DEFAULT_PORT,
+  MAX_PAYLOAD_SIZE,
+  MAX_SUBMISSION_SIZE,
+  MAX_DRAFT_SIZE,
+  MAX_SYNC_CHUNK_SIZE,
+  MAX_SYNC_SNAPSHOT_SIZE,
+  MAX_STUDENT_MEDIA_SIZE,
+  DEFAULT_RETENTION_DAYS,
+  DEFAULT_TEACHER_QUOTA_MB,
+  INLINE_SUBMISSION_THRESHOLD,
+  SUBMISSION_RATE_LIMIT_PER_MIN
+} from './limits.js';
 
-export { RateLimiter, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, DRAFT_RATE_LIMIT_MAX };
+export {
+  RateLimiter,
+  RATE_LIMIT_MAX,
+  RATE_LIMIT_WINDOW_MS,
+  DRAFT_RATE_LIMIT_MAX,
+  VERSION,
+  SCHEMA_VERSION,
+  DEFAULT_PORT,
+  MAX_PAYLOAD_SIZE,
+  MAX_SUBMISSION_SIZE,
+  MAX_DRAFT_SIZE,
+  MAX_SYNC_CHUNK_SIZE,
+  MAX_SYNC_SNAPSHOT_SIZE,
+  DEFAULT_RETENTION_DAYS,
+  DEFAULT_TEACHER_QUOTA_MB
+};
 
-export const VERSION = '1.0.0';
-export const DEFAULT_PORT = 3000;
-export const MAX_PAYLOAD_SIZE = 512 * 1024; // 512 KB
-export const MAX_SUBMISSION_SIZE = 5 * 1024 * 1024; // 5 MB
-export const MAX_DRAFT_SIZE = 64 * 1024; // 64 KB
-export const MAX_SYNC_CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
-export const MAX_SYNC_SNAPSHOT_SIZE = 32 * 1024 * 1024; // 32 MB
-export const MAX_STUDENT_MEDIA_SIZE = 25 * 1024 * 1024; // 25 MB
-export const DEFAULT_RETENTION_DAYS = 180;
-
+// SVG and HTML removed for XSS safety
 export const ALLOWED_MEDIA_EXTS = new Set([
-  'bin', 'enc', 'webp', 'png', 'jpg', 'jpeg', 'gif', 'svg',
-  'pdf', 'txt', 'md', 'csv', 'json', 'zip', 'html', 'css',
+  'bin', 'enc', 'webp', 'png', 'jpg', 'jpeg', 'gif',
+  'pdf', 'txt', 'md', 'csv', 'json', 'zip', 'css',
   'js', 'ts', 'jsx', 'tsx', 'py', 'java', 'c', 'cpp', 'h', 'hpp',
   'cs', 'go', 'rs', 'rb', 'sql', 'xml', 'yaml', 'yml',
   'mp3', 'wav', 'ogg', 'webm', 'mp4', 'm4a', 'kbsub', 'kbshare'
 ]);
 
+export const EXT_TO_MIME = {
+  webp: 'image/webp',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  pdf: 'application/pdf',
+  txt: 'text/plain',
+  md: 'text/markdown',
+  csv: 'text/csv',
+  json: 'application/json',
+  zip: 'application/zip',
+  css: 'text/css',
+  js: 'text/javascript',
+  ts: 'text/plain',
+  jsx: 'text/plain',
+  tsx: 'text/plain',
+  py: 'text/plain',
+  java: 'text/plain',
+  c: 'text/plain',
+  cpp: 'text/plain',
+  h: 'text/plain',
+  hpp: 'text/plain',
+  cs: 'text/plain',
+  go: 'text/plain',
+  rs: 'text/plain',
+  rb: 'text/plain',
+  sql: 'text/plain',
+  xml: 'application/xml',
+  yaml: 'text/yaml',
+  yml: 'text/yaml',
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  ogg: 'audio/ogg',
+  webm: 'video/webm',
+  mp4: 'video/mp4',
+  m4a: 'audio/mp4',
+  bin: 'application/octet-stream',
+  enc: 'application/octet-stream',
+  kbsub: 'application/octet-stream',
+  kbshare: 'application/octet-stream'
+};
+
 export function isAllowedMime(mime) {
   if (!mime) return false;
   const m = String(mime).toLowerCase().split(';')[0].trim();
+  if (m === 'image/svg+xml' || m.includes('html')) return false;
   return (
     m.startsWith('image/') ||
     m.startsWith('audio/') ||
@@ -41,7 +107,7 @@ export function isAllowedMime(mime) {
 const DEVICE_ID_RE = /^[0-9A-Za-z-]{8,64}$/;
 const DRAFT_ID_RE = /^[0-9a-f]{64}$/;
 
-const sha256 = (text) => createHash('sha256').update(String(text)).digest('hex');
+const sha256 = (text) => createHash('sha256').update(typeof text === 'string' ? text : Buffer.from(text)).digest('hex');
 
 export function generateS3PresignedPutUrl({ endpoint, bucket, key, accessKeyId, secretAccessKey, region = 'auto', contentType, expiresIn = 3600 }) {
   const dateObj = new Date();
@@ -103,17 +169,6 @@ export function generateS3PresignedPutUrl({ endpoint, bucket, key, accessKeyId, 
 
 /**
  * Creates a runtime-agnostic Web Standard Request -> Response handler.
- * Compatible with Node.js adapters and Cloudflare Workers (fetch event).
- *
- * @param {object} options
- * @param {any} options.db - Awaitable repository (from createDatabase or createD1Database)
- * @param {RateLimiter} [options.limiter]
- * @param {RateLimiter} [options.draftLimiter]
- * @param {string[]} [options.allowedOrigins]
- * @param {object} [options.cdnConfig]
- * @param {any} [options.mediaStore]
- * @param {Function} [options.presignHook]
- * @returns {(req: Request, context?: { clientIp?: string, publicOrigin?: string }) => Promise<Response>}
  */
 export function createRelayFetchHandler(options = {}) {
   const {
@@ -122,10 +177,12 @@ export function createRelayFetchHandler(options = {}) {
     draftLimiter = new RateLimiter(DRAFT_RATE_LIMIT_MAX),
     allowedOrigins = ['*'],
     cdnConfig = {},
-    mediaStore = null,
     presignHook = null,
-    mediaSigningSecret = null
+    mediaSigningSecret = null,
+    backend = null
   } = options;
+
+  const blobStore = options.blobStore || options.mediaStore || (db ? createDbPartsStore(db) : null);
 
   let cachedSigningSecret = mediaSigningSecret ||
     (typeof process !== 'undefined' && process.env?.KB_MEDIA_SIGNING_SECRET) || null;
@@ -136,17 +193,14 @@ export function createRelayFetchHandler(options = {}) {
       try {
         cachedSigningSecret = await db.getMediaSigningSecret();
         if (cachedSigningSecret) return cachedSigningSecret;
-      } catch (e) {
-        // fallback
-      }
+      } catch (_) {}
     }
-    cachedSigningSecret = 'kb-media-secret';
-    return cachedSigningSecret;
+    throw new Error('Media signing secret is not configured');
   }
 
   const cdnEnabled = Boolean(
     cdnConfig.enabled ||
-    mediaStore ||
+    blobStore ||
     cdnConfig.endpoint ||
     cdnConfig.bucket ||
     cdnConfig.publicUrl
@@ -161,7 +215,7 @@ export function createRelayFetchHandler(options = {}) {
     if (isOriginAllowed) {
       corsHeaders['Access-Control-Allow-Origin'] = originHeader;
       corsHeaders['Access-Control-Allow-Methods'] = 'GET, POST, PUT, DELETE, OPTIONS';
-      corsHeaders['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-KB-Workspace-Key, X-KB-Drop-Secret';
+      corsHeaders['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, X-KB-Workspace-Key, X-KB-Drop-Secret, X-KB-Device-Token, X-KB-Device-Id';
     }
 
     if (request.method === 'OPTIONS') {
@@ -182,25 +236,45 @@ export function createRelayFetchHandler(options = {}) {
       });
     };
 
-    const error = (status, message, extraHeaders = {}) => {
-      return json(status, { error: message }, extraHeaders);
+    const error = (status, message, extra = {}, extraHeaders = {}) => {
+      return json(status, { error: message, ...extra }, extraHeaders);
     };
 
     try {
       const url = new URL(request.url);
       let pathname = url.pathname.replace(/\/+$/, '') || '/';
-      // Normalize /api/v1 prefix
       if (pathname.startsWith('/api/v1/')) {
         pathname = pathname.slice('/api/v1'.length);
       } else if (pathname === '/api/v1') {
         pathname = '/';
       }
 
+      const clientIp = context.clientIp || request.headers.get('cf-connecting-ip') || '127.0.0.1';
+
       // 1. GET /health
       if (request.method === 'GET' && (pathname === '/health' || pathname === '/')) {
-        const features = ['payloads', 'drops', 'drafts', 'sync', 'feeds'];
-        if (cdnEnabled) features.push('media');
-        return json(200, { ok: true, version: VERSION, features });
+        const detectedBackend = backend || (db?.raw?.prepare && typeof db.raw.prepare('').bind === 'function' ? 'd1' : 'node');
+        const detectedBlobKind = blobStore?.kind || 'memory';
+        const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
+
+        return json(200, {
+          ok: true,
+          version: VERSION,
+          schema_version: SCHEMA_VERSION,
+          backend: detectedBackend,
+          blobStore: detectedBlobKind,
+          features: ['payloads', 'drops', 'sync', 'feeds', 'media'],
+          limits: {
+            maxPayloadSize: MAX_PAYLOAD_SIZE,
+            maxChunkSize: MAX_SYNC_CHUNK_SIZE,
+            maxSnapshotSize: MAX_SYNC_SNAPSHOT_SIZE,
+            maxSubmissionSize: MAX_SUBMISSION_SIZE,
+            maxDraftSize: MAX_DRAFT_SIZE,
+            defaultRetentionDays: DEFAULT_RETENTION_DAYS,
+            defaultTeacherQuotaMb: quotaMb
+          },
+          features: ['payloads', 'drops', 'drafts', 'sync', 'feeds', 'media']
+        });
       }
 
       // Teacher authentication helper
@@ -210,8 +284,6 @@ export function createRelayFetchHandler(options = {}) {
         const hash = hashToken(token);
         return await db.teachers.getByTokenHash(hash);
       };
-
-      const clientIp = context.clientIp || request.headers.get('cf-connecting-ip') || '127.0.0.1';
 
       // Helper to read text body with byte size limit
       const readText = async (maxBytes) => {
@@ -240,8 +312,45 @@ export function createRelayFetchHandler(options = {}) {
         }
       };
 
+      // Helper to check drop secret
+      const dropSecretOk = (drop) => {
+        if (!drop.secret_hash) return true;
+        const provided = request.headers.get('x-kb-drop-secret') || '';
+        return sameHash(drop.secret_hash, sha256(provided));
+      };
+
       // -------------------------------------------------------------
-      // Media endpoints (CDN broker, R2, and local fallback)
+      // GET /whoami (authenticated teacher check)
+      // -------------------------------------------------------------
+      if (request.method === 'GET' && pathname === '/whoami') {
+        const teacher = await authenticateTeacher();
+        if (!teacher) {
+          return error(401, 'Unauthorized: valid teacher token required');
+        }
+        const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
+        const quotaBytes = quotaMb * 1024 * 1024;
+        return json(200, {
+          teacher_id: teacher.id,
+          name: teacher.name,
+          bytes_used: teacher.bytes_used,
+          quota_bytes: quotaBytes
+        });
+      }
+
+      // -------------------------------------------------------------
+      // GET /usage (authenticated teacher storage usage)
+      // -------------------------------------------------------------
+      if (request.method === 'GET' && pathname === '/usage') {
+        const teacher = await authenticateTeacher();
+        if (!teacher) {
+          return error(401, 'Unauthorized: valid teacher token required');
+        }
+        const usage = await db.teachers.getUsage(teacher.id);
+        return json(200, usage);
+      }
+
+      // -------------------------------------------------------------
+      // Media endpoints (CDN broker, R2, Fs, and DbPartsStore)
       // -------------------------------------------------------------
       if (request.method === 'POST' && pathname === '/media/presign') {
         const teacher = await authenticateTeacher();
@@ -253,17 +362,28 @@ export function createRelayFetchHandler(options = {}) {
         }
 
         const parsed = await readJson(16384);
-        const { sha256: fileHash, mime, ext } = parsed || {};
+        const { sha256: fileHash, mime, ext, size: requestedSize = 0 } = parsed || {};
         if (!fileHash || !/^[a-f0-9]{64}$/i.test(fileHash)) {
           return error(400, 'Valid 64-hex sha256 required');
         }
 
+        // Quota check
+        const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
+        const quotaBytes = quotaMb * 1024 * 1024;
+        if (teacher.bytes_used + requestedSize > quotaBytes) {
+          return json(507, { error: 'quota_exceeded', used: teacher.bytes_used, limit: quotaBytes });
+        }
+
+        const safeExt = String(ext || (mime === 'image/webp' ? 'webp' : mime === 'audio/webm' ? 'webm' : 'bin')).toLowerCase().replace(/[^a-z0-9]/gi, '');
+        if (!ALLOWED_MEDIA_EXTS.has(safeExt)) {
+          return error(400, `File extension .${safeExt} is not permitted`);
+        }
+
         if (typeof presignHook === 'function') {
-          const custom = await presignHook({ sha256: fileHash, mime, ext, teacherId: teacher.id });
+          const custom = await presignHook({ sha256: fileHash, mime, ext: safeExt, teacherId: teacher.id, size: requestedSize });
           return json(200, custom);
         }
 
-        const safeExt = String(ext || (mime === 'image/webp' ? 'webp' : mime === 'audio/webm' ? 'webm' : 'bin')).replace(/[^a-z0-9]/gi, '');
         const filename = `${fileHash}.${safeExt}`;
         const objectKey = `assets/${filename}`;
 
@@ -277,6 +397,11 @@ export function createRelayFetchHandler(options = {}) {
         const region = cdnConfig.region || 'auto';
         const publicBase = (cdnConfig.publicUrl || '').replace(/\/+$/, '');
 
+        // Record media ref for teacher
+        if (typeof db.mediaRefs?.addRef === 'function') {
+          await db.mediaRefs.addRef({ sha: filename, ownerKind: 'teacher', ownerId: teacher.id, size: requestedSize });
+        }
+
         if (endpoint && accessKeyId && secretAccessKey) {
           const presignedUrl = generateS3PresignedPutUrl({
             endpoint,
@@ -285,20 +410,25 @@ export function createRelayFetchHandler(options = {}) {
             accessKeyId,
             secretAccessKey,
             region,
-            contentType: mime || 'application/octet-stream'
+            contentType: EXT_TO_MIME[safeExt] || 'application/octet-stream'
           });
           const publicUrl = publicBase ? `${publicBase}/${objectKey}` : `${endpoint}/${bucket ? bucket + '/' : ''}${objectKey}`;
           return json(200, {
             upload_url: presignedUrl,
             public_url: publicUrl,
             method: 'PUT',
-            headers: { 'Content-Type': mime || 'application/octet-stream' }
+            headers: { 'Content-Type': EXT_TO_MIME[safeExt] || 'application/octet-stream' }
           });
         }
 
-        // Direct store fallback (R2, Fs, or Memory)
+        // Direct store fallback
         const exp = Math.floor(Date.now() / 1000) + 3600;
-        const signingSecret = await resolveSigningSecret();
+        let signingSecret;
+        try {
+          signingSecret = await resolveSigningSecret();
+        } catch (_) {
+          return error(500, 'Media signing secret is not configured');
+        }
         const sig = createHmac('sha256', signingSecret).update(`${filename}|${exp}`).digest('hex');
 
         const uploadUrl = `${proto}://${host}/api/v1/media/upload?key=${encodeURIComponent(filename)}&exp=${exp}&sig=${sig}`;
@@ -307,7 +437,7 @@ export function createRelayFetchHandler(options = {}) {
           upload_url: uploadUrl,
           public_url: publicUrl,
           method: 'PUT',
-          headers: { 'Content-Type': mime || 'application/octet-stream' }
+          headers: { 'Content-Type': EXT_TO_MIME[safeExt] || 'application/octet-stream' }
         });
       }
 
@@ -316,6 +446,11 @@ export function createRelayFetchHandler(options = {}) {
         const key = url.searchParams.get('key');
         if (!key || !/^[a-f0-9]{64}\.[a-z0-9]+$/i.test(key)) {
           return error(400, 'Valid key parameter required');
+        }
+
+        const ext = key.split('.').pop()?.toLowerCase();
+        if (!ALLOWED_MEDIA_EXTS.has(ext)) {
+          return error(400, `File extension .${ext} is not permitted`);
         }
 
         const expStr = url.searchParams.get('exp');
@@ -331,7 +466,12 @@ export function createRelayFetchHandler(options = {}) {
           return error(403, 'Media upload URL has expired');
         }
 
-        const signingSecret = await resolveSigningSecret();
+        let signingSecret;
+        try {
+          signingSecret = await resolveSigningSecret();
+        } catch (_) {
+          return error(500, 'Media signing secret is not configured');
+        }
         const expectedSigPlain = createHmac('sha256', signingSecret).update(`${key}|${exp}`).digest('hex');
         const expectedSigDrop = dropId ? createHmac('sha256', signingSecret).update(`${key}|${exp}|${dropId}`).digest('hex') : null;
         const expectedSigDropMax = (dropId && maxSizeStr) ? createHmac('sha256', signingSecret).update(`${key}|${exp}|${dropId}|${maxSizeStr}`).digest('hex') : null;
@@ -344,10 +484,6 @@ export function createRelayFetchHandler(options = {}) {
           ? (maxSizeStr ? Math.min(parseInt(maxSizeStr, 10) || MAX_STUDENT_MEDIA_SIZE, MAX_STUDENT_MEDIA_SIZE) : MAX_STUDENT_MEDIA_SIZE)
           : MAX_SYNC_SNAPSHOT_SIZE;
 
-        const contentLength = parseInt(request.headers.get('content-length') || '0', 10);
-        if (contentLength > maxAllowedSize) {
-          return error(413, 'Payload too large');
-        }
         const arrayBuf = await request.arrayBuffer();
         if (arrayBuf.byteLength > maxAllowedSize) {
           return error(413, 'Payload too large');
@@ -370,15 +506,18 @@ export function createRelayFetchHandler(options = {}) {
 
         // Verify body sha256 matches key
         const expectedHash = key.split('.')[0].toLowerCase();
-        const actualHash = createHash('sha256').update(new Uint8Array(arrayBuf)).digest('hex').toLowerCase();
+        const actualHash = sha256(new Uint8Array(arrayBuf)).toLowerCase();
         if (actualHash !== expectedHash) {
           return error(400, 'Body sha256 does not match key');
         }
 
-        const contentType = request.headers.get('content-type') || 'application/octet-stream';
-        if (mediaStore) {
-          await mediaStore.put(key, new Uint8Array(arrayBuf), contentType);
+        // Server-derived Content-Type from extension allowlist
+        const contentType = EXT_TO_MIME[ext] || 'application/octet-stream';
+
+        if (!blobStore) {
+          return error(503, 'Media storage service unavailable');
         }
+        await blobStore.put(key, new Uint8Array(arrayBuf), contentType);
 
         if (dropId) {
           if (typeof db?.recordMediaUpload === 'function') {
@@ -395,15 +534,29 @@ export function createRelayFetchHandler(options = {}) {
       const mediaFileMatch = pathname.match(/^\/media\/file\/([a-f0-9]{64}\.[a-z0-9]+)$/i);
       if (request.method === 'GET' && mediaFileMatch) {
         const key = mediaFileMatch[1];
-        const item = mediaStore ? await mediaStore.get(key) : null;
+        const ext = key.split('.').pop()?.toLowerCase();
+        if (!ALLOWED_MEDIA_EXTS.has(ext)) {
+          return error(403, 'Forbidden media type');
+        }
+
+        const item = blobStore ? await blobStore.get(key) : null;
         if (!item) {
           return error(404, 'Media asset not found');
         }
+
+        // Derive server-side Content-Type from extension
+        const contentType = EXT_TO_MIME[ext] || 'application/octet-stream';
+        const isInline = contentType.startsWith('image/') || contentType.startsWith('video/') || contentType.startsWith('audio/');
+        const disposition = isInline ? 'inline' : 'attachment';
+
         return new Response(item.data, {
           status: 200,
           headers: {
-            'Content-Type': item.contentType || 'application/octet-stream',
+            'Content-Type': contentType,
             'Cache-Control': 'public, max-age=31536000, immutable',
+            'X-Content-Type-Options': 'nosniff',
+            'Content-Security-Policy': "default-src 'none'; sandbox",
+            'Content-Disposition': disposition,
             ...corsHeaders
           }
         });
@@ -423,6 +576,23 @@ export function createRelayFetchHandler(options = {}) {
           return error(400, 'Missing kind or ciphertext in payload');
         }
 
+        // Clamped / default expires_at (default 180 days, reject null)
+        const defaultExp = new Date(Date.now() + DEFAULT_RETENTION_DAYS * 86400000).toISOString();
+        let expiresAt = parsed.expires_at || defaultExp;
+        if (parsed.expires_at === null) {
+          return error(400, 'expires_at cannot be null');
+        }
+        const maxExp = defaultExp;
+        if (expiresAt > maxExp) expiresAt = maxExp;
+
+        // Quota check
+        const payloadBytes = new TextEncoder().encode(parsed.ciphertext).length;
+        const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
+        const quotaBytes = quotaMb * 1024 * 1024;
+        if (teacher.bytes_used + payloadBytes > quotaBytes) {
+          return json(507, { error: 'quota_exceeded', used: teacher.bytes_used, limit: quotaBytes });
+        }
+
         const ref = randomBytes(16).toString('base64url').slice(0, 22);
         await db.payloads.create({
           ref,
@@ -430,8 +600,12 @@ export function createRelayFetchHandler(options = {}) {
           kind: parsed.kind,
           ciphertext: parsed.ciphertext,
           meta: parsed.meta,
-          expiresAt: parsed.expires_at || null
+          expiresAt
         });
+
+        if (typeof db.teachers.adjustBytesUsed === 'function') {
+          await db.teachers.adjustBytesUsed(teacher.id, payloadBytes);
+        }
 
         return json(201, { ref });
       }
@@ -447,87 +621,338 @@ export function createRelayFetchHandler(options = {}) {
         if (row.expired) {
           return error(410, 'Payload expired');
         }
-
         return json(200, {
+          ref: row.ref,
           kind: row.kind,
-          ciphertext: row.ciphertext
+          ciphertext: row.ciphertext,
+          meta: row.meta ? (typeof row.meta === 'string' ? JSON.parse(row.meta) : row.meta) : null,
+          created_at: row.created_at,
+          expires_at: row.expires_at
         });
       }
 
-      // Drop secret verification
-      const dropSecretOk = (drop) => !drop.secret_hash
-        || sameHash(drop.secret_hash, sha256(request.headers.get('x-kb-drop-secret') || ''));
+      // -------------------------------------------------------------
+      // 4. POST /drops
+      // -------------------------------------------------------------
+      if (request.method === 'POST' && pathname === '/drops') {
+        const teacher = await authenticateTeacher();
+        if (!teacher) {
+          return error(401, 'Unauthorized: valid teacher token required');
+        }
+
+        const parsed = await readJson(16384);
+        if (!parsed || !parsed.assignment_id) {
+          return error(400, 'Missing assignment_id in drop creation');
+        }
+
+        const dropId = randomBytes(16).toString('base64url').slice(0, 22);
+        const secret = randomBytes(24).toString('hex');
+        const secretHash = sha256(secret);
+
+        const defaultExp = new Date(Date.now() + DEFAULT_RETENTION_DAYS * 86400000).toISOString();
+        let expiresAt = parsed.expires_at || defaultExp;
+        if (parsed.expires_at === null) {
+          return error(400, 'expires_at cannot be null');
+        }
+        if (expiresAt > defaultExp) expiresAt = defaultExp;
+
+        await db.drops.create({
+          id: dropId,
+          teacherId: teacher.id,
+          assignmentId: parsed.assignment_id,
+          publishVersion: parsed.publish_version ?? 1,
+          expiresAt,
+          secretHash
+        });
+
+        return json(201, {
+          drop_id: dropId,
+          drop_secret: secret,
+          expires_at: expiresAt
+        });
+      }
 
       // -------------------------------------------------------------
-      // Sync workspaces (Option B replication)
+      // Workspaces & Replication Endpoints
       // -------------------------------------------------------------
       if (request.method === 'POST' && pathname === '/sync') {
         const teacher = await authenticateTeacher();
         if (!teacher) {
           return error(401, 'Unauthorized: valid teacher token required');
         }
-        const workspaceId = randomBytes(12).toString('hex');
+
+        const workspaceId = randomBytes(16).toString('base64url').slice(0, 22);
         const workspaceKey = randomBytes(32).toString('hex');
-        await db.workspaces.create({ id: workspaceId, keyHash: sha256(workspaceKey), createdBy: teacher.id });
-        return json(201, { workspace_id: workspaceId, workspace_key: workspaceKey });
+        const keyHash = sha256(workspaceKey);
+
+        await db.workspaces.create({
+          id: workspaceId,
+          keyHash,
+          createdBy: teacher.id
+        });
+
+        return json(201, {
+          workspace_id: workspaceId,
+          workspace_key: workspaceKey
+        });
       }
 
-      const syncMatch = pathname.match(/^\/sync\/([0-9a-f]{24})\/(chunks|snapshots)(?:\/([0-9A-Za-z-]{8,64}))?$/);
+      // Sync workspace subroutes: /sync/:ws, /sync/:ws/chunks, /sync/:ws/snapshots/:dev, /sync/:ws/ack, /sync/:ws/devices/:dev
+      const syncMatch = pathname.match(/^\/sync\/([A-Za-z0-9_\-]+)(?:\/([a-z]+)(?:\/([^/]+))?)?$/);
       if (syncMatch) {
         const teacher = await authenticateTeacher();
         if (!teacher) {
           return error(401, 'Unauthorized: valid teacher token required');
         }
+
         const [, workspaceId, resource, deviceParam] = syncMatch;
         const ws = await db.workspaces.get(workspaceId);
-        if (!ws || !sameHash(ws.key_hash, sha256(request.headers.get('x-kb-workspace-key') || ''))) {
+        const reqWorkspaceKey = request.headers.get('x-kb-workspace-key') || '';
+        if (!ws || !sameHash(ws.key_hash, sha256(reqWorkspaceKey))) {
           return error(403, 'Forbidden: unknown workspace or wrong workspace key');
         }
 
+        // Touch workspace last_seen_at
+        if (typeof db.workspaces.touch === 'function') {
+          await db.workspaces.touch(workspaceId);
+        }
+
+        // DELETE /sync/:ws (Forget this workspace)
+        if (!resource && request.method === 'DELETE') {
+          const teacher = await authenticateTeacher();
+          if (!teacher || teacher.id !== ws.created_by) {
+            return error(403, 'Forbidden: only the teacher who created this workspace can delete it');
+          }
+          const delRes = await db.workspaces.delete(workspaceId);
+          if (delRes.blobKeys?.length > 0 && blobStore) {
+            await blobStore.deleteMany(delRes.blobKeys);
+          }
+          return json(200, { ok: true, deleted: delRes.deleted });
+        }
+
+        // POST /sync/:ws/ack
+        if (resource === 'ack' && request.method === 'POST') {
+          const body = await readJson(16384);
+          const deviceId = body?.deviceId || body?.device_id;
+          if (!deviceId || !DEVICE_ID_RE.test(deviceId)) {
+            return error(400, 'Valid deviceId required');
+          }
+          await db.workspaces.ackVector({ workspaceId, deviceId, vector: body.vector || {} });
+          return json(200, { ok: true });
+        }
+
+        // DELETE /sync/:ws/devices/:dev (Remove device)
+        if (resource === 'devices' && deviceParam && request.method === 'DELETE') {
+          const teacher = await authenticateTeacher();
+          const deviceToken = request.headers.get('x-kb-device-token');
+          const devRow = await db.workspaces.getDevice(workspaceId, deviceParam);
+
+          let authorized = false;
+          if (teacher && teacher.id === ws.created_by) {
+            authorized = true;
+          } else if (devRow && devRow.device_token_hash && deviceToken) {
+            if (sameHash(devRow.device_token_hash, hashToken(deviceToken))) {
+              authorized = true;
+            }
+          } else if (!devRow) {
+            authorized = true;
+          }
+
+          if (!authorized) {
+            return error(403, 'Forbidden: you cannot delete this device');
+          }
+
+          const delRes = await db.workspaces.deleteDevice(workspaceId, deviceParam);
+          if (delRes.blobKeys?.length > 0 && blobStore) {
+            await blobStore.deleteMany(delRes.blobKeys);
+          }
+          return json(200, { ok: true, deleted: delRes.deleted });
+        }
+
+        // Chunks
         if (resource === 'chunks' && !deviceParam) {
           if (request.method === 'POST') {
             const body = await readJson(MAX_SYNC_CHUNK_SIZE);
             const start = Number(body?.start);
             const end = Number(body?.end);
-            if (!body || !DEVICE_ID_RE.test(body.device_id || '') || !Number.isInteger(start) || !Number.isInteger(end)
+            const deviceId = body?.device_id;
+            if (!body || !DEVICE_ID_RE.test(deviceId || '') || !Number.isInteger(start) || !Number.isInteger(end)
               || start < 1 || end < start || typeof body.body !== 'string') {
               return error(400, 'Invalid sync chunk');
             }
-            const { created } = await db.sync.putChunk({ workspaceId, deviceId: body.device_id, start, end, body: body.body });
+
+            // Workspace device registration / token check
+            const deviceToken = request.headers.get('x-kb-device-token');
+            const devRow = await db.workspaces.getDevice(workspaceId, deviceId);
+            if (devRow && devRow.device_token_hash && deviceToken) {
+              if (!sameHash(devRow.device_token_hash, hashToken(deviceToken))) {
+                return error(403, 'Forbidden: invalid device token');
+              }
+            } else if (!devRow && deviceToken) {
+              await db.workspaces.registerDevice({ workspaceId, deviceId, deviceTokenHash: hashToken(deviceToken) });
+            } else if (!devRow) {
+              await db.workspaces.registerDevice({ workspaceId, deviceId });
+            }
+
+            if (typeof db.workspaces.touchDevice === 'function') {
+              await db.workspaces.touchDevice(workspaceId, deviceId);
+            }
+
+            // Quota check against workspace owner
+            const chunkSize = new TextEncoder().encode(body.body).length;
+            const teacher = await db.teachers.getById(ws.created_by);
+            const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
+            const quotaBytes = quotaMb * 1024 * 1024;
+            if (teacher && teacher.bytes_used + chunkSize > quotaBytes) {
+              return json(507, { error: 'quota_exceeded', used: teacher.bytes_used, limit: quotaBytes });
+            }
+
+            const chunkSha256 = sha256(body.body);
+            const bodyKey = `chunk_${workspaceId}_${deviceId}_${start}_${end}`;
+
+            if (!blobStore) {
+              return error(503, 'Blob storage service unavailable');
+            }
+            await blobStore.put(bodyKey, body.body, 'application/json');
+
+            const { created } = await db.sync.putChunk({
+              workspaceId,
+              deviceId,
+              start,
+              end,
+              bodyKey,
+              size: chunkSize,
+              sha256: chunkSha256
+            });
+
+            if (created && teacher && typeof db.teachers.adjustBytesUsed === 'function') {
+              await db.teachers.adjustBytesUsed(teacher.id, chunkSize);
+            }
+
             return json(created ? 201 : 200, { ok: true });
           }
+
           if (request.method === 'GET') {
             const after = Math.max(0, parseInt(url.searchParams.get('after') || '0', 10) || 0);
-            return json(200, await db.sync.listChunks(workspaceId, { after }));
+            const page = await db.sync.listChunks(workspaceId, { after });
+
+            const items = [];
+            for (const item of page.items) {
+              let bodyStr = item.body;
+              if (!bodyStr && item.body_key && blobStore) {
+                const blob = await blobStore.get(item.body_key);
+                if (blob) {
+                  bodyStr = (blob.data instanceof Uint8Array) ? Buffer.from(blob.data).toString('utf8') : String(blob.data);
+                }
+              }
+              items.push({
+                seq: item.seq,
+                device_id: item.device_id,
+                start: item.start,
+                end: item.end,
+                body: bodyStr || ''
+              });
+            }
+
+            return json(200, { items, more: page.more });
           }
+
           if (request.method === 'DELETE') {
             const deviceId = url.searchParams.get('device_id') || '';
             const through = parseInt(url.searchParams.get('through') || '', 10);
             if (!DEVICE_ID_RE.test(deviceId) || !Number.isInteger(through)) {
               return error(400, 'device_id and through are required');
             }
-            return json(200, { deleted: await db.sync.deleteChunks(workspaceId, deviceId, through) });
+
+            const deviceToken = request.headers.get('x-kb-device-token');
+            const devRow = await db.workspaces.getDevice(workspaceId, deviceId);
+            if (devRow && devRow.device_token_hash && deviceToken) {
+              if (!sameHash(devRow.device_token_hash, hashToken(deviceToken))) {
+                return error(403, 'Forbidden: invalid device token');
+              }
+            }
+
+            const delRes = await db.sync.deleteChunks(workspaceId, deviceId, through);
+            if (delRes.blobKeys?.length > 0 && blobStore) {
+              await blobStore.deleteMany(delRes.blobKeys);
+            }
+            return json(200, { deleted: delRes.deleted });
           }
         }
 
+        // Snapshots
         if (resource === 'snapshots') {
           if (!deviceParam && request.method === 'GET') {
             return json(200, { items: await db.sync.listSnapshots(workspaceId) });
           }
+
           if (deviceParam && request.method === 'PUT') {
             const body = await readJson(MAX_SYNC_SNAPSHOT_SIZE);
             if (!body || typeof body.body !== 'string' || typeof body.created_at !== 'string') {
               return error(400, 'Invalid snapshot');
             }
-            await db.sync.putSnapshot({ workspaceId, deviceId: deviceParam, createdAt: body.created_at, body: body.body });
+
+            const deviceToken = request.headers.get('x-kb-device-token');
+            const devRow = await db.workspaces.getDevice(workspaceId, deviceParam);
+            if (devRow && devRow.device_token_hash && deviceToken) {
+              if (!sameHash(devRow.device_token_hash, hashToken(deviceToken))) {
+                return error(403, 'Forbidden: invalid device token');
+              }
+            } else if (!devRow && deviceToken) {
+              await db.workspaces.registerDevice({ workspaceId, deviceId: deviceParam, deviceTokenHash: hashToken(deviceToken) });
+            } else if (!devRow) {
+              await db.workspaces.registerDevice({ workspaceId, deviceId: deviceParam });
+            }
+
+            if (typeof db.workspaces.touchDevice === 'function') {
+              await db.workspaces.touchDevice(workspaceId, deviceParam);
+            }
+
+            const snapSize = new TextEncoder().encode(body.body).length;
+            const teacher = await db.teachers.getById(ws.created_by);
+            const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
+            const quotaBytes = quotaMb * 1024 * 1024;
+            if (teacher && teacher.bytes_used + snapSize > quotaBytes) {
+              return json(507, { error: 'quota_exceeded', used: teacher.bytes_used, limit: quotaBytes });
+            }
+
+            const snapSha256 = sha256(body.body);
+            const bodyKey = `snapshot_${workspaceId}_${deviceParam}_${snapSha256.slice(0, 16)}`;
+
+            if (!blobStore) {
+              return error(503, 'Blob storage service unavailable');
+            }
+            await blobStore.put(bodyKey, body.body, 'application/json');
+
+            const { oldKey } = await db.sync.putSnapshot({
+              workspaceId,
+              deviceId: deviceParam,
+              createdAt: body.created_at,
+              bodyKey,
+              size: snapSize,
+              sha256: snapSha256
+            });
+
+            if (oldKey && blobStore) {
+              await blobStore.delete(oldKey);
+            }
+
             return json(200, { ok: true });
           }
+
           if (deviceParam && request.method === 'GET') {
             const row = await db.sync.getSnapshot(workspaceId, deviceParam);
             if (!row) {
               return error(404, 'Snapshot not found');
             }
-            return json(200, row);
+            let snapBody = '';
+            if (row.body_key && blobStore) {
+              const blob = await blobStore.get(row.body_key);
+              if (blob) {
+                snapBody = (blob.data instanceof Uint8Array) ? Buffer.from(blob.data).toString('utf8') : String(blob.data);
+              }
+            }
+            return json(200, { created_at: row.created_at, body: snapBody });
           }
         }
 
@@ -601,100 +1026,99 @@ export function createRelayFetchHandler(options = {}) {
           return error(403, 'Forbidden: missing or wrong drop secret');
         }
 
-        const parsed = await readJson(16384);
+        const parsed = await readJson(8192);
         const { sha256: fileHash, mime, ext, size } = parsed || {};
         if (!fileHash || !/^[a-f0-9]{64}$/i.test(fileHash)) {
           return error(400, 'Valid 64-hex sha256 required');
         }
-        const fileSize = parseInt(size, 10);
-        if (isNaN(fileSize) || fileSize <= 0) {
-          return error(400, 'Valid positive size required');
-        }
-        if (fileSize > MAX_STUDENT_MEDIA_SIZE) {
-          return error(413, 'File size exceeds 25MB limit');
-        }
 
-        const safeExt = String(ext || (mime === 'image/webp' ? 'webp' : mime === 'audio/webm' ? 'webm' : 'bin')).toLowerCase().replace(/[^a-z0-9]/gi, '');
+        const safeExt = String(ext || 'bin').toLowerCase().replace(/[^a-z0-9]/gi, '');
         if (!ALLOWED_MEDIA_EXTS.has(safeExt)) {
           return error(400, `File extension .${safeExt} is not permitted`);
         }
-        const safeMime = String(mime || 'application/octet-stream').toLowerCase().split(';')[0].trim();
-        if (!isAllowedMime(safeMime)) {
-          return error(400, `Content-Type ${safeMime} is not permitted`);
+
+        const fileSize = Number(size) || 0;
+        if (fileSize > MAX_STUDENT_MEDIA_SIZE) {
+          return error(413, `File exceeds maximum allowed student media size (${MAX_STUDENT_MEDIA_SIZE} bytes)`);
         }
 
-        try {
-          if (typeof db?.checkMediaQuota === 'function') {
-            await db.checkMediaQuota(dropId, fileSize);
-          } else if (typeof db?.dropMedia?.checkQuota === 'function') {
-            await db.dropMedia.checkQuota(dropId, fileSize);
+        if (fileSize > 0) {
+          try {
+            if (typeof db?.checkMediaQuota === 'function') {
+              await db.checkMediaQuota(dropId, fileSize);
+            } else if (typeof db?.dropMedia?.checkQuota === 'function') {
+              await db.dropMedia.checkQuota(dropId, fileSize);
+            }
+          } catch (err) {
+            if (err.code === 'QUOTA_EXCEEDED') {
+              return error(413, 'Media quota exceeded for this drop box');
+            }
+            throw err;
           }
-        } catch (err) {
-          if (err.code === 'QUOTA_EXCEEDED') {
-            return error(413, 'Media quota exceeded for this drop box');
-          }
-          throw err;
         }
 
         const filename = `${fileHash}.${safeExt}`;
+        const objectKey = `assets/${filename}`;
+
         const host = request.headers.get('host') || url.host || `localhost:${DEFAULT_PORT}`;
         const proto = url.protocol === 'https:' ? 'https' : (request.headers.get('x-forwarded-proto') || 'http');
+
+        const endpoint = (cdnConfig.endpoint || '').replace(/\/+$/, '');
+        const bucket = cdnConfig.bucket || '';
+        const accessKeyId = cdnConfig.accessKeyId;
+        const secretAccessKey = cdnConfig.secretAccessKey;
+        const region = cdnConfig.region || 'auto';
         const publicBase = (cdnConfig.publicUrl || '').replace(/\/+$/, '');
 
+        if (endpoint && accessKeyId && secretAccessKey) {
+          const presignedUrl = generateS3PresignedPutUrl({
+            endpoint,
+            bucket,
+            key: objectKey,
+            accessKeyId,
+            secretAccessKey,
+            region,
+            contentType: EXT_TO_MIME[safeExt] || 'application/octet-stream'
+          });
+          const publicUrl = publicBase ? `${publicBase}/${objectKey}` : `${endpoint}/${bucket ? bucket + '/' : ''}${objectKey}`;
+          return json(200, {
+            upload_url: presignedUrl,
+            public_url: publicUrl,
+            method: 'PUT',
+            headers: { 'Content-Type': EXT_TO_MIME[safeExt] || 'application/octet-stream' }
+          });
+        }
+
         const exp = Math.floor(Date.now() / 1000) + 3600;
-        const signingSecret = await resolveSigningSecret();
-        const sigWithMax = createHmac('sha256', signingSecret).update(`${filename}|${exp}|${dropId}|${fileSize}`).digest('hex');
-        const legacySig = createHmac('sha256', signingSecret).update(`${filename}|${exp}|${dropId}`).digest('hex');
+        let signingSecret;
+        try {
+          signingSecret = await resolveSigningSecret();
+        } catch (_) {
+          return error(500, 'Media signing secret is not configured');
+        }
+        const sig = createHmac('sha256', signingSecret).update(`${filename}|${exp}|${dropId}|${MAX_STUDENT_MEDIA_SIZE}`).digest('hex');
 
-        const uploadUrl = `${proto}://${host}/api/v1/media/upload?key=${encodeURIComponent(filename)}&exp=${exp}&sig=${sigWithMax}&drop_id=${encodeURIComponent(dropId)}&max_size=${fileSize}`;
+        const uploadUrl = `${proto}://${host}/api/v1/media/upload?key=${encodeURIComponent(filename)}&exp=${exp}&sig=${sig}&drop_id=${encodeURIComponent(dropId)}&max_size=${MAX_STUDENT_MEDIA_SIZE}`;
         const publicUrl = publicBase ? `${publicBase}/${filename}` : `${proto}://${host}/api/v1/media/file/${encodeURIComponent(filename)}`;
-
         return json(200, {
           upload_url: uploadUrl,
           public_url: publicUrl,
           method: 'PUT',
-          headers: { 'Content-Type': mime || 'application/octet-stream' }
+          headers: { 'Content-Type': EXT_TO_MIME[safeExt] || 'application/octet-stream' }
         });
       }
 
       // -------------------------------------------------------------
-      // 4. POST /drops
-      // -------------------------------------------------------------
-      if (request.method === 'POST' && pathname === '/drops') {
-        const teacher = await authenticateTeacher();
-        if (!teacher) {
-          return error(401, 'Unauthorized: valid teacher token required');
-        }
-
-        const parsed = await readJson(MAX_PAYLOAD_SIZE);
-        if (!parsed || !parsed.assignment_id) {
-          return error(400, 'Missing assignment_id');
-        }
-
-        const dropId = randomBytes(12).toString('hex');
-        const dropSecret = randomBytes(24).toString('hex');
-        await db.drops.create({
-          id: dropId,
-          teacherId: teacher.id,
-          assignmentId: parsed.assignment_id,
-          publishVersion: parsed.publish_version ?? null,
-          expiresAt: parsed.expires_at || null,
-          secretHash: sha256(dropSecret)
-        });
-
-        return json(201, { drop_id: dropId, drop_secret: dropSecret });
-      }
-
-      // -------------------------------------------------------------
-      // 5. POST /drops/:dropId/submissions
+      // Submissions (POST to drop, GET drop submissions, GET stats)
       // -------------------------------------------------------------
       const dropSubmitMatch = pathname.match(/^\/drops\/([A-Za-z0-9_\-]+)\/submissions$/);
       if (request.method === 'POST' && dropSubmitMatch) {
-        if (!limiter.isAllowed(clientIp)) {
+        const dropId = dropSubmitMatch[1];
+        const subRateKey = `sub:${dropId}:${clientIp}`;
+        if (!limiter.isAllowed(subRateKey, SUBMISSION_RATE_LIMIT_PER_MIN)) {
           return error(429, 'Rate limit exceeded. Please wait a minute before submitting again.');
         }
 
-        const dropId = dropSubmitMatch[1];
         const drop = await db.drops.get(dropId);
         if (!drop) {
           return error(404, 'Drop box not found');
@@ -712,21 +1136,51 @@ export function createRelayFetchHandler(options = {}) {
           return error(400, 'Invalid submission format: envelope must start with KBSUB1.');
         }
 
+        const subBytes = new TextEncoder().encode(trimmed).length;
         const ciphertextSha256 = createHash('sha256').update(trimmed).digest('hex');
         const receiptId = ciphertextSha256.slice(0, 8).toUpperCase();
-        // Deterministic submissionId so retries of identical submission do not consume quota
         const submissionId = createHash('sha256').update(`${dropId}:${trimmed}`).digest('hex').slice(0, 32);
+
+        let bodyKey = null;
+        let textToStore = trimmed;
+
+        if (subBytes >= INLINE_SUBMISSION_THRESHOLD) {
+          bodyKey = `sub_${submissionId}`;
+          textToStore = null;
+          if (!blobStore) {
+            return error(503, 'Blob storage service unavailable');
+          }
+          await blobStore.put(bodyKey, trimmed, 'text/plain');
+        }
+
         try {
           const resEntry = await db.submissions.create({
             id: submissionId,
             dropId,
-            text: trimmed
+            text: textToStore,
+            bodyKey,
+            size: subBytes
           });
 
-          const signingSecret = await resolveSigningSecret();
+          let signingSecret;
+          try {
+            signingSecret = await resolveSigningSecret();
+          } catch (_) {
+            return error(500, 'Media signing secret is not configured');
+          }
           const relayReceiptSig = createHmac('sha256', signingSecret)
             .update(`${dropId}|${ciphertextSha256}|${resEntry.receivedAt}`)
             .digest('hex');
+
+          if (resEntry.duplicate) {
+            return json(200, {
+              duplicate: true,
+              receipt_id: receiptId,
+              received_at: resEntry.receivedAt,
+              ciphertext_sha256: ciphertextSha256,
+              relay_receipt_sig: relayReceiptSig
+            });
+          }
 
           return json(201, {
             receipt_id: receiptId,
@@ -742,7 +1196,7 @@ export function createRelayFetchHandler(options = {}) {
         }
       }
 
-      // 6. GET /drops/:dropId/submissions
+      // GET /drops/:dropId/submissions
       if (request.method === 'GET' && dropSubmitMatch) {
         const teacher = await authenticateTeacher();
         if (!teacher) {
@@ -754,16 +1208,38 @@ export function createRelayFetchHandler(options = {}) {
         if (!drop) {
           return error(404, 'Drop box not found');
         }
+        if (drop.expired) {
+          return error(410, 'Drop box expired');
+        }
         if (drop.teacher_id !== teacher.id) {
           return error(403, 'Forbidden: you do not own this drop box');
         }
 
         const since = url.searchParams.get('since') || undefined;
-        const items = await db.submissions.list(dropId, { since });
+        const after = url.searchParams.get('after') || undefined;
+        const limit = parseInt(url.searchParams.get('limit') || '100', 10);
+        const rawItems = await db.submissions.list(dropId, { since, after, limit });
+
+        const items = [];
+        for (const item of rawItems) {
+          let text = item.text;
+          if (!text && item.body_key && blobStore) {
+            const blob = await blobStore.get(item.body_key);
+            if (blob) {
+              text = (blob.data instanceof Uint8Array) ? Buffer.from(blob.data).toString('utf8') : String(blob.data);
+            }
+          }
+          items.push({
+            id: item.id,
+            received_at: item.received_at,
+            text: text || ''
+          });
+        }
+
         return json(200, { items });
       }
 
-      // 6b. GET /drops/:dropId/stats
+      // GET /drops/:dropId/stats
       const dropStatsMatch = pathname.match(/^\/drops\/([A-Za-z0-9_\-]+)\/stats$/);
       if (request.method === 'GET' && dropStatsMatch) {
         const teacher = await authenticateTeacher();
@@ -776,6 +1252,9 @@ export function createRelayFetchHandler(options = {}) {
         if (!drop) {
           return error(404, 'Drop box not found');
         }
+        if (drop.expired) {
+          return error(410, 'Drop box expired');
+        }
         if (drop.teacher_id !== teacher.id) {
           return error(403, 'Forbidden: you do not own this drop box');
         }
@@ -783,20 +1262,20 @@ export function createRelayFetchHandler(options = {}) {
         const mediaStats = (typeof db.dropMedia?.getStats === 'function')
           ? await db.dropMedia.getStats(dropId)
           : { count: 0, totalSize: 0 };
-        const subList = (typeof db.submissions?.list === 'function')
-          ? await db.submissions.list(dropId)
-          : [];
+        const subCount = (typeof db.submissions?.count === 'function')
+          ? await db.submissions.count(dropId)
+          : (await db.submissions.list(dropId)).length;
 
         return json(200, {
           drop_id: dropId,
-          submissions_count: subList.length,
+          submissions_count: subCount,
           media_count: mediaStats.count || 0,
           media_bytes: mediaStats.totalSize || 0,
           expires_at: drop.expires_at || null
         });
       }
 
-      // 7. DELETE /drops/:dropId
+      // DELETE /drops/:dropId
       const dropDeleteMatch = pathname.match(/^\/drops\/([A-Za-z0-9_\-]+)$/);
       if (request.method === 'DELETE' && dropDeleteMatch) {
         const teacher = await authenticateTeacher();
@@ -805,90 +1284,128 @@ export function createRelayFetchHandler(options = {}) {
         }
 
         const dropId = dropDeleteMatch[1];
-        const deleted = await db.drops.delete(dropId, teacher.id);
+        const { deleted, blobKeys } = await db.drops.delete(dropId, teacher.id);
         if (!deleted) {
           return error(404, 'Drop not found or not owned by you');
         }
 
-        // Clean up any associated media blobs if mediaStore is available
-        if (mediaStore && typeof mediaStore.deleteMany === 'function') {
-          try {
-            // Check if dropMedia rows can be retrieved or drop was pruned
-          } catch (_) {}
+        if (blobStore && blobKeys?.length > 0) {
+          await blobStore.deleteMany(blobKeys);
         }
 
         return new Response(null, { status: 204, headers: corsHeaders });
       }
 
       // -------------------------------------------------------------
-      // 8. PUT /api/feed/:courseId or /feed/:courseId
+      // Course Feeds: PUT /feed/:id, GET /feed/:id, DELETE /feed/:id
       // -------------------------------------------------------------
       const feedMatch = pathname.match(/^(?:\/api)?\/feed\/([A-Za-z0-9_\-]+)$/);
-      if (request.method === 'PUT' && feedMatch) {
-        const teacher = await authenticateTeacher();
-        if (!teacher) {
-          return error(401, 'Unauthorized: valid teacher token required');
-        }
-
+      if (feedMatch) {
         const courseId = feedMatch[1];
-        const parsed = await readJson(MAX_PAYLOAD_SIZE);
-        if (!parsed) {
-          return error(400, 'Invalid JSON body');
-        }
 
-        const ciphertext = typeof parsed === 'string' ? parsed : parsed.ciphertext;
-        if (!ciphertext) {
-          return error(400, 'Missing ciphertext in feed payload');
-        }
-
-        const etag = parsed.etag || createHash('sha256').update(ciphertext).digest('hex').slice(0, 16);
-        try {
-          await db.feeds.put({
-            courseId,
-            teacherId: teacher.id,
-            ciphertext,
-            etag,
-            updatedAt: new Date().toISOString()
-          });
-        } catch (err) {
-          if (err.code === 'FORBIDDEN' || err.message === 'FEED_OWNERSHIP_CONFLICT') {
-            return error(403, 'Forbidden: you do not own this course feed');
+        // PUT /feed/:courseId
+        if (request.method === 'PUT') {
+          const teacher = await authenticateTeacher();
+          if (!teacher) {
+            return error(401, 'Unauthorized: valid teacher token required');
           }
-          throw err;
-        }
 
-        return json(200, { ok: true, etag }, { 'ETag': `"${etag}"` });
-      }
+          const parsed = await readJson(MAX_PAYLOAD_SIZE);
+          if (!parsed) {
+            return error(400, 'Invalid JSON body');
+          }
 
-      // 9. GET /api/feed/:courseId or /feed/:courseId
-      if (request.method === 'GET' && feedMatch) {
-        const courseId = feedMatch[1];
-        const feed = await db.feeds.get(courseId);
-        if (!feed) {
-          return error(404, 'Course feed not found');
-        }
+          const ciphertext = typeof parsed === 'string' ? parsed : parsed.ciphertext;
+          if (!ciphertext) {
+            return error(400, 'Missing ciphertext in feed payload');
+          }
 
-        const ifNoneMatch = request.headers.get('if-none-match');
-        if (ifNoneMatch && (ifNoneMatch === feed.etag || ifNoneMatch === `"${feed.etag}"`)) {
-          return new Response(null, {
-            status: 304,
-            headers: {
-              'ETag': `"${feed.etag}"`,
-              ...corsHeaders
+          // Feed TTL refreshed on each publish
+          const defaultExp = new Date(Date.now() + DEFAULT_RETENTION_DAYS * 86400000).toISOString();
+          const expiresAt = parsed.expires_at || defaultExp;
+
+          // Quota check
+          const feedBytes = new TextEncoder().encode(ciphertext).length;
+          const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
+          const quotaBytes = quotaMb * 1024 * 1024;
+          if (teacher.bytes_used + feedBytes > quotaBytes) {
+            return json(507, { error: 'quota_exceeded', used: teacher.bytes_used, limit: quotaBytes });
+          }
+
+          const etag = parsed.etag || createHash('sha256').update(ciphertext).digest('hex').slice(0, 16);
+          try {
+            await db.feeds.put({
+              courseId,
+              teacherId: teacher.id,
+              ciphertext,
+              etag,
+              updatedAt: new Date().toISOString(),
+              expiresAt
+            });
+          } catch (err) {
+            if (err.code === 'FORBIDDEN' || err.message === 'FEED_OWNERSHIP_CONFLICT') {
+              return error(403, 'Forbidden: you do not own this course feed');
             }
-          });
+            throw err;
+          }
+
+          return json(200, { ok: true, etag }, { 'ETag': `"${etag}"` });
         }
 
-        return json(200, {
-          course_id: feed.courseId,
-          ciphertext: feed.ciphertext,
-          etag: feed.etag,
-          updated_at: feed.updatedAt
-        }, { 'ETag': `"${feed.etag}"` });
+        // GET /feed/:courseId
+        if (request.method === 'GET') {
+          const feedRateKey = `feed:${courseId}:${clientIp}`;
+          if (!limiter.isAllowed(feedRateKey, 60)) {
+            return error(429, 'Rate limit exceeded. Please wait a minute before querying feed again.');
+          }
+
+          const feed = await db.feeds.get(courseId);
+          if (!feed) {
+            return error(404, 'Course feed not found');
+          }
+
+          const ifNoneMatch = request.headers.get('if-none-match');
+          if (ifNoneMatch && (ifNoneMatch === feed.etag || ifNoneMatch === `"${feed.etag}"`)) {
+            return new Response(null, {
+              status: 304,
+              headers: {
+                'ETag': `"${feed.etag}"`,
+                ...corsHeaders
+              }
+            });
+          }
+
+          return json(200, {
+            course_id: feed.courseId,
+            ciphertext: feed.ciphertext,
+            etag: feed.etag,
+            updated_at: feed.updatedAt
+          }, { 'ETag': `"${feed.etag}"` });
+        }
+
+        // DELETE /feed/:courseId
+        if (request.method === 'DELETE') {
+          const teacher = await authenticateTeacher();
+          if (!teacher) {
+            return error(401, 'Unauthorized: valid teacher token required');
+          }
+          try {
+            const deleted = await db.feeds.delete(courseId, teacher.id);
+            if (!deleted) {
+              return error(404, 'Course feed not found');
+            }
+            return new Response(null, { status: 204, headers: corsHeaders });
+          } catch (err) {
+            if (err.code === 'FORBIDDEN' || err.message === 'FEED_OWNERSHIP_CONFLICT') {
+              return error(403, 'Forbidden: you do not own this course feed');
+            }
+            throw err;
+          }
+        }
       }
 
       // -------------------------------------------------------------
-      // 10. Blind Dead-Drop Feedback Mailbox (KB-DROP-FB-001)
+      // Feedback Drops
       // -------------------------------------------------------------
       const feedbackMatch = pathname.match(/^(?:\/api)?\/feedback\/([A-Za-z0-9_\-]+)$/);
       if (feedbackMatch) {
@@ -912,13 +1429,21 @@ export function createRelayFetchHandler(options = {}) {
           }
 
           const expiresAt = parsed.expires_at || new Date(Date.now() + 30 * 86400000).toISOString();
-          await db.feedbackDrops.put({ dropId, teacherId: teacher.id, ciphertext, expiresAt });
+          try {
+            await db.feedbackDrops.put({ dropId, teacherId: teacher.id, ciphertext, expiresAt });
+          } catch (err) {
+            if (err.code === 'FORBIDDEN' || err.message === 'FEEDBACK_DROP_OWNERSHIP_CONFLICT') {
+              return error(403, 'Forbidden: feedback drop ownership conflict');
+            }
+            throw err;
+          }
           return json(200, { ok: true, drop_id: dropId, expires_at: expiresAt });
         }
 
         // GET /feedback/:dropId
         if (request.method === 'GET') {
-          if (!limiter.isAllowed(clientIp)) {
+          const fbRateKey = `fb:${dropId}:${clientIp}`;
+          if (!limiter.isAllowed(fbRateKey, 60)) {
             return error(429, 'Rate limit exceeded. Please wait a minute before querying feedback again.');
           }
 
@@ -943,15 +1468,22 @@ export function createRelayFetchHandler(options = {}) {
           if (!teacher) {
             return error(401, 'Unauthorized: valid teacher token required');
           }
-          const deleted = await db.feedbackDrops.delete(dropId, teacher.id);
-          if (!deleted) {
-            return error(404, 'Feedback drop not found or not owned by you');
+          try {
+            const deleted = await db.feedbackDrops.delete(dropId, teacher.id);
+            if (!deleted) {
+              return error(404, 'Feedback drop not found or not owned by you');
+            }
+            return new Response(null, { status: 204, headers: corsHeaders });
+          } catch (err) {
+            if (err.code === 'FORBIDDEN' || err.message === 'FEEDBACK_DROP_OWNERSHIP_CONFLICT') {
+              return error(403, 'Forbidden: feedback drop ownership conflict');
+            }
+            throw err;
           }
-          return new Response(null, { status: 204, headers: corsHeaders });
         }
       }
 
-      return error(404, 'Route not found');
+      return error(404, 'Not found');
     } catch (err) {
       if (err.code === 413 || err.message === 'PAYLOAD_TOO_LARGE') {
         return error(413, 'Payload too large');

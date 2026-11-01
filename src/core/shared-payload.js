@@ -8,6 +8,7 @@
  * exports must keep opening) and strict about value types.
  */
 import { Sanitizer } from './sanitizer.js';
+import { generateUUID } from '../utils/uuid.js';
 
 export const SHARE_TYPES = new Set([
   'flashcards', 'timeline', 'video', 'gradebook', 'student_grade_report', 'assignment', 'assignment_feedback', 'course_feed',
@@ -81,5 +82,5 @@ export function normalizeSharedEnvelope(envelope) {
  */
 export function toLibraryRecord(payload) {
   const { id: _id, class_id: _cls, created_at: _c, updated_at: _u, ...rest } = payload || {};
-  return { ...rest, id: crypto.randomUUID(), class_id: null };
+  return { ...rest, id: generateUUID(), class_id: null };
 }

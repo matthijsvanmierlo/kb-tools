@@ -117,9 +117,19 @@ export class DraftRoamer {
     this._timer = null;
     if (!this._pending) return;
     const draft = this._pending;
-    this._pending = null;
-    const secrets = await this._getSecrets();
-    await this.transport.putDraft(this.dropId, secrets.id, await sealDraft(secrets, draft), this.dropOpts);
+    try {
+      const secrets = await this._getSecrets();
+      await this.transport.putDraft(this.dropId, secrets.id, await sealDraft(secrets, draft), this.dropOpts);
+      if (this._pending === draft) {
+        this._pending = null;
+      }
+      this._retryDelay = 1000;
+    } catch (err) {
+      this._pending = draft;
+      this._retryDelay = Math.min((this._retryDelay || 1000) * 2, 30000);
+      this._timer = setTimeout(() => this.flush().catch(() => {}), this._retryDelay);
+      throw err;
+    }
   }
 
   /** After handing in: overwrite the draft so another device doesn't offer stale answers */

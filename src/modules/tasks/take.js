@@ -393,7 +393,13 @@ export async function renderTaskTake(params = {}, router = null, container = nul
       const priorDraft = loadLocalDraft();
       if (priorDraft) {
         if (priorDraft.publish_version !== payload.publish_version) {
-          const keep = confirm('The teacher published an updated version of this assignment. Do you want to restore your previous draft?');
+          const { ConfirmDialog } = await import('../../utils/dialogs.js');
+          const keep = await ConfirmDialog.show({
+            title: 'Restore Draft?',
+            message: 'The teacher published an updated version of this assignment. Do you want to restore your previous draft?',
+            confirmText: 'Restore Draft',
+            cancelText: 'Start Fresh'
+          });
           if (keep && priorDraft.content) {
             state.content = priorDraft.content;
           }
@@ -760,10 +766,17 @@ export async function renderTaskTake(params = {}, router = null, container = nul
     });
 
     tabsContainer.querySelectorAll('.del-file-btn').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const idx = parseInt(btn.dataset.delIdx, 10);
-        if (confirm(`Delete file "${state.content.code_files[idx].filename}"?`)) {
+        const { ConfirmDialog } = await import('../../utils/dialogs.js');
+        const confirmed = await ConfirmDialog.show({
+          title: 'Delete File',
+          message: `Delete file "${state.content.code_files[idx].filename}"?`,
+          confirmText: 'Delete',
+          variant: 'danger'
+        });
+        if (confirmed) {
           state.content.code_files.splice(idx, 1);
           if (state.activeFileIndex >= state.content.code_files.length) {
             state.activeFileIndex = Math.max(0, state.content.code_files.length - 1);
@@ -778,8 +791,14 @@ export async function renderTaskTake(params = {}, router = null, container = nul
 
     const addBtn = container.querySelector('#task-add-file-btn');
     if (addBtn) {
-      addBtn.onclick = () => {
-        const name = prompt('File name (e.g. helper.py, utils.js):', 'helper.py');
+      addBtn.onclick = async () => {
+        const { PromptDialog } = await import('../../utils/dialogs.js');
+        const name = await PromptDialog.show({
+          title: 'Add File',
+          message: 'File name (e.g. helper.py, utils.js):',
+          defaultValue: 'helper.py',
+          placeholder: 'filename.ext'
+        });
         if (name && name.trim()) {
           const ext = name.split('.').pop().toLowerCase();
           const lang = ext === 'js' ? 'javascript' : (ext === 'html' ? 'html' : (ext === 'css' ? 'css' : (ext === 'java' ? 'java' : (ext === 'cpp' ? 'cpp' : 'python'))));

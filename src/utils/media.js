@@ -8,6 +8,7 @@
  */
 import { storage } from '../core/storage.js';
 import { getTransport, isCdnUploadConfigured } from '../core/transport.js';
+import { generateUUID } from './uuid.js';
 
 export const IMAGE_MAX_DIMENSION = 800;
 export const IMAGE_QUALITY = 0.75;
@@ -109,7 +110,7 @@ export async function startAudioClip({ maxMs = AUDIO_MAX_MS } = {}) {
 
 /** Store a media blob locally and return the URI to keep on the card */
 export async function storeMediaBlob(blob) {
-  const id = `media-${crypto.randomUUID()}`;
+  const id = `media-${generateUUID()}`;
   return storage.saveBinaryAsset(id, blob, { preferIndexedDb: true });
 }
 

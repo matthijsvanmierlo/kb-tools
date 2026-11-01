@@ -283,6 +283,38 @@ export class SubmissionCrypto {
   }
 
   /**
+   * Plural wrapper over buildRosterCard: map of card tag -> ciphertext for every student that has a code.
+   * Students without a personal code are skipped (they cannot be looked up by code).
+   * @param {string} scopeId - the assignment/task/video/course id the cards are scoped to
+   * @param {Array<object>} students
+   * @returns {Promise<Record<string,string>>}
+   */
+  static async buildRosterCards(scopeId, students = []) {
+    const cards = {};
+    for (const s of Array.isArray(students) ? students : []) {
+      if (!s?.access_code) continue;
+      const card = await this.buildRosterCard(scopeId, s, s.access_code);
+      if (card?.tag) cards[card.tag] = card.ct;
+    }
+    return cards;
+  }
+
+  /**
+   * Plural wrapper over accessCodeCheck: STUDENT_ID_UPPER -> check value for every student with a code.
+   * Accepts (scopeId, students) or the legacy (scopeId, salt, students) call shape.
+   * @returns {Promise<Record<string,string>>}
+   */
+  static async buildRosterChecks(scopeId, studentsOrSalt = [], maybeStudents) {
+    const students = Array.isArray(studentsOrSalt) ? studentsOrSalt : (Array.isArray(maybeStudents) ? maybeStudents : []);
+    const checks = {};
+    for (const s of students) {
+      if (!s?.access_code || !s?.student_id) continue;
+      checks[String(s.student_id).toUpperCase()] = await this.accessCodeCheck(scopeId, s.student_id, s.access_code);
+    }
+    return checks;
+  }
+
+  /**
    * Given an access code and a roster_cards map, attempt to unlock and return { sid, name }.
    * Returns null if no match or decryption fails.
    */

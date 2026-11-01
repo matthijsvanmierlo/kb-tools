@@ -584,10 +584,14 @@ export async function wipeStudentKioskSession({ verifySaved = true, confirmFn = 
         let confirmed = true;
         if (typeof confirmFn === 'function') {
           confirmed = await confirmFn();
-        } else if (typeof window !== 'undefined' && typeof window.confirm === 'function') {
-          confirmed = window.confirm(
-            'Are you sure you want to end your session? All local student grades, course links, and stored drafts will be permanently wiped from this device.'
-          );
+        } else {
+          const { ConfirmDialog } = await import('../../utils/dialogs.js');
+          confirmed = await ConfirmDialog.show({
+            title: 'End Session?',
+            message: 'Are you sure you want to end your session? All local student grades, course links, and stored drafts will be permanently wiped from this device.',
+            confirmText: 'End Session',
+            variant: 'danger'
+          });
         }
         if (!confirmed) return false;
       }

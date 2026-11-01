@@ -19,6 +19,8 @@ import {
 } from '../gradebook/grade-widgets.js';
 import { identityChip, syncTaskSubmissionsToGradebook } from './submissions.js';
 import { DraftHistoryTracker } from '../../core/draft-history.js';
+import { generateUUID } from '../../utils/uuid.js';
+import '../../components/rubric-picker.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 const num = (v, fallback = 0) => esc(Sanitizer.safeNumber(v, fallback));
@@ -97,7 +99,7 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
   let activeRichEditor = null;
 
   container.innerHTML = `
-    <div class="h-[calc(100vh-4rem)] flex flex-col bg-slate-100 overflow-hidden -mx-4 -my-6 sm:-mx-6 sm:-my-6">
+    <div class="h-[calc(100dvh-4rem)] flex flex-col bg-slate-100 overflow-hidden -mx-4 -my-6 sm:-mx-6 sm:-my-6">
       <!-- Top Navigation & Header -->
       <header class="bg-white border-b border-slate-200 px-5 py-3 flex items-center justify-between flex-shrink-0 z-10">
         <div class="flex items-center gap-3 min-w-0">
@@ -269,17 +271,28 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
             </section>
 
             <!-- 3. Rubric Scorer Section -->
-            ${rubric ? `
-              <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-                ${renderRubricSection({
-                  rubric,
-                  rubricEval: sub.review.rubric_eval || {},
-                  rubricComments: sub.review.rubric_comments || {},
-                  maxScore,
-                  isProficiency
-                })}
-              </div>
-            ` : ''}
+            <div id="rubric-scorer-container" class="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
+              ${rubric ? renderRubricSection({
+                rubric,
+                rubricEval: sub.review.rubric_eval || {},
+                rubricComments: sub.review.rubric_comments || {},
+                maxScore,
+                isProficiency
+              }) : `
+                <div class="flex items-center justify-between">
+                  <div>
+                    <span class="text-xs font-semibold text-slate-700 block">Grading Rubric</span>
+                    <span class="text-[11px] text-slate-400">No rubric attached to this task.</span>
+                  </div>
+                  <sl-button size="small" variant="default" id="btn-attach-rubric-on-spot">
+                    <sl-icon slot="prefix" name="grid-3x3"></sl-icon> Attach Rubric
+                  </sl-button>
+                </div>
+                <div id="inline-rubric-picker-mount" class="hidden mt-3 pt-3 border-t border-slate-100">
+                  <kb-rubric-picker id="drawer-rubric-picker" course-id="${esc(courseId || '')}"></kb-rubric-picker>
+                </div>
+              `}
+            </div>
 
             <!-- 4. Standards Evidence Section -->
             ${alignedStandards.length ? `
@@ -421,8 +434,9 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
         value: file.body || '',
         language: file.language || 'python',
         comments: commentsMap,
-        onLineClick: (lineNo) => {
-          const text = prompt(`Add comment on line ${lineNo}:`);
+        onLineClick: async (lineNo) => {
+          const { PromptDialog } = await import('../../utils/dialogs.js');
+          const text = await PromptDialog.show({ title: 'Add Comment', message: `Add comment on line ${lineNo}:`, placeholder: 'Comment' });
           if (text && text.trim()) {
             if (!sub.review.code_comments[fileId]) sub.review.code_comments[fileId] = [];
             sub.review.code_comments[fileId].push({
@@ -680,6 +694,39 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
     });
   }
 
+  // On-the-spot rubric attachment
+  const attachBtn = container.querySelector('#btn-attach-rubric-on-spot');
+  const pickerMount = container.querySelector('#inline-rubric-picker-mount');
+  const drawerPicker = container.querySelector('#drawer-rubric-picker');
+
+  attachBtn?.addEventListener('click', () => {
+    pickerMount?.classList.toggle('hidden');
+  });
+
+  drawerPicker?.addEventListener('rubric-change', async (e) => {
+    const selected = e.detail?.rubric;
+    if (!selected) return;
+    rubric = selected;
+    if (!task.grading) task.grading = {};
+    task.grading.rubric_id = rubric.id;
+    try {
+      await storage.table('tasks').put(task);
+      toast.success(`Attached rubric "${rubric.title}" to this assignment!`);
+    } catch (_) {}
+
+    const rContainer = container.querySelector('#rubric-scorer-container');
+    if (rContainer) {
+      rContainer.innerHTML = renderRubricSection({
+        rubric,
+        rubricEval: sub.review.rubric_eval || {},
+        rubricComments: sub.review.rubric_comments || {},
+        maxScore,
+        isProficiency
+      });
+      bindRubricPicks(rContainer);
+    }
+  });
+
   // Standards buttons
   container.querySelectorAll('[data-std]').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -775,7 +822,7 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
   container.querySelector('#btn-review-add-roster')?.addEventListener('click', async () => {
     if (!courseId) return;
     const newStudent = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       course_id: courseId,
       student_id: sub.student_id,
       full_name: sub.claimed_name || sub.student_name || sub.student_id,

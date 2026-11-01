@@ -198,7 +198,7 @@ describe('Phase 5: Student Report PDF, Batch ZIP & Encrypted Share Link', () => 
     expect(share.url).toContain('&d=');
 
     // The student had no code, so one was created and reported back to the teacher
-    expect(share.generatedAccessCode).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}$/);
+    expect(share.generatedAccessCode).toMatch(/^[0-9A-Z]{5}-[0-9A-Z]{5}$/i);
     expect(student.access_code).toBe(share.generatedAccessCode);
 
     const dParam = new URL(share.url).hash.split('d=')[1];

@@ -12,7 +12,8 @@ export const QUESTION_TYPE_META = {
   fill_blank: { label: 'Fill in the blanks', icon: 'textarea-t', help: 'Type [[blank]] where each gap goes.', auto: true },
   ordering: { label: 'Ordering', icon: 'sort-numeric-down', help: 'Students put items in the right order.', auto: true },
   matching: { label: 'Matching', icon: 'arrow-left-right', help: 'Match each prompt to an answer.', auto: true },
-  long_text: { label: 'Long response', icon: 'card-text', help: 'Open answer, graded by you.', auto: false }
+  long_text: { label: 'Long response', icon: 'card-text', help: 'Open answer, graded by you.', auto: false },
+  file_upload: { label: 'File upload', icon: 'file-earmark-arrow-up', help: 'File or drawing upload, graded by you.', auto: false }
 };
 
 export const QUESTION_TYPE_ORDER = Object.keys(QUESTION_TYPE_META);
@@ -39,7 +40,9 @@ export function createQuestion(type) {
     case 'matching':
       return { ...base, points: 3, scoring: 'partial', pairs: [{ id: generateUUID().slice(0, 8), left: '', right: '' }, { id: generateUUID().slice(0, 8), left: '', right: '' }], distractors: [] };
     case 'long_text':
-      return { ...base, points: 4, rubric_hint: '' };
+      return { ...base, points: 4, rubric_hint: '', rubric_id: null };
+    case 'file_upload':
+      return { ...base, points: 5, rubric_hint: '', rubric_id: null };
     default:
       return base;
   }

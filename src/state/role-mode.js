@@ -26,6 +26,14 @@ export class RoleMode {
   }
 
   /**
+   * Alias for hasChosen to verify configuration status.
+   * @returns {boolean}
+   */
+  static isConfigured() {
+    return this.hasChosen();
+  }
+
+  /**
    * Get current role mode ('teacher' | 'student'). Defaults to 'teacher'.
    * @returns {'teacher'|'student'}
    */

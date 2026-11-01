@@ -1031,7 +1031,7 @@ export function parseCSVWithValidation(csvString, schema, options = {}) {
       if (!frontVal && !backVal) continue;
 
       row = {
-        id: (typeof row.id === 'string' && row.id.length >= 32) ? row.id : crypto.randomUUID(),
+        id: (typeof row.id === 'string' && row.id.length >= 32) ? row.id : generateUUID(),
         type: row.type || 'text',
         front: { text: frontVal, ttsLang: row.tts_lang || (row.front?.ttsLang) || 'en-US' },
         back: { text: backVal, ttsLang: row.tts_lang || (row.back?.ttsLang) || 'en-US' }
@@ -1041,7 +1041,7 @@ export function parseCSVWithValidation(csvString, schema, options = {}) {
     // 2. Timelines: empty end_date to null and stringify numeric dates/titles
     if (schema === TimelineEventSchema || row.start_date !== undefined) {
       if (!row.id) {
-        row.id = crypto.randomUUID();
+        row.id = generateUUID();
       }
       if (row.title !== undefined && row.title !== null && typeof row.title !== 'string') {
         row.title = String(row.title).trim();

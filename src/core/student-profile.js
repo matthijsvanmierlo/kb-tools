@@ -101,8 +101,9 @@ export class StudentProfile {
         teacher_fingerprint: teacherFingerprint || existing.teacher_fingerprint || '',
         student_id: sid || existing.student_id || profile.defaultIdentity.student_id,
         full_name: name || existing.full_name || profile.defaultIdentity.full_name,
-        course_code: normCourseCode || existing.course_code || '',
-        access_code: normCode || existing.access_code || normCourseCode || '',
+        class_code: normCourseCode || existing.class_code || existing.course_code || '',
+        course_code: normCourseCode || existing.class_code || existing.course_code || '',
+        access_code: normCode || existing.access_code || '',
         updated_at: new Date().toISOString()
       };
     }

@@ -146,11 +146,17 @@ export class RelayTransport extends SyncTransport {
       return {
         ok: Boolean(data.ok !== false),
         serverVersion: data.version || null,
+        version: data.version || null,
+        backend: data.backend || null,
         features: data.features || ['payloads', 'drops']
       };
     } catch (err) {
       return { ok: false, error: err.message };
     }
+  }
+
+  async getHealth() {
+    return this.health();
   }
 
   async publishPayload({ kind, ciphertext, expiresAt, meta }) {
@@ -307,17 +313,65 @@ export class RelayTransport extends SyncTransport {
   // --- Replication workspaces (src/core/replication) ---
 
   async _syncRequest(path, { method = 'GET', workspaceKey = null, body } = {}) {
-    const headers = { 'Authorization': `Bearer ${this.token}` };
-    if (workspaceKey) headers['X-KB-Workspace-Key'] = workspaceKey;
-    if (body !== undefined) headers['Content-Type'] = 'application/json';
-    const res = await fetch(`${this.apiBase}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({ error: res.statusText }));
-      const e = new Error(err.error || `Sync request failed: ${res.status}`);
-      e.status = res.status;
-      throw e;
+    const isSnapshot = path.includes('/snapshots');
+    const timeoutMs = isSnapshot ? 120000 : 20000;
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`Sync request timed out after ${timeoutMs}ms`)), timeoutMs);
+
+    try {
+      const headers = { 'Authorization': `Bearer ${this.token}` };
+      if (workspaceKey) headers['X-KB-Workspace-Key'] = workspaceKey;
+      if (this.deviceId) headers['X-KB-Device-Id'] = this.deviceId;
+      if (this.deviceToken) headers['X-KB-Device-Token'] = this.deviceToken;
+      if (body !== undefined) headers['Content-Type'] = 'application/json';
+
+      const res = await fetch(`${this.apiBase}${path}`, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+        signal: controller.signal
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        const e = new Error(err.error || `Sync request failed: ${res.status}`);
+        e.status = res.status;
+        throw e;
+      }
+      return res.status === 204 ? null : res.json();
+    } finally {
+      clearTimeout(timer);
     }
-    return res.status === 204 ? null : res.json();
+  }
+
+  async getWhoami() {
+    return this._syncRequest('/whoami');
+  }
+
+  async getUsage() {
+    return this._syncRequest('/usage');
+  }
+
+  syncAckVector(workspaceId, workspaceKey, vector) {
+    return this._syncRequest(`/sync/${encodeURIComponent(workspaceId)}/ack`, {
+      method: 'POST',
+      workspaceKey,
+      body: { deviceId: this.deviceId, vector }
+    });
+  }
+
+  syncDeleteWorkspace(workspaceId, workspaceKey) {
+    return this._syncRequest(`/sync/${encodeURIComponent(workspaceId)}`, {
+      method: 'DELETE',
+      workspaceKey
+    });
+  }
+
+  syncDeleteDevice(workspaceId, workspaceKey, deviceId) {
+    return this._syncRequest(`/sync/${encodeURIComponent(workspaceId)}/devices/${encodeURIComponent(deviceId)}`, {
+      method: 'DELETE',
+      workspaceKey
+    });
   }
 
   /** @returns {Promise<{ workspaceId: string, workspaceKey: string }>} */
@@ -407,6 +461,15 @@ export async function setTransportConfig(config) {
     await storage.setMetadata('sync_config', null);
   }
   return await getTransport({ forceReload: true });
+}
+
+export async function clearTransportConfig() {
+  await storage.setMetadata('sync_config', null);
+  return await getTransport({ forceReload: true });
+}
+
+export async function getTransportConfig() {
+  return (await storage.getMetadata('sync_config')) || null;
 }
 
 /**

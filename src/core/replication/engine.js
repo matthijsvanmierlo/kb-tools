@@ -1,21 +1,11 @@
-/**
- * Replication engine - KB-CORE-010 (revision-2 §9 "Option B": per-teacher state sync)
- *
- * Moves the outbox (every local write, see storage.js) between devices through a "channel" that
- * only ever stores ciphertext: a school relay or the teacher's backup location (channels.js).
- *
- *  push      unpushed outbox rows → encrypted chunks named by (device, first seq, last seq)
- *  pull      other devices' chunks → applied with last-writer-wins on updated_at; device id breaks ties
- *  snapshot  a full encrypted copy plus the vector of chunks it already contains, so a new device
- *            (or one that fell behind pruned chunks) can catch up without the whole history
- *
- * One engine per channel. The personal channel carries everything; a class channel (co-teaching)
- * carries only records of one class, in both directions, so a co-teacher can never touch the rest
- * of a teacher's data. Grades both sides changed since the last sync are reported as conflicts.
- */
+import { mergeRecords, markRemoved } from './merge.js';
+import { HLC, hlc } from './hlc.js';
 import { scopeOf } from '../storage.js';
-import { bytesToB64, b64ToBytes } from '../submission-crypto.js';
-import { mergeRecords } from './merge.js';
+import { supportsCompressionStreams } from '../crypto-share.js';
+import { generateUUID } from '../../utils/uuid.js';
+import lzLib from 'lz-string';
+
+const LZString = lzLib.compressToUint8Array ? lzLib : (lzLib.default || lzLib);
 
 export const SYNC_TABLES = [
   'flashcards', 'timelines', 'video_assessments', 'gradebook_courses', 'gradebook_students',
@@ -25,8 +15,9 @@ export const SYNC_TABLES = [
 ];
 const SYNCED = new Set(SYNC_TABLES);
 
-export const CHUNK_VERSION = 1;
+export const CHUNK_VERSION = 2;
 export const MAX_OPS_PER_CHUNK = 500;
+export const TARGET_CHUNK_BYTES = 768 * 1024; // 768 KB target
 export const CONFLICTS_METADATA = 'sync_conflicts';
 const MAX_CONFLICTS = 200;
 
@@ -50,10 +41,75 @@ export function newChannelSecret() {
   return bytesToB64(crypto.getRandomValues(new Uint8Array(32)));
 }
 
+async function pipeBytes(bytes, transform) {
+  const writer = transform.writable.getWriter();
+  const written = writer.write(bytes).then(() => writer.close());
+  written.catch(() => {});
+  const reader = transform.readable.getReader();
+  const chunks = [];
+  let total = 0;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    total += value.byteLength;
+  }
+  await written;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
+async function compressPayload(bytes) {
+  if (supportsCompressionStreams()) {
+    try {
+      const compressed = await pipeBytes(bytes, new CompressionStream('gzip'));
+      const out = new Uint8Array(compressed.byteLength + 1);
+      out[0] = 0x02; // Format 2 = gzip
+      out.set(compressed, 1);
+      return out;
+    } catch (_) {}
+  }
+  // Fallback to lz-string
+  const compressed = LZString.compressToUint8Array
+    ? LZString.compressToUint8Array(dec.decode(bytes))
+    : enc.encode(LZString.compress(dec.decode(bytes)));
+  const out = new Uint8Array(compressed.byteLength + 1);
+  out[0] = 0x03; // Format 3 = lz-string
+  out.set(compressed, 1);
+  return out;
+}
+
+async function decompressPayload(bytes) {
+  if (!bytes || bytes.byteLength === 0) return new Uint8Array();
+  const format = bytes[0];
+  if (format === 0x02 && supportsCompressionStreams()) {
+    try {
+      return await pipeBytes(bytes.subarray(1), new DecompressionStream('gzip'));
+    } catch (_) {}
+  }
+  if (format === 0x03) {
+    try {
+      const decompressedStr = LZString.decompressFromUint8Array
+        ? LZString.decompressFromUint8Array(bytes.subarray(1))
+        : LZString.decompress(dec.decode(bytes.subarray(1)));
+      return enc.encode(decompressedStr);
+    } catch (_) {}
+  }
+  // Format 1 or uncompressed fallback
+  return bytes;
+}
+
 export async function sealJson(key, value, aad) {
+  const jsonBytes = enc.encode(JSON.stringify(value));
+  const payloadBytes = await compressPayload(jsonBytes);
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aad) }, key, enc.encode(JSON.stringify(value)));
-  return JSON.stringify({ iv: bytesToB64(iv), ct: bytesToB64(ct) });
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: enc.encode(aad) }, key, payloadBytes);
+  return JSON.stringify({ v: 2, iv: bytesToB64(iv), ct: bytesToB64(ct) });
 }
 
 export async function openJson(key, text, aad) {
@@ -61,8 +117,9 @@ export async function openJson(key, text, aad) {
   try {
     box = JSON.parse(text);
     const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: b64ToBytes(box.iv), additionalData: enc.encode(aad) }, key, b64ToBytes(box.ct));
-    return JSON.parse(dec.decode(pt));
-  } catch (_) {
+    const decompressed = await decompressPayload(new Uint8Array(pt));
+    return JSON.parse(dec.decode(decompressed));
+  } catch (err) {
     throw new ReplicationError('UNREADABLE', 'A sync file could not be decrypted (wrong key or damaged).');
   }
 }
@@ -70,30 +127,17 @@ export async function openJson(key, text, aad) {
 const chunkAad = (channelId, deviceId, start, end) => `kb-sync-chunk|${channelId}|${deviceId}|${start}|${end}`;
 const snapshotAad = (channelId, deviceId) => `kb-sync-snapshot|${channelId}|${deviceId}`;
 
-/** Fields that matter when deciding whether two grade versions really disagree */
 const comparable = (r) => {
   if (!r) return '';
-  const { updated_at, created_at, ...rest } = r;
+  const { updated_at, created_at, _hlc, _fhlc, _removed, ...rest } = r;
   return JSON.stringify(rest, Object.keys(rest).sort());
 };
 
 const keyString = (k) => (Array.isArray(k) ? k.join('+') : String(k));
 
 export class ReplicationEngine {
-  /**
-   * @param {object} opts
-   * @param {object} opts.store - StorageManager (outbox, getByChangeKey, applyRemoteChange, metadata)
-   * @param {object} opts.channel - see channels.js
-   * @param {string} opts.channelId
-   * @param {CryptoKey} opts.key - channel key
-   * @param {string} opts.deviceId
-   * @param {string|null} [opts.courseId] - restrict to one class (co-teacher channel)
-   * @param {(op: object) => Promise<void>} [opts.onVaultOp] - personal channel: KeyVault secrets
-   */
   constructor({ store, channel, channelId, key, deviceId, courseId = null, onVaultOp = null }) {
     Object.assign(this, { store, channel, channelId, key, deviceId, courseId, onVaultOp });
-    this._assignmentCourse = new Map();
-    this._taskCourse = new Map();
   }
 
   get _cursorKey() { return `repl_cursor:${this.channelId}`; }
@@ -109,38 +153,26 @@ export class ReplicationEngine {
     return (await this.store.getMetadata(this._vectorKey)) || {};
   }
 
-  // ---------------------------------------------------------------------------
-  // Scope (which ops this channel carries)
-  // ---------------------------------------------------------------------------
-
   async _courseOf(table, record, scope) {
     const s = scope || scopeOf(table, record);
     if (!s) return null;
     if (s.course_id !== undefined) return s.course_id;
     if (s.assignment_id) {
+      if (!this._assignmentCourse) this._assignmentCourse = new Map();
       if (!this._assignmentCourse.has(s.assignment_id)) {
         const a = await this.store.getByChangeKey('assignments', s.assignment_id);
-        this._assignmentCourse.set(s.assignment_id, a?.class_id || a?.gradebook?.course_id || null);
+        this._assignmentCourse.set(s.assignment_id, a?.class_id || null);
       }
       return this._assignmentCourse.get(s.assignment_id);
-    }
-    if (s.task_id) {
-      if (!this._taskCourse.has(s.task_id)) {
-        const t = await this.store.getByChangeKey('tasks', s.task_id);
-        this._taskCourse.set(s.task_id, t?.class_id || t?.gradebook?.course_id || null);
-      }
-      return this._taskCourse.get(s.task_id);
     }
     return null;
   }
 
-  /** Should this channel carry the op (outgoing) or accept it (incoming)? */
   async _inScope(op, { incoming = false } = {}) {
     if (op.table === '_vault') return !this.courseId && (!incoming || Boolean(this.onVaultOp));
     if (!SYNCED.has(op.table)) return false;
     if (!this.courseId) return true;
     let scope = op.scope;
-    // Never trust a remote op's claimed scope: derive it from the record (or what it would delete)
     if (incoming) {
       scope = op.op === 'put'
         ? scopeOf(op.table, op.record)
@@ -156,27 +188,76 @@ export class ReplicationEngine {
   async push() {
     let cursor = await this.pushedThrough();
     let pushed = 0;
+
     for (;;) {
       const rows = await this.store.outbox.since(cursor, MAX_OPS_PER_CHUNK);
       if (!rows.length) break;
+
       const ops = [];
+      let totalSerializedBytes = 0;
+      let lastProcessedSeq = cursor;
+
       for (const r of rows) {
-        const op = { table: r.table, op: r.op, key: r.key, record: r.record, scope: r.scope || null, ts: r.created_at };
-        if (await this._inScope(op)) ops.push(op);
+        let rec = r.record;
+        // If single record is larger than cap, upload to standalone blob
+        if (rec) {
+          const recJson = JSON.stringify(rec);
+          if (recJson.length > TARGET_CHUNK_BYTES && typeof this.channel.putBlob === 'function') {
+            const blobKey = `blob_${this.channelId}_${this.deviceId}_${r.seq}`;
+            await this.channel.putBlob(blobKey, recJson);
+            rec = { _blobRef: blobKey, id: rec.id, _hlc: rec._hlc };
+          }
+        }
+
+        const op = {
+          table: r.table,
+          op: r.op,
+          key: r.key,
+          record: rec,
+          scope: r.scope || null,
+          ts: r.created_at,
+          hlc: r.hlc || rec?._hlc || null
+        };
+
+        if (await this._inScope(op)) {
+          const opBytes = enc.encode(JSON.stringify(op)).length;
+          if (ops.length > 0 && totalSerializedBytes + opBytes > TARGET_CHUNK_BYTES) {
+            // Cut chunk here
+            break;
+          }
+          ops.push(op);
+          totalSerializedBytes += opBytes;
+        }
+        lastProcessedSeq = r.seq;
       }
+
+      if (lastProcessedSeq === cursor) break;
+
       const start = rows[0].seq;
-      const end = rows[rows.length - 1].seq;
+      const end = lastProcessedSeq;
+
       if (ops.length) {
-        // prev_end lets a reader tell "rows out of this channel's scope" from "chunks I missed"
         const prevEnd = Number(await this.store.getMetadata(this._lastEndKey)) || 0;
-        const body = await sealJson(this.key, { v: CHUNK_VERSION, channel: this.channelId, device_id: this.deviceId, start, end, prev_end: prevEnd, ops }, chunkAad(this.channelId, this.deviceId, start, end));
+        const body = await sealJson(
+          this.key,
+          { v: CHUNK_VERSION, channel: this.channelId, device_id: this.deviceId, start, end, prev_end: prevEnd, ops },
+          chunkAad(this.channelId, this.deviceId, start, end)
+        );
         await this.channel.putChunk({ deviceId: this.deviceId, start, end, body });
         await this.store.setMetadata(this._lastEndKey, end);
         pushed += ops.length;
       }
+
       cursor = end;
       await this.store.setMetadata(this._cursorKey, cursor);
+      if (typeof this.store.outbox?.markPushed === 'function') {
+        const pushedSeqs = rows.filter(r => r.seq <= end).map(r => r.seq);
+        if (pushedSeqs.length) {
+          await this.store.outbox.markPushed(pushedSeqs);
+        }
+      }
     }
+
     return pushed;
   }
 
@@ -184,11 +265,27 @@ export class ReplicationEngine {
   // Pull
   // ---------------------------------------------------------------------------
 
+  async _quarantineChunk(chunkMeta, reason) {
+    try {
+      const qTable = this.store.table('repl_quarantine');
+      if (qTable) {
+        await qTable.put({
+          channel_id: this.channelId,
+          device_id: chunkMeta.deviceId,
+          start_seq: chunkMeta.start,
+          end_seq: chunkMeta.end,
+          quarantined_at: new Date().toISOString(),
+          reason
+        });
+      }
+    } catch (_) {}
+  }
+
   async pull() {
     let vector = await this.vector();
     const result = { applied: 0, conflicts: 0, bootstrapped: false };
 
-    // A device with nothing from this channel yet starts from the newest snapshot
+    // Start from newest snapshot if empty
     if (!Object.keys(vector).length) {
       const snap = await this.channel.latestSnapshot({ excludeDeviceId: this.deviceId });
       if (snap) {
@@ -199,28 +296,54 @@ export class ReplicationEngine {
       }
     }
 
-    const pending = await this._pendingLocalKeys();
-    const listCursor = await this.store.getMetadata(this._listCursorKey);
-    const { items, cursor } = await this.channel.listChunks({ after: listCursor });
-    const chunks = items
+    const cursor = Number(await this.store.getMetadata(this._listCursorKey)) || null;
+    const { items: chunks } = await this.channel.listChunks({ after: cursor });
+
+    const sortedChunks = chunks
       .filter(c => c.deviceId !== this.deviceId && c.end > (vector[c.deviceId] || 0))
       .sort((a, b) => a.deviceId.localeCompare(b.deviceId) || a.start - b.start);
 
-    for (const c of chunks) {
+    const pending = await this._pendingLocalKeys();
+
+    for (const c of sortedChunks) {
       if (c.end <= (vector[c.deviceId] || 0)) continue;
-      const body = await this.channel.getChunk(c);
-      const chunk = await openJson(this.key, body, chunkAad(this.channelId, c.deviceId, c.start, c.end));
-      if (chunk.channel !== this.channelId || chunk.device_id !== c.deviceId) {
-        throw new ReplicationError('MISMATCH', 'A sync file does not belong where it was found.');
+
+      let chunk;
+      try {
+        const body = await this.channel.getChunk(c);
+        chunk = await openJson(this.key, body, chunkAad(this.channelId, c.deviceId, c.start, c.end));
+        if (chunk.channel !== this.channelId || chunk.device_id !== c.deviceId) {
+          throw new ReplicationError('MISMATCH', 'A sync file does not belong where it was found.');
+        }
+      } catch (err) {
+        await this._quarantineChunk(c, err.message || 'Corrupt chunk');
+        // Recover from latest snapshot if available
+        try {
+          const snap = await this.channel.latestSnapshot({ deviceId: c.deviceId });
+          if (snap) {
+            result.applied += (await this._applySnapshot(snap)).applied;
+            vector = await this.vector();
+          }
+        } catch (_) {}
+        continue;
       }
+
       if ((chunk.prev_end || 0) > (vector[c.deviceId] || 0)) {
-        // Earlier chunks from that device were pruned before this one saw them: catch up from its snapshot
-        const snap = await this.channel.latestSnapshot({ deviceId: c.deviceId });
-        if (!snap) throw new ReplicationError('GAP', 'Some changes from another device are no longer available. Restore a recent backup on this device.');
-        result.applied += (await this._applySnapshot(snap)).applied;
-        vector = await this.vector();
-        if (c.end <= (vector[c.deviceId] || 0)) continue;
+        try {
+          const snap = await this.channel.latestSnapshot({ deviceId: c.deviceId });
+          if (!snap) {
+            await this._quarantineChunk(c, 'GAP in chunk sequence');
+            continue;
+          }
+          result.applied += (await this._applySnapshot(snap)).applied;
+          vector = await this.vector();
+          if (c.end <= (vector[c.deviceId] || 0)) continue;
+        } catch (err) {
+          await this._quarantineChunk(c, err.message || 'Gap recovery failed');
+          continue;
+        }
       }
+
       for (const op of chunk.ops || []) {
         const r = await this._applyOp(op, c.deviceId, pending);
         result.applied += r.applied;
@@ -229,7 +352,10 @@ export class ReplicationEngine {
       vector[c.deviceId] = Math.max(vector[c.deviceId] || 0, c.end);
       await this.store.setMetadata(this._vectorKey, vector);
     }
-    if (cursor !== undefined && cursor !== null) await this.store.setMetadata(this._listCursorKey, cursor);
+
+    if (cursor !== undefined && cursor !== null) {
+      await this.store.setMetadata(this._listCursorKey, cursor);
+    }
     return result;
   }
 
@@ -247,14 +373,10 @@ export class ReplicationEngine {
   }
 
   _newer(incoming, sourceDevice, local) {
-    let a = incoming?.updated_at || '';
-    const b = local?.updated_at || '';
-    // Clamp future clock skew: allow at most localNow + 5 minutes
-    const maxFuture = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-    if (a > maxFuture) {
-      a = maxFuture;
-    }
-    if (a !== b) return a > b;
+    const incHlc = incoming?._hlc || incoming?.updated_at || '';
+    const locHlc = local?._hlc || local?.updated_at || '';
+    const cmp = HLC.compare(incHlc, locHlc);
+    if (cmp !== 0) return cmp > 0;
     return sourceDevice > this.deviceId;
   }
 
@@ -265,16 +387,64 @@ export class ReplicationEngine {
       await this.onVaultOp(op);
       return { applied: 1, conflict: 0 };
     }
+
+    // Resolve blob reference if needed
+    if (op.record?._blobRef && typeof this.channel.getBlob === 'function') {
+      try {
+        const rawBlob = await this.channel.getBlob(op.record._blobRef);
+        if (rawBlob) {
+          op.record = JSON.parse(rawBlob);
+        }
+      } catch (_) {}
+    }
+
+    // Advance local HLC based on incoming stamp
+    const incomingHlc = op.record?._hlc || op.hlc || op.ts || '';
+    if (incomingHlc) {
+      hlc.observe(incomingHlc, this.deviceId);
+    }
+
+    const keyStr = Array.isArray(op.key) ? op.key.join('+') : String(op.key);
+    const tombstone = (typeof this.store.getTombstone === 'function')
+      ? await this.store.getTombstone(op.table, keyStr)
+      : null;
+
     const local = await this.store.getByChangeKey(op.table, op.key);
 
     if (op.op === 'delete') {
-      // An edit made here after the deletion wins over it
-      if (local && (local.updated_at || '') > (op.ts || '')) return none;
-      if (!local) return none;
-      await this.store.applyRemoteChange(op.table, 'delete', op.key, null);
+      const localHlc = local?._hlc || local?.updated_at || '';
+      if (local && HLC.compare(localHlc, incomingHlc) > 0) {
+        // Local edit after delete wins
+        return none;
+      }
+
+      // Always record tombstone
+      if (typeof this.store.putTombstone === 'function') {
+        await this.store.putTombstone({
+          table: op.table,
+          key: keyStr,
+          hlc: incomingHlc,
+          deviceId: sourceDevice,
+          deleted_at: op.ts || new Date().toISOString()
+        });
+      }
+
+      if (local) {
+        await this.store.applyRemoteChange(op.table, 'delete', op.key, null);
+      }
       return { applied: 1, conflict: 0 };
     }
+
     if (op.op !== 'put' || !op.record) return none;
+
+    // Put op: check against tombstone
+    if (tombstone && HLC.compare(tombstone.hlc, incomingHlc) > 0) {
+      // Deleted more recently than this incoming put
+      return none;
+    }
+    if (tombstone && typeof this.store.deleteTombstone === 'function') {
+      await this.store.deleteTombstone(op.table, keyStr);
+    }
 
     const incomingWins = !local || this._newer(op.record, sourceDevice, local);
     let conflict = 0;
@@ -285,22 +455,25 @@ export class ReplicationEngine {
       conflict = 1;
     }
 
-    // Clamp op.record.updated_at if in the future
-    const maxFuture = new Date(Date.now() + 5 * 60 * 1000).toISOString();
-    if (op.record.updated_at && op.record.updated_at > maxFuture) {
-      op.record = { ...op.record, updated_at: maxFuture };
-    }
-
     const mergedRecord = mergeRecords(op.table, local, op.record, sourceDevice, this.deviceId, incomingWins);
     if (!incomingWins && mergedRecord === local) return { applied: 0, conflict };
-    await this.store.applyRemoteChange(op.table, 'put', op.key, mergedRecord);
+
+    const isDifferentFromBoth = local && (comparable(mergedRecord) !== comparable(local) && comparable(mergedRecord) !== comparable(op.record));
+    if (isDifferentFromBoth) {
+      // Write back through local put path so other devices converge
+      mergedRecord._mergeWrite = true;
+      await this.store.table(op.table).put(mergedRecord);
+    } else {
+      await this.store.applyRemoteChange(op.table, 'put', op.key, mergedRecord);
+    }
+
     return { applied: 1, conflict };
   }
 
   async _recordConflict(op, local, incomingWins, sourceDevice) {
     const list = (await this.store.getMetadata(CONFLICTS_METADATA)) || [];
     list.unshift({
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       channel: this.channelId,
       table: op.table,
       key: op.key,
@@ -316,55 +489,100 @@ export class ReplicationEngine {
   // Snapshots
   // ---------------------------------------------------------------------------
 
-  /**
-   * Write a full copy of this channel's data. `extra` lets the personal channel include vault
-   * secrets, so a device that joins after their ops were pruned still receives them.
-   */
   async writeSnapshot({ extra = null } = {}) {
+    const createdAt = new Date().toISOString();
     const tables = {};
     for (const t of SYNC_TABLES) {
-      const rows = await this.store.table(t).toArray();
-      const kept = [];
-      for (const r of rows) {
-        if (!this.courseId || (await this._courseOf(t, r, null)) === this.courseId) kept.push(r);
-      }
-      tables[t] = kept;
+      const rows = (await this.store.table(t).toArray()).filter(r => this._inScopeSync(t, r));
+      if (rows.length) tables[t] = rows;
     }
+
+    const tombstones = (typeof this.store.listTombstones === 'function')
+      ? await this.store.listTombstones()
+      : [];
+
     const vector = { ...(await this.vector()), [this.deviceId]: await this.pushedThrough() };
-    const createdAt = new Date().toISOString();
-    const body = await sealJson(this.key, { v: CHUNK_VERSION, channel: this.channelId, device_id: this.deviceId, created_at: createdAt, vector, tables, extra }, snapshotAad(this.channelId, this.deviceId));
+    const body = await sealJson(
+      this.key,
+      { v: CHUNK_VERSION, channel: this.channelId, device_id: this.deviceId, created_at: createdAt, vector, tables, tombstones, extra },
+      snapshotAad(this.channelId, this.deviceId)
+    );
+
     await this.channel.putSnapshot({ deviceId: this.deviceId, createdAt, body });
-    return { createdAt, vector };
+    return { vector, createdAt };
   }
 
   async _applySnapshot(snap) {
     const body = await this.channel.getSnapshot(snap);
     const data = await openJson(this.key, body, snapshotAad(this.channelId, snap.deviceId));
     if (data.channel !== this.channelId || data.device_id !== snap.deviceId) {
-      throw new ReplicationError('MISMATCH', 'A sync snapshot does not belong where it was found.');
+      throw new ReplicationError('MISMATCH', 'Snapshot does not belong to this channel');
     }
+
     let applied = 0;
     const pending = await this._pendingLocalKeys();
-    for (const t of SYNC_TABLES) {
-      for (const record of data.tables?.[t] || []) {
+
+    // 1. Apply snapshot tombstones first
+    for (const ts of data.tombstones || []) {
+      if (typeof this.store.putTombstone === 'function') {
+        await this.store.putTombstone(ts);
+      }
+      const local = await this.store.getByChangeKey(ts.table, ts.key);
+      if (local && HLC.compare(ts.hlc, local._hlc || local.updated_at || '') >= 0) {
+        await this.store.applyRemoteChange(ts.table, 'delete', ts.key, null);
+        applied++;
+      }
+    }
+
+    // 2. Apply table records
+    for (const [t, rows] of Object.entries(data.tables || {})) {
+      if (!SYNCED.has(t)) continue;
+      for (const record of rows) {
         const key = t === 'gradebook_grades' ? [record.student_id, record.assignment_id] : record.id;
         applied += (await this._applyOp({ table: t, op: 'put', key, record }, snap.deviceId, pending)).applied;
       }
     }
-    if (data.extra && this.onVaultOp && !this.courseId) {
-      for (const op of data.extra.vault_ops || []) await this.onVaultOp(op);
+
+    if (data.extra?.vault_ops && this.onVaultOp) {
+      for (const op of data.extra.vault_ops) await this.onVaultOp(op);
     }
+
     const vector = await this.vector();
     for (const [dev, seq] of Object.entries(data.vector || {})) {
       if (dev !== this.deviceId) vector[dev] = Math.max(vector[dev] || 0, seq);
     }
     await this.store.setMetadata(this._vectorKey, vector);
+
+    // GC tombstones older than 180 days
+    if (typeof this.store.pruneTombstones === 'function') {
+      const cutoff = new Date(Date.now() - 180 * 86400000).toISOString();
+      await this.store.pruneTombstones(cutoff);
+    }
+
     return { applied };
   }
 
-  /** Remove this device's chunks that its newest snapshot already contains */
+  _inScopeSync(table, record) {
+    if (!this.courseId) return true;
+    if (table === 'gradebook_courses') return record.id === this.courseId;
+    return (record.course_id || record.class_id || record.gradebook?.course_id) === this.courseId;
+  }
+
   async pruneOwnChunks(throughSeq) {
-    if (!this.channel.deleteChunks) return 0;
     return this.channel.deleteChunks({ deviceId: this.deviceId, throughSeq });
   }
+}
+
+function b64ToBytes(s) {
+  const bin = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function bytesToB64(bytes) {
+  const u8 = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let bin = '';
+  for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }

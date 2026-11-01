@@ -9,6 +9,7 @@ import { normalizeSharedEnvelope, toLibraryRecord } from './core/shared-payload.
 import { StudentProfile } from './core/student-profile.js';
 import { StudentLedger } from './modules/student/ledger.js';
 import { RoleMode } from './state/role-mode.js';
+import { generateUUID } from './utils/uuid.js';
 
 /**
  * Extract student share params from URL query parameters.
@@ -25,6 +26,7 @@ export function extractShareParams(params = {}) {
 export const ROUTE_TITLES = {
   '#/': 'Home',
   '#/home': 'Home',
+  '#/settings': 'Settings',
   '#/course': 'Courses',
   '#/course/join': 'Join Course',
   '#/calendar': 'Calendar',
@@ -36,6 +38,8 @@ export const ROUTE_TITLES = {
   '#/timeline/view': 'View Timeline',
   '#/video': 'Interactive Video',
   '#/gradebook': 'Gradebook',
+  '#/rubrics/new': 'New Rubric',
+  '#/rubrics/edit': 'Edit Rubric',
   '#/assessments': 'Assessments',
   '#/assessments/edit': 'Assessment Editor',
   '#/assessments/take': 'Take Assessment',
@@ -208,6 +212,12 @@ export class Router {
     // Handle connect route for one-click teacher onboarding
     if (path === '#/connect') {
       await this._handleConnectRoute(params);
+      return;
+    }
+
+    // Handle join route
+    if (path.startsWith('#join=') || path === '#/join' || path === '#/course/join') {
+      await this._handleJoinRoute(path, params);
       return;
     }
 
@@ -571,7 +581,7 @@ export class Router {
     const isFeedOrFeedback = type === 'course_feed' || type === 'assignment_feedback' || type === 'task_feedback' || type === 'student_grade_report';
     if (!isFeedOrFeedback) {
       try {
-        const itemId = payload?.task_id || payload?.assignment_id || payload?.id || (typeof crypto !== 'undefined' ? crypto.randomUUID() : 'shared-item');
+        const itemId = payload?.task_id || payload?.assignment_id || payload?.id || generateUUID();
         const courseId = payload?.course_id || payload?.class_id || payload?.course_meta?.course_id || payload?.course_meta?.id || null;
         const courseName = payload?.course_meta?.name || payload?.course_meta?.course_name || payload?.course_name || '';
         const dueDate = payload?.due_date || payload?.settings?.due_date || null;
@@ -617,7 +627,9 @@ export class Router {
         const { mergeCourseFeed } = await import('./modules/student/course-store.js');
         const merged = await mergeCourseFeed(payload);
         const courseRecord = merged?.course;
-        RoleMode.set('student');
+        if (RoleMode.get() !== 'teacher') {
+          RoleMode.set('student');
+        }
         toast.success(`Enrolled in "${courseRecord?.course_name || courseRecord?.name || 'Course'}"!`);
         this.navigate(`#/student/course?id=${encodeURIComponent(courseRecord?.id || payload?.course?.id || '')}`);
       } catch (err) {
@@ -636,18 +648,24 @@ export class Router {
       this.navigate('#/video?kiosk=1');
     } else if (type === 'student_grade_report') {
       StudentLedger.ingestGradeReport(payload).catch(console.error);
-      RoleMode.set('student');
+      if (RoleMode.get() !== 'teacher') {
+        RoleMode.set('student');
+      }
       this.navigate('#/student/gradebook');
     } else if (type === 'assignment_feedback') {
       StudentLedger.ingestAssignmentFeedback(payload).catch(console.error);
-      RoleMode.set('student');
+      if (RoleMode.get() !== 'teacher') {
+        RoleMode.set('student');
+      }
       toast.success(`Feedback for "${payload.assignment?.title || 'Assignment'}" added to your gradebook!`);
       this.navigate('#/student/gradebook');
     } else if (type === 'task_feedback') {
       if (StudentLedger.ingestTaskFeedback) {
         StudentLedger.ingestTaskFeedback(payload).catch(console.error);
       }
-      RoleMode.set('student');
+      if (RoleMode.get() !== 'teacher') {
+        RoleMode.set('student');
+      }
       toast.success(`Feedback for "${payload.task?.title || 'Assignment'}" added to your gradebook!`);
       this.navigate('#/student/gradebook');
     } else if (type === 'assignment') {
@@ -787,7 +805,7 @@ export class Router {
   async _handleConnectRoute(params = {}) {
     const relay = params.relay || params.baseUrl || '';
     const token = params.token || '';
-    const teacherId = params.id || params.teacherId || '';
+    const teacherId = params.id || params.teacherId || 'Teacher';
 
     // Immediately scrub the fragment from the address bar & browser history to prevent token leakage
     if (typeof window !== 'undefined' && window.history?.replaceState) {
@@ -796,7 +814,23 @@ export class Router {
 
     if (!relay || !token) {
       toast.danger('Invalid connection link: missing server URL or teacher token.');
-      this.navigate('#/');
+      this.navigate('#/settings?section=relay');
+      return;
+    }
+
+    // Explicit confirmation prompt before accepting credentials from link
+    const { ConfirmDialog } = await import('./utils/dialogs.js');
+    const { Sanitizer } = await import('./core/sanitizer.js');
+    const confirmed = await ConfirmDialog.show({
+      title: 'Connect to School Server?',
+      message: `Do you want to connect this device to the school relay at <strong>${Sanitizer.escapeHTML(relay)}</strong> as <strong>${Sanitizer.escapeHTML(teacherId)}</strong>?`,
+      confirmText: 'Connect & Trust Server',
+      cancelText: 'Cancel'
+    });
+
+    if (!confirmed) {
+      toast.info('Connection cancelled.');
+      this.navigate('#/settings?section=relay');
       return;
     }
 
@@ -816,7 +850,23 @@ export class Router {
       toast.danger(`Failed to configure school server: ${err.message}`);
     }
 
-    this.navigate('#/');
+    this.navigate('#/settings?section=relay');
+  }
+
+  async _handleJoinRoute(path, params = {}) {
+    try {
+      const { JoinService } = await import('./core/join-service.js');
+      const raw = (typeof window !== 'undefined' && window.location.hash) ? window.location.hash : path;
+      const res = await JoinService.join(raw);
+      if (res.status === 'joined' || res.status === 'joined_pending_content') {
+        const cid = res.course?.id || res.course?.course_id;
+        this.navigate(cid ? `#/student/course?id=${encodeURIComponent(cid)}` : '#/student/courses');
+      } else {
+        this.navigate('#/student/courses');
+      }
+    } catch (_) {
+      this.navigate('#/student/courses');
+    }
   }
 
   /**

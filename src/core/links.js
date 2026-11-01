@@ -4,7 +4,7 @@
  */
 
 import { CryptoShareEngine } from './crypto-share.js';
-import { AccessCodes } from './access-codes.js';
+import { AccessCodes, normalizeAccessCode } from './access-codes.js';
 
 export class LinkBuilder {
   /**
@@ -108,6 +108,135 @@ export class LinkBuilder {
     const pathPrefix = `${base.replace(/\/+$/, '')}${pathname}`;
     return `${pathPrefix}#/share?ref=${encodeURIComponent(ref)}&k=${encodeURIComponent(key)}`;
   }
+}
+
+/**
+ * Safely decode base64url JSON payload
+ */
+function decodeB64UrlJson(str) {
+  try {
+    let b64 = str.replace(/-/g, '+').replace(/_/g, '/');
+    while (b64.length % 4) b64 += '=';
+    const jsonStr = atob(b64);
+    return JSON.parse(jsonStr);
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Encode object to base64url JSON
+ */
+function encodeB64UrlJson(obj) {
+  try {
+    const jsonStr = JSON.stringify(obj);
+    return btoa(jsonStr).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  } catch (_) {
+    return '';
+  }
+}
+
+/**
+ * Unified Join Link Parser (KB-ROSTER-001)
+ * Parses kennisboost://join?..., https://<relay>/join?..., https://<app>/#join=...
+ * or fragment-only #join=... and returns a structured JoinIntent.
+ *
+ * @param {string} rawUrl
+ * @returns {{ type: 'join', classCode: string|null, personalCode: string|null, relay: string|null, feedId: string|null, key: string|null } | null}
+ */
+export function parseJoinLink(rawUrl) {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+
+  let classCode = null;
+  let personalCode = null;
+  let relay = null;
+  let feedId = null;
+  let key = null;
+
+  // 1. Fragment-only or URL with #join=...
+  if (trimmed.includes('#join=')) {
+    const after = trimmed.slice(trimmed.indexOf('#join=') + 6);
+    const decoded = decodeB64UrlJson(after);
+    if (decoded && typeof decoded === 'object') {
+      classCode = decoded.c || decoded.classCode || decoded.class_code || null;
+      personalCode = decoded.s || decoded.personalCode || decoded.access_code || decoded.studentCode || null;
+      relay = decoded.r || decoded.relay || decoded.relayUrl || null;
+      feedId = decoded.f || decoded.feedId || decoded.feed_id || null;
+      key = decoded.k || decoded.key || null;
+    }
+  }
+
+  // 2. URL parsing (kennisboost://join?..., https://.../join?..., #/student?code=...)
+  if (!classCode && !feedId) {
+    try {
+      const parseable = trimmed.startsWith('#')
+        ? `https://kennisboost.local/${trimmed.replace(/^#\/?/, '')}`
+        : (trimmed.startsWith('/') ? `https://kennisboost.local${trimmed}` : trimmed);
+
+      const u = new URL(parseable, 'https://kennisboost.local');
+      const sp = u.searchParams;
+
+      classCode = sp.get('c') || sp.get('code') || sp.get('classCode') || sp.get('class_code');
+      personalCode = sp.get('s') || sp.get('personalCode') || sp.get('access_code') || sp.get('studentCode');
+      relay = sp.get('r') || sp.get('relay') || sp.get('relayUrl');
+      feedId = sp.get('f') || sp.get('feedId') || sp.get('feed_id');
+      key = sp.get('k') || sp.get('key');
+
+      if (u.hash && (!classCode || !personalCode)) {
+        const hQIndex = u.hash.indexOf('?');
+        if (hQIndex >= 0) {
+          const hsp = new URLSearchParams(u.hash.slice(hQIndex + 1));
+          classCode = classCode || hsp.get('c') || hsp.get('code') || hsp.get('classCode') || hsp.get('class_code');
+          personalCode = personalCode || hsp.get('s') || hsp.get('personalCode') || hsp.get('access_code') || hsp.get('studentCode');
+          relay = relay || hsp.get('r') || hsp.get('relay') || hsp.get('relayUrl');
+          feedId = feedId || hsp.get('f') || hsp.get('feedId') || hsp.get('feed_id');
+          key = key || hsp.get('k') || hsp.get('key');
+        }
+      }
+
+      if (!classCode) {
+        const parts = u.pathname.split('/').filter(Boolean);
+        const joinIdx = parts.indexOf('join');
+        if (joinIdx >= 0 && parts[joinIdx + 1]) {
+          classCode = parts[joinIdx + 1];
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 3. Raw class code directly entered (e.g. "ABCD-EFGH" or Crockford 8-10 chars)
+  if (!classCode && !feedId && /^[A-Za-z0-9_-]{4,16}$/.test(trimmed)) {
+    classCode = trimmed;
+  }
+
+  if (!classCode && !feedId) return null;
+
+  return {
+    type: 'join',
+    classCode: classCode ? normalizeAccessCode(classCode) : null,
+    personalCode: personalCode ? normalizeAccessCode(personalCode) : null,
+    relay: relay ? relay.trim() : null,
+    feedId: feedId ? feedId.trim() : null,
+    key: key ? key.trim() : null
+  };
+}
+
+/**
+ * Build a canonical join URL
+ */
+export function buildJoinLink({ classCode, relayUrl = null, studentCode = null, feedId = null, key = null, appHost = null } = {}) {
+  const payload = {};
+  if (classCode) payload.c = classCode;
+  if (relayUrl) payload.r = relayUrl;
+  if (studentCode) payload.s = studentCode;
+  if (feedId) payload.f = feedId;
+  if (key) payload.k = key;
+
+  const b64 = encodeB64UrlJson(payload);
+  const base = appHost || (typeof window !== 'undefined' && window.location ? window.location.origin : 'https://kennisboost.app');
+  return `${base.replace(/\/+$/, '')}/#join=${b64}`;
 }
 
 export default LinkBuilder;

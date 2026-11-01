@@ -8,6 +8,7 @@ import { evaluateTaskSubmission, IDENTITY_LABELS } from './pipeline.js';
 import { renderTaskReview } from './review.js';
 import { FeedbackCapsule } from '../../core/feedback-capsule.js';
 import { StudentMatcher } from '../../core/student-matcher.js';
+import { generateUUID } from '../../utils/uuid.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -93,7 +94,7 @@ export async function syncTaskSubmissionsToGradebook({ task, submissions = [], c
       });
       const generatedCode = sub.access_code || crossMatch.canonicalCandidate?.access_code || AccessCodes.generateCode();
       const newStudent = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         course_id: courseId,
         student_id: sub.student_id,
         full_name: sub.claimed_name || sub.student_name || crossMatch.canonicalCandidate?.full_name || sub.student_id,
@@ -501,7 +502,7 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
       });
       const generatedCode = crossMatch.canonicalCandidate?.access_code || AccessCodes.generateCode();
       const newStudent = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         course_id: courseId,
         student_id: sid,
         full_name: sname || crossMatch.canonicalCandidate?.full_name || sid,
@@ -678,6 +679,8 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
         const res = await transport.listDrop(dropId, { since: task.publish?.relay?.last_pulled_at });
         const items = res?.items || [];
         let imported = 0;
+        let lastSuccessReceivedAt = task.publish?.relay?.last_pulled_at || null;
+
         for (const item of items) {
           try {
             const rawText = typeof item === 'string' ? item : (item.text || item.payload || '');
@@ -690,13 +693,17 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
             });
             await recordTaskSubmission(sub);
             imported++;
+            if (item.received_at && (!lastSuccessReceivedAt || item.received_at > lastSuccessReceivedAt)) {
+              lastSuccessReceivedAt = item.received_at;
+            }
           } catch (itemErr) {
             console.warn('[task-submissions] Failed to evaluate submission item:', itemErr);
+            break;
           }
         }
 
-        if (task.publish?.relay) {
-          task.publish.relay.last_pulled_at = new Date().toISOString();
+        if (task.publish?.relay && lastSuccessReceivedAt) {
+          task.publish.relay.last_pulled_at = lastSuccessReceivedAt;
           await storage.table('tasks').put(task);
         }
 

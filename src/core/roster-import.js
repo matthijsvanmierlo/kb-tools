@@ -1,6 +1,7 @@
 import { ROSTER_HEADER_ALIASES, RosterRowSchema } from './validator.js';
 import { splitName, joinName } from './names.js';
 import { toCSV, parseCSV, suggestDelimiter } from './csv.js';
+import { generateUUID } from '../utils/uuid.js';
 import papaLib from 'papaparse';
 
 const Papa = papaLib.parse ? papaLib : (papaLib.default || papaLib);
@@ -357,7 +358,7 @@ export function parsePastedRoster(text = '') {
 export function applyGradingTemplate(course, templateKey, sourceCourse = null) {
   const result = JSON.parse(JSON.stringify(course || {}));
 
-  const genId = () => (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'cat_' + Math.random().toString(36).slice(2, 9));
+  const genId = () => generateUUID();
 
   switch (templateKey) {
     case 'points_two_categories':
