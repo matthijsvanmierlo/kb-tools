@@ -114,9 +114,9 @@ export async function gatherDataSafety() {
 }
 
 const LEVELS = {
-  ok: { label: 'Data safe', icon: 'shield-check', cls: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
-  attention: { label: 'Check data safety', icon: 'shield-exclamation', cls: 'text-amber-800 bg-amber-50 border-amber-300' },
-  risk: { label: 'Data at risk', icon: 'shield-x', cls: 'text-red-800 bg-red-50 border-red-300' }
+  ok: { label: 'Data safe', icon: 'shield-check', cls: 'is-safe' },
+  attention: { label: 'Check data safety', icon: 'shield-exclamation', cls: 'is-attention' },
+  risk: { label: 'Data at risk', icon: 'shield-x', cls: 'is-risk' }
 };
 
 /** Refresh the header chip */
@@ -124,17 +124,21 @@ export async function updateDataSafetyChip() {
   const chip = document.getElementById('kb-data-safety-chip');
   if (!chip) return null;
   const state = computeDataSafety(await gatherDataSafety());
-  const l = LEVELS[state.level];
+  const l = LEVELS[state.level] || LEVELS.ok;
   chip.dataset.safetyLevel = state.level;
   const parentPill = chip.closest('.kb-data-sync-pill');
   if (parentPill) {
     parentPill.dataset.safetyLevel = state.level;
     chip.className = 'inline-flex items-center gap-1.5 text-xs font-medium';
   } else {
-    chip.className = `kb-safety-chip inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 ${l.cls}`;
+    chip.className = `kb-safety-chip ${l.cls || ''}`;
+  }
+  const syncPill = document.querySelector('.kb-data-sync-pill');
+  if (syncPill) {
+    syncPill.dataset.safetyLevel = state.level;
   }
   const iconColor = state.level === 'ok' ? 'text-emerald-600' : state.level === 'attention' ? 'text-amber-500' : 'text-rose-600';
-  chip.innerHTML = `<sl-icon name="${l.icon}" class="${iconColor}"></sl-icon><span class="hidden md:inline">${esc(l.label)}</span>`;
+  chip.innerHTML = `<sl-icon name="${l.icon}" class="${iconColor}"></sl-icon><span id="kb-data-safety-label" class="hidden lg:inline">${esc(l.label)}</span>`;
   chip.title = l.label;
   chip.setAttribute('aria-label', `${l.label}. Open data safety details.`);
   return state;
@@ -319,3 +323,5 @@ export function initDataSafety() {
     }
   });
 }
+
+export default openDataSafetyDialog;

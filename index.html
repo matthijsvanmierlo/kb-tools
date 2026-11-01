@@ -75,7 +75,7 @@
       <!-- Brand -->
       <a href="#/" class="kb-brand" aria-label="KennisBoost Tools home">
         <span class="kb-brand-mark" aria-hidden="true">KB</span>
-        <span class="kb-brand-name hidden sm:inline">KennisBoost <span>Tools</span></span>
+        <span class="kb-brand-name hidden lg:inline">KennisBoost <span>Tools</span></span>
       </a>
 
       <!-- Primary Navigation (rendered dynamically by app-nav.js) -->
@@ -89,15 +89,15 @@
           <span class="hidden xl:inline">Search</span>
           <kbd class="kb-kbd">Ctrl K</kbd>
         </button>
-        <button type="button" id="btn-open-cmd-palette-mobile" class="kb-icon-btn sm:hidden" aria-label="Open command palette" title="Search">
+        <button type="button" id="btn-open-cmd-palette-mobile" class="kb-icon-btn is-outlined sm:hidden" aria-label="Open command palette" title="Search (Ctrl+K)">
           <sl-icon name="search"></sl-icon>
         </button>
 
         <!-- 2. Data Safety & Backup Controls -->
-        <div class="kb-header-storage-group inline-flex items-center">
-          <button type="button" id="kb-data-safety-chip" class="kb-safety-chip inline-flex items-center gap-1.5 text-xs font-medium" aria-label="Data safety checkup" title="Data safety checkup">
+        <div class="kb-header-storage-group">
+          <button type="button" id="kb-data-safety-chip" class="kb-safety-chip" aria-label="Data safety checkup" title="Data safety checkup">
             <sl-icon name="shield"></sl-icon>
-            <span id="kb-data-safety-label" class="hidden md:inline">Data safe</span>
+            <span id="kb-data-safety-label" class="hidden lg:inline">Data safe</span>
           </button>
           <sl-dropdown class="kb-storage-menu" placement="bottom-end" distance="6">
             <button slot="trigger" type="button" class="kb-data-sync-pill" aria-label="Backup and storage options" title="Backup &amp; storage">
@@ -153,11 +153,12 @@
             <sl-menu-item id="menu-btn-keyboard-shortcuts" class="hidden" aria-hidden="true"></sl-menu-item>
           </sl-menu>
         </sl-dropdown>
+        </div>
 
         <!-- 3. Direct Role Toggle Pill (1-Click Switch) -->
         <button type="button" id="btn-toggle-role-mode" class="kb-role-toggle-btn" aria-label="Switch between Teacher and Student view" title="Switch role view">
           <sl-icon name="arrow-repeat"></sl-icon>
-          <span id="label-active-role">Teacher</span>
+          <span id="label-active-role" class="hidden min-[420px]:inline">Teacher</span>
         </button>
 
         <!-- Subtle Section Divider -->
@@ -236,29 +237,81 @@
         <button type="button" id="btn-header-import-content" class="hidden" aria-hidden="true"></button>
         <button type="button" id="btn-header-import-content-mobile" class="hidden" aria-hidden="true"></button>
         <div id="kb-nav-class-selector" class="hidden" aria-hidden="true"></div>
-        <sl-dropdown id="kb-header-more">
-          <button slot="trigger" type="button" class="w-9 h-9 flex items-center justify-center rounded-xl border border-slate-200 text-slate-700 hover:bg-slate-100 transition-colors" aria-label="More options">
+        <sl-dropdown id="kb-header-more" placement="bottom-end" distance="6">
+          <button slot="trigger" type="button" class="kb-icon-btn is-outlined" aria-label="More options" title="More options">
             <sl-icon name="three-dots-vertical"></sl-icon>
           </button>
           <sl-menu id="kb-header-more-menu">
-            <sl-menu-item value="guide">
-              <sl-icon slot="prefix" name="book"></sl-icon> Teacher Guide
-            </sl-menu-item>
+            <sl-menu-label>Data Safety &amp; Storage</sl-menu-label>
             <sl-menu-item value="safety">
-              <sl-icon slot="prefix" name="shield-check"></sl-icon> Data Safety Checkup
+              <sl-icon slot="prefix" name="shield-check" class="text-emerald-600"></sl-icon>
+              Data safety checkup&hellip;
             </sl-menu-item>
-            <sl-menu-item value="devices">
-              <sl-icon slot="prefix" name="laptop"></sl-icon> Sync & Devices
+            <sl-menu-item value="configure-sync">
+              <sl-icon slot="prefix" name="arrow-repeat"></sl-icon>
+              Backup location&hellip;
             </sl-menu-item>
-            <sl-menu-item value="relay">
-              <sl-icon slot="prefix" name="hdd-network"></sl-icon> Connect to School Server…
-            </sl-menu-item>
-            <sl-divider></sl-divider>
             <sl-menu-item value="backup-export">
-              <sl-icon slot="prefix" name="download"></sl-icon> Export Backup (.json)
+              <sl-icon slot="prefix" name="download"></sl-icon>
+              Export encrypted backup
             </sl-menu-item>
             <sl-menu-item value="backup-restore">
-              <sl-icon slot="prefix" name="upload"></sl-icon> Restore Backup…
+              <sl-icon slot="prefix" name="upload"></sl-icon>
+              Restore backup file&hellip;
+            </sl-menu-item>
+            <sl-menu-item value="restore-location">
+              <sl-icon slot="prefix" name="cloud-download"></sl-icon>
+              Restore from backup location&hellip;
+            </sl-menu-item>
+            <sl-menu-item value="recovery-kit">
+              <sl-icon slot="prefix" name="key"></sl-icon>
+              Recovery kit&hellip;
+            </sl-menu-item>
+            <sl-menu-item value="devices">
+              <sl-icon slot="prefix" name="phone-landscape"></sl-icon>
+              Devices &amp; sharing&hellip;
+            </sl-menu-item>
+            <sl-menu-item value="relay">
+              <sl-icon slot="prefix" name="cloud-arrow-up"></sl-icon>
+              Connect to school server&hellip;
+            </sl-menu-item>
+            <sl-menu-item value="import-content">
+              <sl-icon slot="prefix" name="cloud-download" class="text-blue-600"></sl-icon>
+              Import content (.kbshare, CSV)&hellip;
+            </sl-menu-item>
+            <sl-menu-item value="storage-info">
+              <sl-icon slot="prefix" name="info-circle"></sl-icon>
+              Storage quota &amp; info
+            </sl-menu-item>
+            <sl-divider></sl-divider>
+            <sl-menu-label>Help &amp; Resources</sl-menu-label>
+            <sl-menu-item value="guide">
+              <sl-icon slot="prefix" name="book"></sl-icon>
+              Teacher guide
+            </sl-menu-item>
+            <sl-menu-item value="shortcuts">
+              <sl-icon slot="prefix" name="keyboard"></sl-icon>
+              Keyboard shortcuts
+            </sl-menu-item>
+            <sl-menu-item value="load-sample">
+              <sl-icon slot="prefix" name="box-arrow-in-down"></sl-icon>
+              Load sample workspace
+            </sl-menu-item>
+            <sl-menu-item value="remove-sample">
+              <sl-icon slot="prefix" name="trash"></sl-icon>
+              Remove sample data
+            </sl-menu-item>
+            <sl-menu-item value="philosophy">
+              <sl-icon slot="prefix" name="shield-check"></sl-icon>
+              Local-first philosophy
+            </sl-menu-item>
+            <sl-menu-item value="about">
+              <sl-icon slot="prefix" name="info-circle"></sl-icon>
+              About KennisBoost
+            </sl-menu-item>
+            <sl-menu-item value="install-pwa" id="kb-more-menu-install-pwa" class="hidden">
+              <sl-icon slot="prefix" name="download"></sl-icon>
+              Install Desktop App
             </sl-menu-item>
           </sl-menu>
         </sl-dropdown>

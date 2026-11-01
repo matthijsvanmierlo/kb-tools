@@ -215,6 +215,23 @@ function ensureMoreDrawer(role) {
     </div>`;
   }
 
+  // Preferences & Quick Access on mobile
+  itemsHtml += `<div class="space-y-1 pt-2 border-t border-slate-100">
+    <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Preferences &amp; Help</div>
+    <a href="#/settings" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
+      <sl-icon name="gear" class="text-xl text-slate-600"></sl-icon>
+      <span>Settings</span>
+    </a>
+    <button type="button" data-action="data-safety" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-btn text-left cursor-pointer">
+      <sl-icon name="shield-check" class="text-xl text-emerald-600"></sl-icon>
+      <span>Data Safety Checkup</span>
+    </button>
+    <a href="#/guide" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
+      <sl-icon name="book" class="text-xl text-blue-600"></sl-icon>
+      <span>User Guide</span>
+    </a>
+  </div>`;
+
   itemsHtml += `</div>`;
   drawer.innerHTML = itemsHtml;
   overlays.appendChild(drawer);
@@ -234,6 +251,9 @@ function ensureMoreDrawer(role) {
       if (action === 'import') {
         const { UniversalImportDialog } = await import('./universal-import-dialog.js');
         UniversalImportDialog.open();
+      } else if (action === 'data-safety') {
+        const { openDataSafetyDialog } = await import('./data-safety.js');
+        openDataSafetyDialog();
       }
     });
   });

@@ -291,23 +291,52 @@ async function bootstrapApp() {
       }
     });
 
-    // Header More options proxy clicks (<1024px)
+    // Header More options proxy clicks (responsive overflow)
     document.getElementById('kb-header-more-menu')?.addEventListener('sl-select', async (e) => {
       const val = e.detail.item.value;
       if (val === 'guide') {
         router.navigate('#/guide');
+      } else if (val === 'about') {
+        router.navigate('#/about');
+      } else if (val === 'philosophy') {
+        router.navigate('#/philosophy');
       } else if (val === 'safety') {
-        const { default: openDataSafetyDialog } = await import('./components/data-safety.js');
+        const { openDataSafetyDialog } = await import('./components/data-safety.js');
         openDataSafetyDialog();
-      } else if (val === 'devices') {
-        const { default: openDevicesDialog } = await import('./components/devices-dialog.js');
-        openDevicesDialog();
-      } else if (val === 'relay') {
-        openRelayConfigDialog();
+      } else if (val === 'configure-sync') {
+        openBackupLocation('setup');
       } else if (val === 'backup-export') {
         document.getElementById('menu-btn-export-backup')?.click();
       } else if (val === 'backup-restore') {
         document.getElementById('input-backup-file')?.click();
+      } else if (val === 'restore-location') {
+        openBackupLocation('restore');
+      } else if (val === 'recovery-kit') {
+        const { RecoveryKit } = await import('./components/recovery-kit.js');
+        RecoveryKit.open();
+      } else if (val === 'devices') {
+        router.navigate('#/settings?section=devices');
+      } else if (val === 'relay') {
+        router.navigate('#/settings?section=relay');
+      } else if (val === 'import-content') {
+        const { UniversalImportDialog } = await import('./components/universal-import-dialog.js');
+        UniversalImportDialog.open();
+      } else if (val === 'storage-info') {
+        document.getElementById('menu-btn-storage-info')?.click();
+      } else if (val === 'shortcuts') {
+        document.getElementById('menu-btn-keyboard-shortcuts')?.click();
+      } else if (val === 'load-sample') {
+        const { loadDemoWorkspace } = await import('./core/demo.js');
+        await loadDemoWorkspace();
+        toast.success('Sample workspace loaded!');
+        router.handleRoute();
+      } else if (val === 'remove-sample') {
+        const { removeDemoData } = await import('./core/demo.js');
+        await removeDemoData();
+        toast.info('Sample data removed.');
+        router.handleRoute();
+      } else if (val === 'install-pwa') {
+        await promptPwaInstall();
       }
     });
 
@@ -857,10 +886,12 @@ function bindHelpControls() {
   const installPwaItem = document.getElementById('kb-menu-install-pwa');
 
   const updatePwaInstallVisibility = (canInstall) => {
-    if (installPwaItem) {
-      if (canInstall) installPwaItem.classList.remove('hidden');
-      else installPwaItem.classList.add('hidden');
-    }
+    [installPwaItem, document.getElementById('kb-more-menu-install-pwa')].forEach(item => {
+      if (item) {
+        if (canInstall) item.classList.remove('hidden');
+        else item.classList.add('hidden');
+      }
+    });
   };
 
   updatePwaInstallVisibility(canInstallPwa());
