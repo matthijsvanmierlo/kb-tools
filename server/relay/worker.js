@@ -41,6 +41,14 @@ export default {
       blobStore,
       backend: 'd1',
       mediaSigningSecret: env.KB_MEDIA_SIGNING_SECRET || null,
+      oidcConfig: {
+        enabled: Boolean(env.KB_OIDC_GOOGLE_CLIENT_ID || env.KB_OIDC_MS_CLIENT_ID),
+        googleClientId: env.KB_OIDC_GOOGLE_CLIENT_ID,
+        googleDomain: env.KB_OIDC_GOOGLE_DOMAIN,
+        microsoftClientId: env.KB_OIDC_MS_CLIENT_ID,
+        microsoftTenant: env.KB_OIDC_MS_TENANT,
+        autoProvisionTeachers: env.KB_OIDC_AUTO_PROVISION === 'true' || env.KB_OIDC_AUTO_PROVISION === '1'
+      },
       cdnConfig: {
         enabled: Boolean(blobStore || env.KB_CDN_ENDPOINT || env.KB_CDN_PUBLIC_URL),
         endpoint: env.KB_CDN_ENDPOINT,

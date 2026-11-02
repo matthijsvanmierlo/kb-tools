@@ -1,5 +1,6 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
-import { extractBearerToken, hashToken, sameHash } from './auth.js';
+import { extractBearerToken, hashToken, sameHash, generateToken, normalizeClaimCode } from './auth.js';
+import { verifyOidcToken } from './oidc.js';
 import { RateLimiter, RATE_LIMIT_MAX, RATE_LIMIT_WINDOW_MS, DRAFT_RATE_LIMIT_MAX } from './rate-limiter.js';
 import { createDbPartsStore } from './media-store.js';
 import {
@@ -177,6 +178,7 @@ export function createRelayFetchHandler(options = {}) {
     draftLimiter = new RateLimiter(DRAFT_RATE_LIMIT_MAX),
     allowedOrigins = ['*'],
     cdnConfig = {},
+    oidcConfig = options.oidcConfig || options.oidc || {},
     presignHook = null,
     mediaSigningSecret = null,
     backend = null
@@ -257,13 +259,22 @@ export function createRelayFetchHandler(options = {}) {
         const detectedBlobKind = blobStore?.kind || 'memory';
         const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
 
+        const isOidcEnabled = Boolean(oidcConfig.enabled || oidcConfig.googleClientId || oidcConfig.microsoftClientId);
+        const authMethods = ['bearer', 'roll', 'claim'];
+        if (isOidcEnabled) authMethods.push('oidc');
+
         return json(200, {
           ok: true,
           version: VERSION,
           schema_version: SCHEMA_VERSION,
           backend: detectedBackend,
           blobStore: detectedBlobKind,
-          features: ['payloads', 'drops', 'sync', 'feeds', 'media'],
+          features: ['payloads', 'drops', 'drafts', 'sync', 'feeds', 'media'],
+          auth_methods: authMethods,
+          oidc_providers: {
+            google: Boolean(oidcConfig.googleClientId),
+            microsoft: Boolean(oidcConfig.microsoftClientId)
+          },
           limits: {
             maxPayloadSize: MAX_PAYLOAD_SIZE,
             maxChunkSize: MAX_SYNC_CHUNK_SIZE,
@@ -272,8 +283,7 @@ export function createRelayFetchHandler(options = {}) {
             maxDraftSize: MAX_DRAFT_SIZE,
             defaultRetentionDays: DEFAULT_RETENTION_DAYS,
             defaultTeacherQuotaMb: quotaMb
-          },
-          features: ['payloads', 'drops', 'drafts', 'sync', 'feeds', 'media']
+          }
         });
       }
 
@@ -282,7 +292,14 @@ export function createRelayFetchHandler(options = {}) {
         const token = extractBearerToken(request);
         if (!token) return null;
         const hash = hashToken(token);
-        return await db.teachers.getByTokenHash(hash);
+        const teacher = await db.teachers.getByTokenHash(hash);
+        if (!teacher) return null;
+        if (teacher.active === 0) {
+          const err = new Error('TEACHER_DEACTIVATED');
+          err.status = 403;
+          throw err;
+        }
+        return teacher;
       };
 
       // Helper to read text body with byte size limit
@@ -318,6 +335,163 @@ export function createRelayFetchHandler(options = {}) {
         const provided = request.headers.get('x-kb-drop-secret') || '';
         return sameHash(drop.secret_hash, sha256(provided));
       };
+
+      // -------------------------------------------------------------
+      // Auth Endpoints: /auth/roll, /auth/claim, /auth/oidc
+      // -------------------------------------------------------------
+
+      // POST /auth/roll (Single-use key rotation)
+      if (request.method === 'POST' && pathname === '/auth/roll') {
+        const rollRateKey = `roll:${clientIp}`;
+        if (!limiter.isAllowed(rollRateKey, 20)) {
+          return error(429, 'Rate limit exceeded. Please wait a minute before rotating key.');
+        }
+
+        const rawToken = extractBearerToken(request);
+        if (!rawToken) {
+          return error(401, 'Unauthorized: valid bearer token required for key rotation');
+        }
+
+        const currentHash = hashToken(rawToken);
+        const teacher = await db.teachers.getByTokenHash(currentHash);
+        if (!teacher) {
+          return error(401, 'Unauthorized: invalid bearer token');
+        }
+        if (teacher.active === 0) {
+          return error(403, 'Forbidden: teacher account deactivated');
+        }
+
+        const newToken = generateToken();
+        const newHash = hashToken(newToken);
+        const rotated = await db.teachers.rotateToken(teacher.id, currentHash, newHash);
+        if (!rotated) {
+          return error(409, 'Conflict: token rotation failed or token was already rotated');
+        }
+
+        const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
+        const quotaBytes = quotaMb * 1024 * 1024;
+
+        return json(200, {
+          ok: true,
+          token: newToken,
+          teacher_id: teacher.id,
+          name: teacher.name,
+          email: teacher.email,
+          teacher: { id: teacher.id, name: teacher.name, email: teacher.email },
+          bytes_used: teacher.bytes_used,
+          quota_bytes: quotaBytes
+        }, { 'Cache-Control': 'no-store' });
+      }
+
+      // POST /auth/claim (Short one-time claim code exchange)
+      if (request.method === 'POST' && pathname === '/auth/claim') {
+        const claimRateKey = `claim:${clientIp}`;
+        if (!limiter.isAllowed(claimRateKey, 10)) {
+          return error(429, 'Rate limit exceeded. Please wait a minute before claiming code.');
+        }
+
+        const body = await readJson(4096);
+        const rawCode = body?.code || '';
+        const normCode = normalizeClaimCode(rawCode);
+        if (!normCode || normCode.length < 8) {
+          return error(400, 'Valid claim code required');
+        }
+
+        const claimHash = hashToken(normCode);
+        const newToken = generateToken();
+        const newHash = hashToken(newToken);
+
+        const teacher = await db.teachers.claimByCodeHash(claimHash, newHash);
+        if (!teacher) {
+          return error(401, 'Invalid or expired claim code');
+        }
+
+        const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
+        const quotaBytes = quotaMb * 1024 * 1024;
+
+        return json(200, {
+          ok: true,
+          token: newToken,
+          teacher_id: teacher.id,
+          name: teacher.name,
+          email: teacher.email,
+          teacher: { id: teacher.id, name: teacher.name, email: teacher.email },
+          bytes_used: teacher.bytes_used,
+          quota_bytes: quotaBytes
+        }, { 'Cache-Control': 'no-store' });
+      }
+
+      // POST /auth/oidc (School SSO token exchange for Google & Microsoft)
+      if (request.method === 'POST' && pathname === '/auth/oidc') {
+        const isOidcEnabled = Boolean(oidcConfig.enabled || oidcConfig.googleClientId || oidcConfig.microsoftClientId);
+        if (!isOidcEnabled) {
+          return error(501, 'School OIDC SSO is not configured on this relay server');
+        }
+
+        const oidcRateKey = `oidc:${clientIp}`;
+        if (!limiter.isAllowed(oidcRateKey, 15)) {
+          return error(429, 'Rate limit exceeded. Please wait a minute before signing in again.');
+        }
+
+        const body = await readJson(16384);
+        const { provider, id_token } = body || {};
+        if (!provider || !id_token) {
+          return error(400, 'Both provider and id_token are required');
+        }
+
+        let claims;
+        try {
+          claims = await verifyOidcToken({
+            provider,
+            idToken: id_token,
+            oidcConfig,
+            fetchImpl: options.fetchImpl || (typeof fetch !== 'undefined' ? fetch.bind(globalThis) : null)
+          });
+        } catch (err) {
+          return error(401, `OIDC authentication failed: ${err.message}`);
+        }
+
+        // Look up teacher by verified email
+        let teacher = await db.teachers.getByEmail(claims.email);
+        const autoProvision = Boolean(oidcConfig.autoProvisionTeachers);
+
+        if (!teacher && autoProvision) {
+          const generatedId = `T-${createHash('sha256').update(claims.email).digest('hex').slice(0, 8).toUpperCase()}`;
+          const initialToken = generateToken();
+          teacher = await db.teachers.create({
+            id: generatedId,
+            name: claims.name || claims.email.split('@')[0],
+            email: claims.email,
+            tokenHash: hashToken(initialToken),
+            active: 1
+          });
+        }
+
+        if (!teacher) {
+          return error(403, `Unauthorized: ${claims.email} is not registered on this school relay`);
+        }
+        if (teacher.active === 0) {
+          return error(403, 'Forbidden: teacher account deactivated');
+        }
+
+        // Rotate token on SSO sign-in
+        const newToken = generateToken();
+        const newHash = hashToken(newToken);
+        await db.teachers.adminResetToken(teacher.id, newHash);
+
+        const quotaMb = Number(process.env?.KB_RELAY_TEACHER_QUOTA_MB || DEFAULT_TEACHER_QUOTA_MB);
+        const quotaBytes = quotaMb * 1024 * 1024;
+
+        return json(200, {
+          ok: true,
+          token: newToken,
+          teacher_id: teacher.id,
+          name: teacher.name,
+          email: teacher.email || claims.email,
+          bytes_used: teacher.bytes_used,
+          quota_bytes: quotaBytes
+        }, { 'Cache-Control': 'no-store' });
+      }
 
       // -------------------------------------------------------------
       // GET /whoami (authenticated teacher check)
@@ -646,7 +820,9 @@ export function createRelayFetchHandler(options = {}) {
         }
 
         const dropId = randomBytes(16).toString('base64url').slice(0, 22);
-        const secret = randomBytes(24).toString('hex');
+        const secret = (parsed.drop_secret && typeof parsed.drop_secret === 'string')
+          ? parsed.drop_secret
+          : randomBytes(24).toString('hex');
         const secretHash = sha256(secret);
 
         const defaultExp = new Date(Date.now() + DEFAULT_RETENTION_DAYS * 86400000).toISOString();
@@ -1198,11 +1374,6 @@ export function createRelayFetchHandler(options = {}) {
 
       // GET /drops/:dropId/submissions
       if (request.method === 'GET' && dropSubmitMatch) {
-        const teacher = await authenticateTeacher();
-        if (!teacher) {
-          return error(401, 'Unauthorized: valid teacher token required');
-        }
-
         const dropId = dropSubmitMatch[1];
         const drop = await db.drops.get(dropId);
         if (!drop) {
@@ -1211,7 +1382,17 @@ export function createRelayFetchHandler(options = {}) {
         if (drop.expired) {
           return error(410, 'Drop box expired');
         }
-        if (drop.teacher_id !== teacher.id) {
+
+        const hasValidSecret = Boolean(request.headers.get('x-kb-drop-secret') && dropSecretOk(drop));
+        let teacher = null;
+        try {
+          teacher = await authenticateTeacher();
+        } catch (_) {}
+
+        if (!hasValidSecret && (!teacher || drop.teacher_id !== teacher.id)) {
+          if (!teacher && !request.headers.get('x-kb-drop-secret')) {
+            return error(401, 'Unauthorized: valid teacher token or drop secret required');
+          }
           return error(403, 'Forbidden: you do not own this drop box');
         }
 
@@ -1245,11 +1426,6 @@ export function createRelayFetchHandler(options = {}) {
       // GET /drops/:dropId/stats
       const dropStatsMatch = pathname.match(/^\/drops\/([A-Za-z0-9_\-]+)\/stats$/);
       if (request.method === 'GET' && dropStatsMatch) {
-        const teacher = await authenticateTeacher();
-        if (!teacher) {
-          return error(401, 'Unauthorized: valid teacher token required');
-        }
-
         const dropId = dropStatsMatch[1];
         const drop = await db.drops.get(dropId);
         if (!drop) {
@@ -1258,7 +1434,17 @@ export function createRelayFetchHandler(options = {}) {
         if (drop.expired) {
           return error(410, 'Drop box expired');
         }
-        if (drop.teacher_id !== teacher.id) {
+
+        const hasValidSecret = Boolean(request.headers.get('x-kb-drop-secret') && dropSecretOk(drop));
+        let teacher = null;
+        try {
+          teacher = await authenticateTeacher();
+        } catch (_) {}
+
+        if (!hasValidSecret && (!teacher || drop.teacher_id !== teacher.id)) {
+          if (!teacher && !request.headers.get('x-kb-drop-secret')) {
+            return error(401, 'Unauthorized: valid teacher token or drop secret required');
+          }
           return error(403, 'Forbidden: you do not own this drop box');
         }
 
@@ -1496,6 +1682,9 @@ export function createRelayFetchHandler(options = {}) {
 
       return error(404, 'Not found');
     } catch (err) {
+      if (err.status === 403 || err.message === 'TEACHER_DEACTIVATED') {
+        return error(403, 'Forbidden: teacher account deactivated');
+      }
       if (err.code === 413 || err.message === 'PAYLOAD_TOO_LARGE') {
         return error(413, 'Payload too large');
       }

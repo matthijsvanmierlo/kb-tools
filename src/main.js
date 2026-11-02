@@ -776,9 +776,9 @@ export async function openRelayConfigDialog(defaultTab = 'connect') {
           <p class="text-xs text-slate-500 leading-relaxed">
             Connecting to a school-hosted KennisBoost relay server unlocks short links, cross-device multi-teacher sync, and server-assisted student hand-in. All lesson payloads and student submissions remain end-to-end encrypted.
           </p>
-          <sl-input id="input-relay-paste-link" label="Paste 1-Click Onboarding Link (optional)" placeholder="Paste #/connect?relay=...&token=... link to auto-fill"></sl-input>
+          <sl-input id="input-relay-paste-link" label="Paste 1-Click Onboarding Link (optional)" placeholder="Paste capsule, claim code, or #/connect link to auto-fill"></sl-input>
           <sl-input id="input-relay-url" label="Server Base URL" placeholder="https://relay.myschool.edu or http://localhost:8000" value="${Sanitizer.escapeHTML(currentConfig.baseUrl)}"></sl-input>
-          <sl-input id="input-relay-token" type="password" password-toggle label="Teacher Bearer Token" placeholder="Paste 64-character token" value="${Sanitizer.escapeHTML(currentConfig.token)}"></sl-input>
+          <sl-input id="input-relay-token" type="password" label="Teacher Bearer Token or Capsule" placeholder="Paste single-use token or capsule"></sl-input>
           <sl-input id="input-relay-teacher-id" label="Teacher ID (optional)" placeholder="e.g. T-101" value="${Sanitizer.escapeHTML(currentConfig.teacherId)}"></sl-input>
 
           <div id="relay-test-result" class="hidden p-3 rounded-xl text-xs space-y-1"></div>

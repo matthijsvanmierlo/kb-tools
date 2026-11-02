@@ -23,6 +23,8 @@ import {
   RelayTransport
 } from '../../core/transport.js';
 import { renderRelaySetupGuideHTML } from '../../components/relay-setup-guide.js';
+import { parseConnectionInput, relayApiBase } from '../../core/relay-config.js';
+import { signInWithSchoolSso } from '../../core/relay-sso.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
@@ -71,7 +73,6 @@ export async function renderSettingsView(params, router, container) {
   // Read current configuration
   const transportConfig = (await getTransportConfig()) || {};
   const currentRelay = transportConfig.baseUrl || '';
-  const currentToken = transportConfig.token || '';
   const teacherId = transportConfig.teacherId || '';
   const currentRole = RoleMode.get();
   const teacherProfile = (await storage.getMetadata('teacher_profile')) || { name: 'Teacher' };
@@ -133,7 +134,7 @@ export async function renderSettingsView(params, router, container) {
       renderProfileSection(mount, router, currentRole, teacherProfile);
       break;
     case 'relay':
-      await renderRelaySection(mount, router, currentRelay, currentToken, teacherId);
+      await renderRelaySection(mount, router, currentRelay, teacherId);
       break;
     case 'guide':
       renderGuideSection(mount);
@@ -229,7 +230,149 @@ function renderProfileSection(mount, router, currentRole, teacherProfile) {
 // -----------------------------------------------------------------------------
 // 2. School Sync Server Section
 // -----------------------------------------------------------------------------
-async function renderRelaySection(mount, router, currentRelay, currentToken, teacherId) {
+async function renderRelaySection(mount, router, currentRelay, teacherId) {
+  const config = (await getTransportConfig()) || {};
+  const isConnected = Boolean(config.baseUrl);
+  const defaultRelay = (typeof window !== 'undefined' && (window.KB_CONFIG?.relay?.baseUrl || window.KB_CONFIG?.baseUrl)) || '';
+  const ssoConfig = (typeof window !== 'undefined' && (window.KB_CONFIG?.relay?.sso || window.KB_CONFIG?.sso)) || null;
+
+  if (isConnected) {
+    mount.innerHTML = `
+      <div class="space-y-6">
+        <!-- Connected Status Card -->
+        <div class="bg-white border border-slate-200 rounded-2xl p-5 space-y-4">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="font-bold text-slate-900 text-base">Server Connection Status</h3>
+              <p class="text-xs text-slate-500 mt-0.5" id="relay-status-text">
+                Connected to <code>${esc(config.baseUrl)}</code>
+              </p>
+            </div>
+            <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700">
+              <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+              Connected
+            </span>
+          </div>
+
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100 text-xs">
+            <div>
+              <span class="text-slate-400">Teacher ID:</span>
+              <span class="font-medium text-slate-700 ml-1">${esc(config.teacherId || 'N/A')}</span>
+            </div>
+            ${config.name ? `
+            <div>
+              <span class="text-slate-400">Name:</span>
+              <span class="font-medium text-slate-700 ml-1">${esc(config.name)}</span>
+            </div>
+            ` : ''}
+            <div>
+              <span class="text-slate-400">Security:</span>
+              <span class="font-medium text-emerald-700 ml-1">AES-256 Sealed in KeyVault</span>
+            </div>
+          </div>
+
+          <div id="quota-usage-mount" class="hidden pt-2 border-t border-slate-100 space-y-2">
+            <!-- Populated by usage check -->
+          </div>
+
+          <div class="pt-3 border-t border-slate-100 flex flex-wrap gap-2">
+            <sl-button size="small" id="btn-check-relay"><sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Test Connection &amp; Quota</sl-button>
+            <sl-button size="small" id="btn-rotate-key"><sl-icon slot="prefix" name="shield-lock"></sl-icon> Rotate Security Key</sl-button>
+            <sl-button size="small" variant="danger" id="btn-disconnect-relay"><sl-icon slot="prefix" name="x-circle"></sl-icon> Disconnect</sl-button>
+          </div>
+        </div>
+      </div>
+    `;
+
+    mount.querySelector('#btn-check-relay')?.addEventListener('click', async () => {
+      try {
+        const transport = await getTransport();
+        if (!transport || !transport.getUsage) return;
+        const usage = await transport.getUsage();
+        const quotaMount = mount.querySelector('#quota-usage-mount');
+        if (quotaMount) {
+          quotaMount.classList.remove('hidden');
+          const usedMB = ((usage.bytes_used || 0) / (1024 * 1024)).toFixed(1);
+          const limitMB = ((usage.quota_bytes || 1024 * 1024 * 1024) / (1024 * 1024)).toFixed(0);
+          const pct = Math.min(100, Math.round(((usage.bytes_used || 0) / (usage.quota_bytes || 1)) * 100));
+
+          quotaMount.innerHTML = `
+            <div class="flex justify-between text-xs font-semibold text-slate-700">
+              <span>Storage Used: ${usedMB} MB / ${limitMB} MB</span>
+              <span>${pct}%</span>
+            </div>
+            <div class="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+              <div class="bg-blue-600 h-2 rounded-full transition-all" style="width: ${pct}%"></div>
+            </div>
+          `;
+        }
+        toast.success('Connection & quota verified!');
+      } catch (err) {
+        toast.warning(`Usage check error: ${err.message}`);
+      }
+    });
+
+    mount.querySelector('#btn-rotate-key')?.addEventListener('click', async () => {
+      const confirmed = await ConfirmDialog.show({
+        title: 'Rotate Security Key?',
+        message: 'This will issue a fresh token for your account and permanently invalidate the previous key on this device.',
+        confirmText: 'Rotate Key',
+        variant: 'primary'
+      });
+      if (!confirmed) return;
+
+      const btn = mount.querySelector('#btn-rotate-key');
+      btn.loading = true;
+      try {
+        const apiBase = relayApiBase(config.baseUrl);
+        const res = await fetch(`${apiBase}/auth/roll`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${config.token}`
+          }
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.ok || !data.token) {
+          throw new Error(data.error || `Key rotation failed (${res.status})`);
+        }
+
+        await setTransportConfig({
+          baseUrl: config.baseUrl,
+          token: data.token,
+          teacherId: data.teacher?.id || config.teacherId,
+          name: data.teacher?.name || config.name
+        });
+
+        toast.success('Security key successfully rotated!');
+        renderRelaySection(mount, router, config.baseUrl, config.teacherId);
+      } catch (err) {
+        toast.danger(`Key rotation failed: ${err.message}`);
+      } finally {
+        btn.loading = false;
+      }
+    });
+
+    mount.querySelector('#btn-disconnect-relay')?.addEventListener('click', async () => {
+      const confirmed = await ConfirmDialog.show({
+        title: 'Disconnect from Relay?',
+        message: 'You will return to offline-only mode. Existing data on this device will not be deleted.',
+        confirmText: 'Disconnect'
+      });
+      if (confirmed) {
+        await clearTransportConfig();
+        toast.info('Disconnected from school server.');
+        renderRelaySection(mount, router, '', '');
+      }
+    });
+
+    return;
+  }
+
+  // DISCONNECTED STATE
+  const hasGoogleSso = Boolean(ssoConfig?.google?.client_id || ssoConfig?.googleClientId);
+  const hasMsSso = Boolean(ssoConfig?.microsoft?.client_id || ssoConfig?.microsoftClientId);
+
   mount.innerHTML = `
     <div class="space-y-6">
       <!-- Status Card -->
@@ -238,44 +381,72 @@ async function renderRelaySection(mount, router, currentRelay, currentToken, tea
           <div>
             <h3 class="font-bold text-slate-900 text-base">Server Connection Status</h3>
             <p class="text-xs text-slate-500 mt-0.5" id="relay-status-text">
-              ${currentRelay ? `Connected to <code>${esc(currentRelay)}</code>` : 'No sync server configured (offline-only mode)'}
+              No sync server configured (offline-only mode)
             </p>
           </div>
-          <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${currentRelay ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'}">
-            <span class="w-2 h-2 rounded-full ${currentRelay ? 'bg-emerald-500' : 'bg-slate-400'}"></span>
-            ${currentRelay ? 'Configured' : 'Offline'}
+          <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600">
+            <span class="w-2 h-2 rounded-full bg-slate-400"></span>
+            Offline
           </span>
         </div>
-
-        <div id="quota-usage-mount" class="hidden pt-2 border-t border-slate-100 space-y-2">
-          <!-- Populated by usage check -->
-        </div>
-
-        ${currentRelay ? `
-          <div class="pt-3 border-t border-slate-100 flex gap-2">
-            <sl-button size="small" id="btn-check-relay"><sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Test Connection &amp; Quota</sl-button>
-            <sl-button size="small" variant="danger" id="btn-disconnect-relay"><sl-icon slot="prefix" name="x-circle"></sl-icon> Disconnect</sl-button>
-          </div>
-        ` : ''}
       </div>
 
-      <!-- Connect Form -->
+      ${(hasGoogleSso || hasMsSso) ? `
+      <!-- School SSO Login -->
       <div class="bg-white border border-slate-200 rounded-2xl p-5 space-y-4">
-        <h3 class="font-bold text-slate-900 text-base">${currentRelay ? 'Update Server Settings' : 'Connect to a School Server'}</h3>
+        <h3 class="font-bold text-slate-900 text-base">School Single Sign-On (SSO)</h3>
         <p class="text-xs text-slate-500 leading-relaxed">
-          Enter your school relay URL and teacher bearer token. The relay stores zero-knowledge encrypted chunks to sync your devices and collect student hand-ins.
+          Sign in with your verified school account to automatically connect your device to the school relay.
+        </p>
+        <div class="flex flex-wrap gap-3">
+          ${hasGoogleSso ? `
+            <sl-button id="btn-sso-google" variant="default">
+              <sl-icon slot="prefix" name="google"></sl-icon> Sign in with Google Workspace
+            </sl-button>
+          ` : ''}
+          ${hasMsSso ? `
+            <sl-button id="btn-sso-microsoft" variant="default">
+              <sl-icon slot="prefix" name="microsoft"></sl-icon> Sign in with Microsoft 365
+            </sl-button>
+          ` : ''}
+        </div>
+      </div>
+      ` : ''}
+
+      <!-- Connect Form (Masked, Zero Plaintext Token) -->
+      <div class="bg-white border border-slate-200 rounded-2xl p-5 space-y-4">
+        <h3 class="font-bold text-slate-900 text-base">Connect with Code or Link</h3>
+        <p class="text-xs text-slate-500 leading-relaxed">
+          Paste a single-use connection capsule (<code>KBCON1...</code>), a short claim code (<code>KBC-XXXX-XXXX-XXXX</code>), or an onboarding link from your IT administrator. The key will be securely sealed into this device's non-extractable KeyVault.
         </p>
 
         <form id="form-connect-relay" class="space-y-4 max-w-lg">
-          <sl-input id="input-relay-url" label="Relay Server URL" placeholder="https://relay.myschool.edu or http://localhost:8787" value="${esc(currentRelay)}" required></sl-input>
-          <sl-input id="input-relay-token" label="Teacher Bearer Token" type="password" password-toggle placeholder="Bearer token from IT admin" value="${esc(currentToken)}"></sl-input>
-          <sl-input id="input-relay-teacher-id" label="Teacher ID (Optional)" placeholder="e.g. teacher_1" value="${esc(teacherId)}"></sl-input>
+          <sl-input
+            id="input-relay-url"
+            label="Relay Server URL"
+            placeholder="https://relay.myschool.edu"
+            value="${esc(defaultRelay)}"
+            help-text="Optional if included in your connection link or capsule."
+          ></sl-input>
+
+          <sl-input
+            id="input-relay-token"
+            label="Connection Code, Bearer Token, or Link"
+            type="password"
+            placeholder="Paste KBCON1... capsule, claim code, or onboarding link"
+            required
+            help-text="Single-use credentials are automatically rotated and encrypted at rest."
+          ></sl-input>
 
           <div id="relay-validation-feedback" class="text-xs hidden"></div>
 
           <div class="flex gap-2 pt-2">
-            <sl-button type="button" size="small" id="btn-test-before-save"><sl-icon slot="prefix" name="activity"></sl-icon> Test Connection</sl-button>
-            <sl-button type="submit" variant="primary" size="small" id="btn-save-relay">Save &amp; Connect</sl-button>
+            <sl-button type="button" size="small" id="btn-test-before-save">
+              <sl-icon slot="prefix" name="activity"></sl-icon> Test Connection
+            </sl-button>
+            <sl-button type="submit" variant="primary" size="small" id="btn-save-relay">
+              <sl-icon slot="prefix" name="link-45deg"></sl-icon> Connect to Server
+            </sl-button>
           </div>
         </form>
       </div>
@@ -284,12 +455,11 @@ async function renderRelaySection(mount, router, currentRelay, currentToken, tea
 
   const form = mount.querySelector('#form-connect-relay');
   const urlInput = mount.querySelector('#input-relay-url');
-  const tokenInput = mount.querySelector('#input-relay-token');
-  const idInput = mount.querySelector('#input-relay-teacher-id');
+  const credInput = mount.querySelector('#input-relay-token');
   const feedback = mount.querySelector('#relay-validation-feedback');
 
   const testConnection = async (showSuccessToast = false) => {
-    const rawUrl = urlInput.value.trim();
+    const rawUrl = urlInput.value.trim() || defaultRelay;
     const val = validateRelayUrl(rawUrl);
     if (!val.ok) {
       feedback.className = 'text-xs text-rose-600 block';
@@ -302,15 +472,23 @@ async function renderRelaySection(mount, router, currentRelay, currentToken, tea
 
     const t0 = performance.now();
     try {
-      const transport = new RelayTransport({ baseUrl: val.url, token: tokenInput.value.trim() });
-      const health = await transport.getHealth();
+      const rawCred = credInput.value.trim();
+      const parsed = rawCred ? parseConnectionInput(rawCred, { defaultBaseUrl: val.url }) : null;
+      const testToken = (parsed?.kind === 'token' || parsed?.kind === 'capsule' || parsed?.kind === 'legacy')
+        ? parsed.token
+        : rawCred;
+
+      const transport = new RelayTransport({ baseUrl: val.url, token: testToken });
+      const health = await transport.health();
       const latency = Math.round(performance.now() - t0);
 
-      // Validate token via /whoami if token provided
-      let whoami = null;
-      if (tokenInput.value.trim()) {
+      if (testToken) {
         try {
-          whoami = await transport.getWhoami();
+          const whoami = await transport.whoami();
+          feedback.className = 'text-xs text-emerald-600 font-semibold block';
+          feedback.textContent = `✓ Connected! Latency: ${latency}ms · Server: v${health.serverVersion || '2'} · Teacher: ${whoami?.teacher_id || 'valid'}`;
+          if (showSuccessToast) toast.success('Server connection verified!');
+          return true;
         } catch (err) {
           feedback.className = 'text-xs text-rose-600 block';
           feedback.textContent = `Server responded in ${latency}ms, but teacher token was rejected (401 Unauthorized). Check your token.`;
@@ -319,8 +497,8 @@ async function renderRelaySection(mount, router, currentRelay, currentToken, tea
       }
 
       feedback.className = 'text-xs text-emerald-600 font-semibold block';
-      feedback.textContent = `✓ Connected! Latency: ${latency}ms · Server: v${health.version || '2'} (${health.backend || 'relay'}) · Teacher: ${whoami?.teacher_id || 'valid'}`;
-      if (showSuccessToast) toast.success('Server connection verified!');
+      feedback.textContent = `✓ Server reachable! Latency: ${latency}ms`;
+      if (showSuccessToast) toast.success('Server reachable!');
       return true;
     } catch (err) {
       feedback.className = 'text-xs text-rose-600 block';
@@ -331,69 +509,159 @@ async function renderRelaySection(mount, router, currentRelay, currentToken, tea
 
   mount.querySelector('#btn-test-before-save')?.addEventListener('click', () => testConnection(true));
 
+  // School SSO Handlers
+  if (hasGoogleSso) {
+    mount.querySelector('#btn-sso-google')?.addEventListener('click', async () => {
+      try {
+        const gConfig = ssoConfig?.google || {};
+        const clientId = gConfig.client_id || ssoConfig?.googleClientId;
+        const targetRelay = urlInput?.value.trim() || defaultRelay;
+        if (!targetRelay) {
+          toast.danger('Please enter the Relay Server URL first.');
+          return;
+        }
+        const val = validateRelayUrl(targetRelay);
+        if (!val.ok) {
+          toast.danger(val.reason);
+          return;
+        }
+        const res = await signInWithSchoolSso({
+          provider: 'google',
+          baseUrl: val.url,
+          clientId,
+          hostedDomain: gConfig.hosted_domain || ''
+        });
+        toast.success(`Welcome, ${res.teacher?.name || 'Teacher'}! Server connected.`);
+        renderRelaySection(mount, router, val.url, res.teacher?.id);
+      } catch (err) {
+        toast.danger(`Google SSO failed: ${err.message}`);
+      }
+    });
+  }
+
+  if (hasMsSso) {
+    mount.querySelector('#btn-sso-microsoft')?.addEventListener('click', async () => {
+      try {
+        const msConfig = ssoConfig?.microsoft || {};
+        const clientId = msConfig.client_id || ssoConfig?.microsoftClientId;
+        const targetRelay = urlInput?.value.trim() || defaultRelay;
+        if (!targetRelay) {
+          toast.danger('Please enter the Relay Server URL first.');
+          return;
+        }
+        const val = validateRelayUrl(targetRelay);
+        if (!val.ok) {
+          toast.danger(val.reason);
+          return;
+        }
+        const res = await signInWithSchoolSso({
+          provider: 'microsoft',
+          baseUrl: val.url,
+          clientId,
+          tenant: msConfig.tenant || 'common'
+        });
+        toast.success(`Welcome, ${res.teacher?.name || 'Teacher'}! Server connected.`);
+        renderRelaySection(mount, router, val.url, res.teacher?.id);
+      } catch (err) {
+        toast.danger(`Microsoft SSO failed: ${err.message}`);
+      }
+    });
+  }
+
   form?.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const rawUrl = urlInput.value.trim();
-    const val = validateRelayUrl(rawUrl);
+    feedback.className = 'text-xs hidden';
+
+    const rawCred = credInput.value.trim();
+    const rawUrl = urlInput.value.trim() || defaultRelay;
+
+    if (!rawCred) {
+      feedback.className = 'text-xs text-rose-600 block';
+      feedback.textContent = 'Please enter a connection code or onboarding link.';
+      return;
+    }
+
+    const parsed = parseConnectionInput(rawCred, { defaultBaseUrl: rawUrl });
+    if (!parsed) {
+      feedback.className = 'text-xs text-rose-600 block';
+      feedback.textContent = 'Unrecognized format. Paste a valid capsule, claim code, or onboarding link.';
+      return;
+    }
+
+    const targetUrl = parsed.baseUrl || rawUrl;
+    const val = validateRelayUrl(targetUrl);
     if (!val.ok) {
-      toast.danger(val.reason);
+      feedback.className = 'text-xs text-rose-600 block';
+      feedback.textContent = val.reason;
       return;
     }
 
-    const ok = await testConnection();
-    if (!ok && tokenInput.value.trim()) {
-      toast.danger('Could not verify server credentials. Please fix errors before saving.');
-      return;
-    }
+    const submitBtn = mount.querySelector('#btn-save-relay');
+    submitBtn.loading = true;
+    feedback.className = 'text-xs text-slate-500 block';
+    feedback.textContent = 'Validating and rotating server credentials...';
 
-    await setTransportConfig({
-      baseUrl: val.url,
-      token: tokenInput.value.trim(),
-      teacherId: idInput.value.trim() || undefined
-    });
-
-    toast.success('Server connection saved!');
-    router.navigate('#/settings?section=relay');
-  });
-
-  mount.querySelector('#btn-disconnect-relay')?.addEventListener('click', async () => {
-    const confirmed = await ConfirmDialog.show({
-      title: 'Disconnect from Relay?',
-      message: 'You will return to offline-only mode. Existing data on this device will not be deleted.',
-      confirmText: 'Disconnect'
-    });
-    if (confirmed) {
-      await clearTransportConfig();
-      toast.info('Disconnected from school server.');
-      router.navigate('#/settings?section=relay');
-    }
-  });
-
-  mount.querySelector('#btn-check-relay')?.addEventListener('click', async () => {
     try {
-      const transport = await getTransport();
-      if (!transport || !transport.getUsage) return;
-      const usage = await transport.getUsage();
-      const quotaMount = mount.querySelector('#quota-usage-mount');
-      if (quotaMount) {
-        quotaMount.classList.remove('hidden');
-        const usedMB = ((usage.bytes_used || 0) / (1024 * 1024)).toFixed(1);
-        const limitMB = ((usage.quota_bytes || 1024 * 1024 * 1024) / (1024 * 1024)).toFixed(0);
-        const pct = Math.min(100, Math.round(((usage.bytes_used || 0) / (usage.quota_bytes || 1)) * 100));
+      const apiBase = relayApiBase(val.url);
+      let finalToken = '';
+      let finalTeacherId = parsed.teacherId || '';
+      let finalTeacherName = parsed.name || '';
 
-        quotaMount.innerHTML = `
-          <div class="flex justify-between text-xs font-semibold text-slate-700">
-            <span>Storage Used: ${usedMB} MB / ${limitMB} MB</span>
-            <span>${pct}%</span>
-          </div>
-          <div class="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-            <div class="bg-blue-600 h-2 rounded-full transition-all" style="width: ${pct}%"></div>
-          </div>
-        `;
+      if (parsed.kind === 'claim') {
+        const claimRes = await fetch(`${apiBase}/auth/claim`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: parsed.code })
+        });
+        const claimData = await claimRes.json().catch(() => ({}));
+        if (!claimRes.ok || !claimData.ok) {
+          throw new Error(claimData.error || claimData.message || `Claim code invalid or expired (${claimRes.status})`);
+        }
+        finalToken = claimData.token;
+        finalTeacherId = claimData.teacher?.id || finalTeacherId;
+        finalTeacherName = claimData.teacher?.name || finalTeacherName;
+      } else if (parsed.kind === 'capsule' || parsed.kind === 'token') {
+        finalToken = parsed.token;
+        try {
+          const rollRes = await fetch(`${apiBase}/auth/roll`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${parsed.token}`
+            }
+          });
+          if (rollRes.ok) {
+            const rollData = await rollRes.json().catch(() => ({}));
+            if (rollData.ok && rollData.token) {
+              finalToken = rollData.token;
+              finalTeacherId = rollData.teacher?.id || finalTeacherId;
+              finalTeacherName = rollData.teacher?.name || finalTeacherName;
+            }
+          } else if (rollRes.status !== 404) {
+            const errData = await rollRes.json().catch(() => ({}));
+            throw new Error(errData.error || `Key rotation failed (${rollRes.status})`);
+          }
+        } catch (rollErr) {
+          if (rollErr.message && !rollErr.message.includes('404')) {
+            throw rollErr;
+          }
+        }
       }
-      toast.success('Connection & quota verified!');
+
+      await setTransportConfig({
+        baseUrl: val.url,
+        token: finalToken,
+        teacherId: finalTeacherId,
+        name: finalTeacherName
+      });
+
+      toast.success('Successfully connected to school server!');
+      renderRelaySection(mount, router, val.url, finalTeacherId);
     } catch (err) {
-      toast.warning(`Usage check error: ${err.message}`);
+      feedback.className = 'text-xs text-rose-600 block';
+      feedback.textContent = `Connection failed: ${err.message}`;
+    } finally {
+      submitBtn.loading = false;
     }
   });
 }

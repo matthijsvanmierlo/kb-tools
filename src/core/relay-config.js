@@ -6,6 +6,131 @@
  * `GET /health` (is a relay there?) and `GET /whoami` (does the token work?).
  */
 
+export const CONNECT_CAPSULE_PREFIX = 'KBCON1.';
+
+/**
+ * Decode a KBCON1. capsule string in browser/client environment.
+ * @param {string} capsuleStr
+ * @returns {{ relayUrl: string, token: string, teacherId?: string }|null}
+ */
+export function decodeConnectCapsule(capsuleStr) {
+  const raw = String(capsuleStr || '').trim();
+  if (!raw.startsWith(CONNECT_CAPSULE_PREFIX)) return null;
+  try {
+    const b64 = raw.slice(CONNECT_CAPSULE_PREFIX.length).replace(/-/g, '+').replace(/_/g, '/');
+    const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+    const jsonStr = atob(padded);
+    const parsed = JSON.parse(jsonStr);
+    if (!parsed || !parsed.r || !parsed.t) return null;
+    return {
+      baseUrl: parsed.r,
+      relayUrl: parsed.r,
+      token: parsed.t,
+      teacherId: parsed.id || undefined,
+      name: parsed.n || undefined
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+/**
+ * Normalize human-entered claim code (strips KBC prefix, dashes, spaces; maps O->0, I/L->1).
+ * @param {string} code
+ * @returns {string}
+ */
+export function normalizeClaimCode(code) {
+  return String(code || '')
+    .toUpperCase()
+    .replace(/^KBC-?/i, '')
+    .replace(/[^0-9A-Z]/g, '')
+    .replace(/O/g, '0')
+    .replace(/[IL]/g, '1');
+}
+
+/**
+ * Parse any user-provided connection input:
+ * 1. Opaque capsule URL (e.g. `https://app/#/connect?c=KBCON1...` or bare `KBCON1...`)
+ * 2. Legacy URL (e.g. `https://app/#/connect?relay=...&token=...`)
+ * 3. Short claim code (e.g. `KBC-XXXX-XXXX-XXXX` or `XXXX-XXXX-XXXX`), requiring fallbackRelayUrl
+ * 4. Raw 64-hex token, requiring fallbackRelayUrl
+ *
+ * @param {string} input
+ * @param {string} [fallbackRelayUrl]
+ * @returns {{ kind: 'capsule'|'legacy'|'claim'|'token'|'invalid', relayUrl?: string, token?: string, teacherId?: string, claimCode?: string, error?: string }}
+ */
+export function parseConnectionInput(input, fallbackRelayUrl = '') {
+  const defaultUrl = (typeof fallbackRelayUrl === 'object' && fallbackRelayUrl !== null)
+    ? (fallbackRelayUrl.defaultBaseUrl || fallbackRelayUrl.baseUrl || '')
+    : String(fallbackRelayUrl || '');
+
+  const raw = String(input || '').trim();
+  if (!raw) return { kind: 'invalid', error: 'Please enter a connection link or claim code.' };
+
+  // 1. Check if input contains a KBCON1. capsule (either bare or in URL/hash)
+  const capsuleMatch = raw.match(/KBCON1\.[A-Za-z0-9_-]+/);
+  if (capsuleMatch) {
+    const decoded = decodeConnectCapsule(capsuleMatch[0]);
+    if (decoded && (decoded.baseUrl || decoded.relayUrl) && decoded.token) {
+      return {
+        kind: 'capsule',
+        baseUrl: decoded.baseUrl || decoded.relayUrl,
+        relayUrl: decoded.relayUrl || decoded.baseUrl,
+        token: decoded.token,
+        teacherId: decoded.teacherId,
+        name: decoded.name
+      };
+    }
+    return { kind: 'invalid', error: 'The connection link appears damaged or invalid.' };
+  }
+
+  // 2. Legacy URL query / hash containing ?relay=...&token=...
+  if (raw.includes('token=') && (raw.includes('relay=') || raw.includes('baseUrl='))) {
+    try {
+      const qIndex = raw.indexOf('?');
+      if (qIndex !== -1) {
+        const sp = new URLSearchParams(raw.slice(qIndex));
+        const relay = sp.get('relay') || sp.get('baseUrl') || defaultUrl;
+        const token = sp.get('token');
+        const teacherId = sp.get('id') || sp.get('teacherId');
+        if (relay && token) {
+          return { kind: 'legacy', baseUrl: relay, relayUrl: relay, token, teacherId: teacherId || undefined };
+        }
+      }
+    } catch (_) {}
+  }
+
+  // 3. Short claim code (12 Crockford chars, with or without KBC- prefix and dashes)
+  const normClaim = normalizeClaimCode(raw);
+  if (/^[0-9A-HJKMNP-TV-Z]{12}$/.test(normClaim)) {
+    if (!defaultUrl) {
+      return { kind: 'invalid', error: 'Please enter the Server URL above before entering a claim code.' };
+    }
+    return {
+      kind: 'claim',
+      baseUrl: defaultUrl,
+      relayUrl: defaultUrl,
+      code: normClaim,
+      claimCode: normClaim
+    };
+  }
+
+  // 4. Raw 64-hex bearer token
+  if (/^[a-f0-9]{64}$/i.test(raw)) {
+    if (!defaultUrl) {
+      return { kind: 'invalid', error: 'Please enter the Server URL above before entering a bearer token.' };
+    }
+    return {
+      kind: 'token',
+      baseUrl: defaultUrl,
+      relayUrl: defaultUrl,
+      token: raw
+    };
+  }
+
+  return { kind: 'invalid', error: 'Unrecognized format. Paste an onboarding link, claim code (KBC-...), or bearer token.' };
+}
+
 const HEALTH_TIMEOUT_MS = 10000;
 
 const PRIVATE_V4 = [

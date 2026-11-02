@@ -45,6 +45,11 @@ export const CLOUD_ORIGINS = {
   microsoft: ['https://login.microsoftonline.com', 'https://graph.microsoft.com', 'https://*.sharepoint.com']
 };
 
+export const SSO_ORIGINS = {
+  google: ['https://accounts.google.com'],
+  microsoft: ['https://login.microsoftonline.com']
+};
+
 export function cloudOriginsFromEnv(env = process.env) {
   return String(env.KB_CLOUD_PROVIDERS || '')
     .split(',').map(s => s.trim().toLowerCase()).filter(Boolean)
@@ -77,6 +82,8 @@ export function configOrigins(configPath = CONFIG_JSON) {
   }
   if (cfg.cloud?.google?.clientId) out.push(...CLOUD_ORIGINS.google);
   if (cfg.cloud?.microsoft?.clientId) out.push(...CLOUD_ORIGINS.microsoft);
+  if (cfg.relay?.sso?.google || cfg.sso?.google) out.push(...SSO_ORIGINS.google);
+  if (cfg.relay?.sso?.microsoft || cfg.sso?.microsoft) out.push(...SSO_ORIGINS.microsoft);
   return out;
 }
 

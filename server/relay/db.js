@@ -39,6 +39,20 @@ export function createDatabase(filePath = ':memory:') {
     }
   } catch (_) {}
 
+  // Schema v4 migration for teachers table (email, claim_hash, claim_expires_at, active, token_rotated_at)
+  try {
+    const tCols = db.prepare('PRAGMA table_info(teachers)').all().map(c => c.name);
+    if (tCols.length) {
+      if (!tCols.includes('email')) db.exec('ALTER TABLE teachers ADD COLUMN email TEXT;');
+      if (!tCols.includes('claim_hash')) db.exec('ALTER TABLE teachers ADD COLUMN claim_hash TEXT;');
+      if (!tCols.includes('claim_expires_at')) db.exec('ALTER TABLE teachers ADD COLUMN claim_expires_at TEXT;');
+      if (!tCols.includes('active')) db.exec('ALTER TABLE teachers ADD COLUMN active INTEGER NOT NULL DEFAULT 1;');
+      if (!tCols.includes('token_rotated_at')) db.exec('ALTER TABLE teachers ADD COLUMN token_rotated_at TEXT;');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_teachers_email ON teachers(email);');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_teachers_claim ON teachers(claim_hash);');
+    }
+  } catch (_) {}
+
   return {
     raw: db,
 
@@ -264,16 +278,69 @@ export function createDatabase(filePath = ':memory:') {
     },
 
     teachers: {
-      create({ id, name, tokenHash, createdAt = new Date().toISOString() }) {
-        db.prepare('INSERT INTO teachers (id, name, token_hash, bytes_used, created_at) VALUES (?, ?, ?, 0, ?)')
-          .run(id, name, tokenHash, createdAt);
-        return { id, name, tokenHash, createdAt };
+      create({ id, name, email = null, tokenHash, claimHash = null, claimExpiresAt = null, active = 1, createdAt = new Date().toISOString() }) {
+        db.prepare('INSERT INTO teachers (id, name, email, token_hash, claim_hash, claim_expires_at, active, bytes_used, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)')
+          .run(id, name, email ? email.toLowerCase().trim() : null, tokenHash, claimHash, claimExpiresAt, active ? 1 : 0, createdAt);
+        return { id, name, email, tokenHash, claimHash, claimExpiresAt, active: active ? 1 : 0, createdAt };
       },
       getByTokenHash(tokenHash) {
         return db.prepare('SELECT * FROM teachers WHERE token_hash = ?').get(tokenHash) || null;
       },
       getById(id) {
         return db.prepare('SELECT * FROM teachers WHERE id = ?').get(id) || null;
+      },
+      getByEmail(email) {
+        if (!email) return null;
+        return db.prepare('SELECT * FROM teachers WHERE LOWER(email) = LOWER(?)').get(email.trim()) || null;
+      },
+      rotateToken(teacherId, oldTokenHash, newTokenHash) {
+        const newHash = newTokenHash !== undefined ? newTokenHash : oldTokenHash;
+        const oldHash = newTokenHash !== undefined ? oldTokenHash : null;
+        const now = new Date().toISOString();
+        if (oldHash) {
+          const res = db.prepare(`
+            UPDATE teachers
+            SET token_hash = ?, claim_hash = NULL, claim_expires_at = NULL, token_rotated_at = ?
+            WHERE id = ? AND token_hash = ? AND active = 1
+          `).run(newHash, now, teacherId, oldHash);
+          return res.changes > 0;
+        } else {
+          const res = db.prepare(`
+            UPDATE teachers
+            SET token_hash = ?, claim_hash = NULL, claim_expires_at = NULL, token_rotated_at = ?
+            WHERE id = ? AND active = 1
+          `).run(newHash, now, teacherId);
+          return res.changes > 0;
+        }
+      },
+      claimByCodeHash(claimHash, newTokenHash) {
+        const now = new Date().toISOString();
+        const teacher = db.prepare(`
+          SELECT * FROM teachers
+          WHERE claim_hash = ? AND active = 1 AND (claim_expires_at IS NULL OR claim_expires_at > ?)
+        `).get(claimHash, now);
+        if (!teacher) return null;
+
+        db.prepare(`
+          UPDATE teachers
+          SET token_hash = ?, claim_hash = NULL, claim_expires_at = NULL, token_rotated_at = ?
+          WHERE id = ?
+        `).run(newTokenHash, now, teacher.id);
+
+        return this.getById(teacher.id);
+      },
+      setActive(teacherId, active) {
+        const res = db.prepare('UPDATE teachers SET active = ? WHERE id = ?').run(active ? 1 : 0, teacherId);
+        return res.changes > 0;
+      },
+      adminResetToken(teacherId, newTokenHash, claimHash = null, claimExpiresAt = null) {
+        const now = new Date().toISOString();
+        const res = db.prepare(`
+          UPDATE teachers
+          SET token_hash = ?, claim_hash = ?, claim_expires_at = ?, token_rotated_at = ?, active = 1
+          WHERE id = ?
+        `).run(newTokenHash, claimHash, claimExpiresAt, now, teacherId);
+        return res.changes > 0;
       },
       adjustBytesUsed(teacherId, deltaBytes) {
         db.prepare('UPDATE teachers SET bytes_used = MAX(0, bytes_used + ?) WHERE id = ?').run(deltaBytes, teacherId);

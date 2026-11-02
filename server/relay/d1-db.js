@@ -48,6 +48,23 @@ export function createD1Database(d1) {
         }
       }
 
+      // Safe schema v4 migrations for existing D1 databases
+      const migrationStmts = [
+        'ALTER TABLE drops ADD COLUMN secret_hash TEXT',
+        'ALTER TABLE teachers ADD COLUMN email TEXT',
+        'ALTER TABLE teachers ADD COLUMN claim_hash TEXT',
+        'ALTER TABLE teachers ADD COLUMN claim_expires_at TEXT',
+        'ALTER TABLE teachers ADD COLUMN active INTEGER NOT NULL DEFAULT 1',
+        'ALTER TABLE teachers ADD COLUMN token_rotated_at TEXT',
+        'CREATE INDEX IF NOT EXISTS idx_teachers_email ON teachers(email)',
+        'CREATE INDEX IF NOT EXISTS idx_teachers_claim ON teachers(claim_hash)'
+      ];
+      for (const mStmt of migrationStmts) {
+        try {
+          await d1.prepare(mStmt).run();
+        } catch (_) {}
+      }
+
       try {
         await d1.prepare('INSERT OR REPLACE INTO relay_meta (key, value) VALUES (?, ?)')
           .bind('schema_version', String(SCHEMA_VERSION))
@@ -267,11 +284,11 @@ export function createD1Database(d1) {
     },
 
     teachers: {
-      async create({ id, name, tokenHash, createdAt = new Date().toISOString() }) {
-        await d1.prepare('INSERT INTO teachers (id, name, token_hash, bytes_used, created_at) VALUES (?, ?, ?, 0, ?)')
-          .bind(id, name, tokenHash, createdAt)
+      async create({ id, name, email = null, tokenHash, claimHash = null, claimExpiresAt = null, active = 1, createdAt = new Date().toISOString() }) {
+        await d1.prepare('INSERT INTO teachers (id, name, email, token_hash, claim_hash, claim_expires_at, active, bytes_used, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)')
+          .bind(id, name, email ? email.toLowerCase().trim() : null, tokenHash, claimHash, claimExpiresAt, active ? 1 : 0, createdAt)
           .run();
-        return { id, name, tokenHash, createdAt };
+        return { id, name, email, tokenHash, claimHash, claimExpiresAt, active: active ? 1 : 0, createdAt };
       },
       async getByTokenHash(tokenHash) {
         const row = await d1.prepare('SELECT * FROM teachers WHERE token_hash = ?').bind(tokenHash).first();
@@ -280,6 +297,62 @@ export function createD1Database(d1) {
       async getById(id) {
         const row = await d1.prepare('SELECT * FROM teachers WHERE id = ?').bind(id).first();
         return row || null;
+      },
+      async getByEmail(email) {
+        if (!email) return null;
+        const row = await d1.prepare('SELECT * FROM teachers WHERE LOWER(email) = LOWER(?)').bind(email.trim()).first();
+        return row || null;
+      },
+      async rotateToken(teacherId, oldTokenHash, newTokenHash) {
+        const newHash = newTokenHash !== undefined ? newTokenHash : oldTokenHash;
+        const oldHash = newTokenHash !== undefined ? oldTokenHash : null;
+        const now = new Date().toISOString();
+        if (oldHash) {
+          const res = await d1.prepare(`
+            UPDATE teachers
+            SET token_hash = ?, claim_hash = NULL, claim_expires_at = NULL, token_rotated_at = ?
+            WHERE id = ? AND token_hash = ? AND active = 1
+          `).bind(newHash, now, teacherId, oldHash).run();
+          return (res?.meta?.changes ?? 0) > 0;
+        } else {
+          const res = await d1.prepare(`
+            UPDATE teachers
+            SET token_hash = ?, claim_hash = NULL, claim_expires_at = NULL, token_rotated_at = ?
+            WHERE id = ? AND active = 1
+          `).bind(newHash, now, teacherId).run();
+          return (res?.meta?.changes ?? 0) > 0;
+        }
+      },
+      async claimByCodeHash(claimHash, newTokenHash) {
+        const now = new Date().toISOString();
+        const teacher = await d1.prepare(`
+          SELECT * FROM teachers
+          WHERE claim_hash = ? AND active = 1 AND (claim_expires_at IS NULL OR claim_expires_at > ?)
+        `).bind(claimHash, now).first();
+        if (!teacher) return null;
+
+        await d1.prepare(`
+          UPDATE teachers
+          SET token_hash = ?, claim_hash = NULL, claim_expires_at = NULL, token_rotated_at = ?
+          WHERE id = ?
+        `).bind(newTokenHash, now, teacher.id).run();
+
+        return this.getById(teacher.id);
+      },
+      async setActive(teacherId, active) {
+        const res = await d1.prepare('UPDATE teachers SET active = ? WHERE id = ?')
+          .bind(active ? 1 : 0, teacherId)
+          .run();
+        return (res?.meta?.changes ?? 0) > 0;
+      },
+      async adminResetToken(teacherId, newTokenHash, claimHash = null, claimExpiresAt = null) {
+        const now = new Date().toISOString();
+        const res = await d1.prepare(`
+          UPDATE teachers
+          SET token_hash = ?, claim_hash = ?, claim_expires_at = ?, token_rotated_at = ?, active = 1
+          WHERE id = ?
+        `).bind(newTokenHash, claimHash, claimExpiresAt, now, teacherId).run();
+        return (res?.meta?.changes ?? 0) > 0;
       },
       async adjustBytesUsed(teacherId, deltaBytes) {
         await d1.prepare('UPDATE teachers SET bytes_used = MAX(0, bytes_used + ?) WHERE id = ?')

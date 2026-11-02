@@ -14,14 +14,21 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { createDatabase } from '../server/relay/db.js';
-import { generateToken, hashToken } from '../server/relay/auth.js';
+import {
+  generateToken,
+  hashToken,
+  encodeConnectCapsule,
+  generateClaimCode,
+  hashClaimCode
+} from '../server/relay/auth.js';
 
 const USAGE = `Usage: npm run relay:init -- [options]
   --dir <path>             where data/, relay.env and teacher-tokens.csv go (default ./relay-deploy)
-  --teacher "<id>:<name>"  add a teacher (repeatable)
-  --teachers-csv <file>    add teachers from a CSV with columns id,name
+  --teacher "<id>:<name>[:email]"  add a teacher (repeatable)
+  --teachers-csv <file>    add teachers from a CSV with columns id,name[,email]
   --port <n>               port to listen on (default 3000; 443 needs extra rights, see the README)
-  --public-url <url>       the URL teachers will use, e.g. https://kb.school.lan (for the token sheet)
+  --public-url <url>       the relay URL teachers will connect to (e.g. https://relay.myschool.edu)
+  --app-url <url>          the web app URL (e.g. Cloudflare Pages: https://app.myschool.edu)
   --origins <list>         allowed CORS origins, comma-separated (default: the public URL)
   --serve-app              also serve the KennisBoost app from the relay (one origin, simplest CSP)
   --tls-cert <file>        HTTPS certificate (PEM)
@@ -31,17 +38,17 @@ const USAGE = `Usage: npm run relay:init -- [options]
 export function parseTeachers(values = [], csvText = '') {
   const out = [];
   for (const v of values) {
-    const i = v.indexOf(':');
-    const id = (i === -1 ? v : v.slice(0, i)).trim();
-    const name = (i === -1 ? v : v.slice(i + 1)).trim() || id;
-    if (id) out.push({ id, name });
+    const parts = v.split(':');
+    const id = parts[0]?.trim();
+    const name = parts[1]?.trim() || id;
+    const email = parts[2]?.trim().toLowerCase() || null;
+    if (id) out.push({ id, name, email });
   }
   const lines = csvText.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
   if (lines.length && /^id\s*,/i.test(lines[0])) lines.shift();
   for (const line of lines) {
-    const [id, ...rest] = line.split(',');
-    const name = rest.join(',').replace(/^"|"$/g, '').trim();
-    if (id?.trim()) out.push({ id: id.trim(), name: name || id.trim() });
+    const [id, name, email] = line.split(',').map(s => s?.replace(/^"|"$/g, '').trim());
+    if (id) out.push({ id, name: name || id, email: email?.toLowerCase() || null });
   }
   const bad = out.find(t => !/^[A-Za-z0-9._-]{1,64}$/.test(t.id));
   if (bad) throw new Error(`Teacher id "${bad.id}" may only contain letters, digits, ".", "_" and "-".`);
@@ -51,14 +58,29 @@ export function parseTeachers(values = [], csvText = '') {
 const csvCell = (v) => (/[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v));
 
 /**
- * @returns {{ created: Array<{id,name,token}>, skipped: string[], files: object }}
+ * @returns {{ created: Array<{id,name,email,token,claimCode,capsule}>, skipped: string[], files: object, url: string }}
  */
-export function initRelay({ dir, teachers, port = 3000, publicUrl = '', origins = '', serveApp = false, tlsCert = '', tlsKey = '', retentionDays = 180 }) {
+export function initRelay({
+  dir,
+  teachers,
+  port = 3000,
+  publicUrl = '',
+  appUrl = '',
+  origins = '',
+  serveApp = false,
+  tlsCert = '',
+  tlsKey = '',
+  retentionDays = 180
+}) {
   const root = path.resolve(dir);
   const dataDir = path.join(root, 'data');
   fs.mkdirSync(dataDir, { recursive: true });
   const dbPath = path.join(dataDir, 'relay.sqlite');
   const db = createDatabase(dbPath);
+
+  const scheme = tlsCert ? 'https' : 'http';
+  const url = publicUrl || `${scheme}://localhost:${port}`;
+  const app = (appUrl || url).replace(/\/+$/, '');
 
   const created = [];
   const skipped = [];
@@ -68,18 +90,37 @@ export function initRelay({ dir, teachers, port = 3000, publicUrl = '', origins 
       continue;
     }
     const token = generateToken();
-    db.teachers.create({ id: t.id, name: t.name, tokenHash: hashToken(token) });
-    created.push({ ...t, token });
+    const tokenHash = hashToken(token);
+    const claimCode = generateClaimCode();
+    const claimHash = hashClaimCode(claimCode);
+    const claimExpiresAt = new Date(Date.now() + 7 * 86400000).toISOString();
+
+    db.teachers.create({
+      id: t.id,
+      name: t.name,
+      email: t.email || null,
+      tokenHash,
+      claimHash,
+      claimExpiresAt,
+      active: 1
+    });
+
+    const capsule = encodeConnectCapsule({
+      relayUrl: url,
+      token,
+      teacherId: t.id,
+      name: t.name
+    });
+
+    created.push({ ...t, token, claimCode, claimHash, claimExpiresAt, capsule });
   }
   db.raw.close();
 
-  const scheme = tlsCert ? 'https' : 'http';
-  const url = publicUrl || `${scheme}://localhost:${port}`;
   const env = [
     '# Generated by scripts/relay-init.mjs; used as systemd EnvironmentFile',
     `PORT=${port}`,
     `KB_RELAY_DB=${dbPath}`,
-    `KB_RELAY_ORIGINS=${origins || (serveApp ? new URL(url).origin : url.replace(/\/+$/, ''))}`,
+    `KB_RELAY_ORIGINS=${origins || (serveApp ? new URL(url).origin : `${url.replace(/\/+$/, '')},${app}`)}`,
     `KB_RELAY_RETENTION_DAYS=${retentionDays}`,
     serveApp ? 'KB_RELAY_SERVE_APP=1' : '# KB_RELAY_SERVE_APP=1',
     tlsCert ? `KB_RELAY_TLS_CERT=${path.resolve(tlsCert)}` : '# KB_RELAY_TLS_CERT=/etc/ssl/certs/kennisboost.pem',
@@ -89,29 +130,35 @@ export function initRelay({ dir, teachers, port = 3000, publicUrl = '', origins 
   const envPath = path.join(root, 'relay.env');
   fs.writeFileSync(envPath, env, { mode: 0o640 });
 
-  // Tokens are shown once: append new ones to a private sheet for handing out
+  // Tokens sheet for IT admin: provides single-use capsule links and claim codes
   const tokensPath = path.join(root, 'teacher-tokens.csv');
-  if (!fs.existsSync(tokensPath)) fs.writeFileSync(tokensPath, 'id,name,server_url,token,connect_url\n', { mode: 0o600 });
+  if (!fs.existsSync(tokensPath)) {
+    fs.writeFileSync(tokensPath, 'id,name,email,server_url,claim_code,capsule_url,connect_url,token\n', { mode: 0o600 });
+  }
   fs.appendFileSync(tokensPath, created.map(t => {
+    const capsuleUrl = `${app}/#/connect?c=${t.capsule}`;
     const connectUrl = `${url.replace(/\/+$/, '')}/#/connect?relay=${encodeURIComponent(url)}&token=${encodeURIComponent(t.token)}&id=${encodeURIComponent(t.id)}`;
-    return [t.id, t.name, url, t.token, connectUrl].map(csvCell).join(',') + '\n';
+    return [t.id, t.name, t.email || '', url, t.claimCode, capsuleUrl, connectUrl, t.token].map(csvCell).join(',') + '\n';
   }).join(''));
   fs.chmodSync(tokensPath, 0o600);
 
-  // Generate Cloudflare D1 seed SQL file for easy batch import
+  // Generate Cloudflare D1 seed SQL file for Schema v4 batch import
   const d1SqlPath = path.join(root, 'd1-seed-teachers.sql');
   if (created.length > 0) {
     const d1SqlStatements = created.map(t => {
       const escapedId = t.id.replace(/'/g, "''");
       const escapedName = t.name.replace(/'/g, "''");
+      const d1Email = t.email ? `'${t.email.replace(/'/g, "''")}'` : 'NULL';
       const th = hashToken(t.token);
+      const ch = t.claimHash;
+      const exp = t.claimExpiresAt;
       const createdAt = new Date().toISOString();
-      return `INSERT OR IGNORE INTO teachers (id, name, token_hash, created_at) VALUES ('${escapedId}', '${escapedName}', '${th}', '${createdAt}');`;
+      return `INSERT OR IGNORE INTO teachers (id, name, email, token_hash, claim_hash, claim_expires_at, active, created_at) VALUES ('${escapedId}', '${escapedName}', ${d1Email}, '${th}', '${ch}', '${exp}', 1, '${createdAt}');`;
     }).join('\n') + '\n';
     fs.appendFileSync(d1SqlPath, d1SqlStatements, { mode: 0o600 });
   }
 
-  return { created, skipped, files: { dbPath, envPath, tokensPath, d1SqlPath }, url };
+  return { created, skipped, files: { dbPath, envPath, tokensPath, d1SqlPath }, url, appUrl: app };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname)) {
@@ -124,6 +171,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
         'teachers-csv': { type: 'string' },
         port: { type: 'string', default: '3000' },
         'public-url': { type: 'string', default: '' },
+        'app-url': { type: 'string', default: '' },
         origins: { type: 'string', default: '' },
         'serve-app': { type: 'boolean', default: false },
         'tls-cert': { type: 'string', default: '' },
@@ -152,6 +200,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(im
       teachers,
       port: Number(args.port),
       publicUrl: args['public-url'],
+      appUrl: args['app-url'],
       origins: args.origins,
       serveApp: args['serve-app'],
       tlsCert: args['tls-cert'],

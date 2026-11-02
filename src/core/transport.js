@@ -1,4 +1,7 @@
 import storage from './storage.js';
+import { KeyVault } from './keyvault.js';
+
+export const RELAY_VAULT_SECRET = 'relay_credentials';
 
 /**
  * Base abstract class for KennisBoost sync transports.
@@ -237,16 +240,18 @@ export class RelayTransport extends SyncTransport {
     };
   }
 
-  async listDrop(dropId, { since = null, after = null, limit = null } = {}) {
+  async listDrop(dropId, { since = null, after = null, limit = null, dropSecret = null } = {}) {
     const url = new URL(`${this.apiBase}/drops/${encodeURIComponent(dropId)}/submissions`);
     if (after) url.searchParams.set('after', after);
     else if (since) url.searchParams.set('since', since);
     if (limit) url.searchParams.set('limit', String(limit));
-    const res = await fetch(url.toString(), {
-      headers: {
-        'Authorization': `Bearer ${this.token}`
-      }
-    });
+    const headers = {
+      'Authorization': `Bearer ${this.token}`
+    };
+    if (dropSecret) {
+      headers['X-KB-Drop-Secret'] = dropSecret;
+    }
+    const res = await fetch(url.toString(), { headers });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
       const error = new Error(err.error || `Failed to list submissions: ${res.status}`);
@@ -438,6 +443,37 @@ export async function getTransport({ forceReload = false } = {}) {
   } catch {
     config = null;
   }
+
+  // Auto-migration check: If legacy unsealed token is stored in metadata, move to KeyVault
+  if (config?.token) {
+    try {
+      await KeyVault.setSecret(storage, RELAY_VAULT_SECRET, {
+        baseUrl: config.baseUrl,
+        token: config.token,
+        teacherId: config.teacherId || null,
+        name: config.name || null,
+        connectedAt: config.connectedAt || new Date().toISOString()
+      });
+      const { token: _t, ...safeConfig } = config;
+      safeConfig.sealed = true;
+      await storage.setMetadata('sync_config', safeConfig);
+      config = safeConfig;
+    } catch (err) {
+      console.warn('Failed to migrate sync_config token to KeyVault:', err);
+    }
+  }
+
+  let vaultSecret = null;
+  try {
+    vaultSecret = await KeyVault.getSecret(storage, RELAY_VAULT_SECRET);
+  } catch (_) {}
+
+  if (config && vaultSecret?.token) {
+    config = { ...config, token: vaultSecret.token };
+  } else if (!config?.baseUrl && vaultSecret?.baseUrl && vaultSecret?.token) {
+    config = { ...vaultSecret };
+  }
+
   if (!config?.baseUrl && typeof window !== 'undefined' && window.KB_CONFIG?.baseUrl && window.KB_CONFIG.token) {
     config = window.KB_CONFIG;
   }
@@ -461,25 +497,82 @@ export async function getTransport({ forceReload = false } = {}) {
 
 /**
  * Update transport configuration and reload active transport.
- * @param {{ baseUrl?: string, token?: string, teacherId?: string }|null} config
+ * Credentials (bearer token) are sealed inside KeyVault (AES-256-GCM).
+ * @param {{ baseUrl?: string, token?: string, teacherId?: string, name?: string }|null} config
  * @returns {Promise<SyncTransport>}
  */
 export async function setTransportConfig(config) {
   if (config && config.baseUrl) {
-    await storage.setMetadata('sync_config', config);
+    const { token, ...safeConfig } = config;
+    safeConfig.sealed = true;
+    if (token) {
+      await KeyVault.setSecret(storage, RELAY_VAULT_SECRET, {
+        baseUrl: config.baseUrl,
+        token,
+        teacherId: config.teacherId || null,
+        name: config.name || null,
+        connectedAt: config.connectedAt || new Date().toISOString()
+      });
+    }
+    await storage.setMetadata('sync_config', safeConfig);
   } else {
+    try {
+      await KeyVault.deleteSecret(storage, RELAY_VAULT_SECRET);
+    } catch (_) {}
     await storage.setMetadata('sync_config', null);
   }
   return await getTransport({ forceReload: true });
 }
 
 export async function clearTransportConfig() {
-  await storage.setMetadata('sync_config', null);
-  return await getTransport({ forceReload: true });
+  return await setTransportConfig(null);
 }
 
 export async function getTransportConfig() {
-  return (await storage.getMetadata('sync_config')) || null;
+  let config = null;
+  try {
+    config = await storage.getMetadata('sync_config');
+  } catch {
+    config = null;
+  }
+
+  if (config?.token) {
+    try {
+      await KeyVault.setSecret(storage, RELAY_VAULT_SECRET, {
+        baseUrl: config.baseUrl,
+        token: config.token,
+        teacherId: config.teacherId || null,
+        name: config.name || null,
+        connectedAt: config.connectedAt || new Date().toISOString()
+      });
+      const { token: _t, ...safeConfig } = config;
+      safeConfig.sealed = true;
+      await storage.setMetadata('sync_config', safeConfig);
+      config = safeConfig;
+    } catch (_) {}
+  }
+
+  let vaultSecret = null;
+  try {
+    vaultSecret = await KeyVault.getSecret(storage, RELAY_VAULT_SECRET);
+  } catch (_) {}
+
+  if (!config && vaultSecret?.baseUrl) {
+    config = {
+      baseUrl: vaultSecret.baseUrl,
+      teacherId: vaultSecret.teacherId,
+      name: vaultSecret.name,
+      connectedAt: vaultSecret.connectedAt,
+      sealed: true
+    };
+  }
+
+  if (!config) return null;
+
+  return {
+    ...config,
+    token: vaultSecret?.token || config.token || ''
+  };
 }
 
 /**

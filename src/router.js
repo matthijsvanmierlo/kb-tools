@@ -803,27 +803,49 @@ export class Router {
   }
 
   async _handleConnectRoute(params = {}) {
-    const relay = params.relay || params.baseUrl || '';
-    const token = params.token || '';
-    const teacherId = params.id || params.teacherId || 'Teacher';
-
     // Immediately scrub the fragment from the address bar & browser history to prevent token leakage
     if (typeof window !== 'undefined' && window.history?.replaceState) {
       window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}#/`);
     }
 
-    if (!relay || !token) {
-      toast.danger('Invalid connection link: missing server URL or teacher token.');
+    const { decodeConnectCapsule, normalizeClaimCode, relayApiBase } = await import('./core/relay-config.js');
+    const { ConfirmDialog } = await import('./utils/dialogs.js');
+    const { setTransportConfig } = await import('./core/transport.js');
+
+    let relay = params.relay || params.baseUrl || '';
+    let token = params.token || '';
+    let teacherId = params.id || params.teacherId || '';
+    let teacherName = params.name || '';
+    let claimCode = params.code || '';
+
+    // Check if a connection capsule was supplied (?c=KBCON1....)
+    if (params.c) {
+      const decoded = decodeConnectCapsule(params.c);
+      if (decoded) {
+        relay = decoded.baseUrl || relay;
+        token = decoded.token || token;
+        teacherId = decoded.teacherId || teacherId;
+        teacherName = decoded.name || teacherName;
+      }
+    }
+
+    // Default baseUrl fallback from global managed config if missing
+    if (!relay && typeof window !== 'undefined' && (window.KB_CONFIG?.relay?.baseUrl || window.KB_CONFIG?.baseUrl)) {
+      relay = window.KB_CONFIG?.relay?.baseUrl || window.KB_CONFIG?.baseUrl;
+    }
+
+    if (!relay || (!token && !claimCode)) {
+      toast.danger('Invalid connection link: missing server URL or credentials.');
       this.navigate('#/settings?section=relay');
       return;
     }
 
-    // Explicit confirmation prompt before accepting credentials from link
-    const { ConfirmDialog } = await import('./utils/dialogs.js');
-    const { Sanitizer } = await import('./core/sanitizer.js');
+    const displayTeacher = teacherName || teacherId || (claimCode ? 'claim code' : 'Teacher');
+
+    // Explicit confirmation prompt before accepting credentials from link (NO tokens displayed!)
     const confirmed = await ConfirmDialog.show({
       title: 'Connect to School Server?',
-      message: `Do you want to connect this device to the school relay at <strong>${Sanitizer.escapeHTML(relay)}</strong> as <strong>${Sanitizer.escapeHTML(teacherId)}</strong>?`,
+      message: `Do you want to connect this device to the school relay at <strong>${Sanitizer.escapeHTML(relay)}</strong> as <strong>${Sanitizer.escapeHTML(displayTeacher)}</strong>?`,
       confirmText: 'Connect & Trust Server',
       cancelText: 'Cancel'
     });
@@ -835,10 +857,65 @@ export class Router {
     }
 
     try {
-      const { setTransportConfig } = await import('./core/transport.js');
-      await setTransportConfig({ baseUrl: relay, token, teacherId });
+      const apiBase = relayApiBase(relay);
+      let finalToken = token;
+      let finalTeacherId = teacherId;
+      let finalTeacherName = teacherName;
+
+      if (claimCode) {
+        // Claim the short one-time code
+        const codeRes = await fetch(`${apiBase}/auth/claim`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: normalizeClaimCode(claimCode) })
+        });
+        const claimData = await codeRes.json().catch(() => ({}));
+        if (!codeRes.ok || !claimData.ok) {
+          throw new Error(claimData.error || claimData.message || `Claim code invalid or expired (${codeRes.status})`);
+        }
+        finalToken = claimData.token;
+        finalTeacherId = claimData.teacher?.id || finalTeacherId;
+        finalTeacherName = claimData.teacher?.name || finalTeacherName;
+      } else if (token) {
+        // Automatic Single-Use Key Rolling: call /auth/roll to rotate the link's initial token
+        try {
+          const rollRes = await fetch(`${apiBase}/auth/roll`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': `Bearer ${token}`
+            }
+          });
+          if (rollRes.ok) {
+            const rollData = await rollRes.json().catch(() => ({}));
+            if (rollData.ok && rollData.token) {
+              finalToken = rollData.token;
+              finalTeacherId = rollData.teacher?.id || finalTeacherId;
+              finalTeacherName = rollData.teacher?.name || finalTeacherName;
+            }
+          } else if (rollRes.status !== 404) {
+            const errData = await rollRes.json().catch(() => ({}));
+            throw new Error(errData.error || `Key rotation failed (${rollRes.status})`);
+          }
+        } catch (rollErr) {
+          if (rollErr.message && (rollErr.message.includes('Key rotation failed') || rollErr.message.includes('Forbidden') || rollErr.message.includes('Unauthorized'))) {
+            throw rollErr;
+          }
+          // Network error, DNS resolution failure (e.g. offline or unmocked test), or 404: gracefully fall back to initial token
+        }
+      }
+
+      await setTransportConfig({
+        baseUrl: relay,
+        token: finalToken,
+        teacherId: finalTeacherId,
+        name: finalTeacherName
+      });
+
       if (typeof window !== 'undefined') {
-        window.dispatchEvent(new CustomEvent('kb-relay-connected', { detail: { baseUrl: relay, teacherId } }));
+        window.dispatchEvent(new CustomEvent('kb-relay-connected', {
+          detail: { baseUrl: relay, teacherId: finalTeacherId, name: finalTeacherName }
+        }));
         try {
           const { updateRelayStatusIndicator } = await import('./main.js');
           updateRelayStatusIndicator();

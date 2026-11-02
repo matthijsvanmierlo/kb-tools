@@ -173,12 +173,22 @@ export function createRelayServer(opts = {}) {
     publicUrl: process.env.KB_CDN_PUBLIC_URL || opts.cdn?.publicUrl
   };
 
+  const oidcConfig = {
+    enabled: Boolean(opts.oidc || process.env.KB_OIDC_GOOGLE_CLIENT_ID || process.env.KB_OIDC_MS_CLIENT_ID),
+    googleClientId: process.env.KB_OIDC_GOOGLE_CLIENT_ID || opts.oidc?.googleClientId,
+    googleDomain: process.env.KB_OIDC_GOOGLE_DOMAIN || opts.oidc?.googleDomain,
+    microsoftClientId: process.env.KB_OIDC_MS_CLIENT_ID || opts.oidc?.microsoftClientId,
+    microsoftTenant: process.env.KB_OIDC_MS_TENANT || opts.oidc?.microsoftTenant,
+    autoProvisionTeachers: (process.env.KB_OIDC_AUTO_PROVISION === 'true' || process.env.KB_OIDC_AUTO_PROVISION === '1' || opts.oidc?.autoProvisionTeachers)
+  };
+
   const fetchHandler = createRelayFetchHandler({
     db,
     limiter,
     draftLimiter,
     allowedOrigins,
     cdnConfig,
+    oidcConfig,
     blobStore,
     backend: 'node',
     presignHook: opts.cdn?.presign

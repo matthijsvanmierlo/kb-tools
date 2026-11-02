@@ -1,5 +1,5 @@
 export const VERSION = '2.0.0';
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 export const DEFAULT_PORT = 3000;
 export const DEFAULT_RETENTION_DAYS = 180;
 export const DEFAULT_TEACHER_QUOTA_MB = 1024; // 1 GB per teacher

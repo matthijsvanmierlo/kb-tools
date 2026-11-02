@@ -4,9 +4,14 @@ export const RELAY_SCHEMA_SQL = `
 CREATE TABLE IF NOT EXISTS teachers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
+  email TEXT,
   token_hash TEXT NOT NULL UNIQUE,
+  claim_hash TEXT,
+  claim_expires_at TEXT,
+  active INTEGER NOT NULL DEFAULT 1,
   bytes_used INTEGER NOT NULL DEFAULT 0,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  token_rotated_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS blob_parts (
@@ -160,4 +165,6 @@ CREATE INDEX IF NOT EXISTS idx_drop_media_drop ON drop_media(drop_id);
 CREATE INDEX IF NOT EXISTS idx_feedback_drops_expires ON feedback_drops(expires_at);
 CREATE INDEX IF NOT EXISTS idx_media_refs_owner ON media_refs(owner_kind, owner_id);
 CREATE INDEX IF NOT EXISTS idx_media_refs_created ON media_refs(created_at);
+CREATE INDEX IF NOT EXISTS idx_teachers_email ON teachers(email);
+CREATE INDEX IF NOT EXISTS idx_teachers_claim ON teachers(claim_hash);
 `;
