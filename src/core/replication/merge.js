@@ -1,4 +1,4 @@
-import { HLC } from './hlc.js';
+import { HLC, compareStamp } from './hlc.js';
 
 /**
  * Marks items in an array as removed, recording their deletion in _removed: { [id]: hlc }

@@ -232,7 +232,7 @@ export async function ensureCourseItemForClassContent(courseId, moduleType, item
   else if (moduleType === 'timeline' || moduleType === 'timelines') kind = 'timeline';
 
   const targetUnitId = units.sort((a, b) => (a.order ?? 0) - (b.order ?? 0))[0].id;
-  const isPublished = item.published !== false;
+  const isPublished = Boolean(item.publish?.published_at || item.published === true);
 
   const newCi = {
     id: generateUUID(),
@@ -322,7 +322,7 @@ export async function reconcileCourseItemsForClass(courseId) {
 
   for (const { kind, item } of matches) {
     if (!existingSourceIds.has(item.id) && !item.course_plan_excluded) {
-      const isPublished = item.published !== false;
+      const isPublished = Boolean(item.publish?.published_at || item.published === true);
 
       const newCi = {
         id: generateUUID(),

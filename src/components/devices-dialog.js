@@ -219,11 +219,32 @@ export async function openDevicesDialog() {
   const conflicts = (await replication.conflicts()).length;
   const policy = getPolicy();
 
+  const problemDescriptions = {
+    gap: 'Sync sequence skipped',
+    quarantine: 'Unrecognized data quarantined',
+    oversize: 'One record too large to sync',
+    auth: 'Authentication failed for sync',
+    quota: 'Storage quota exceeded during sync'
+  };
+  const problemsList = (status.problems || []).map(p => {
+    const k = typeof p === 'string' ? p : p.kind;
+    return problemDescriptions[k] || (typeof p === 'object' && p.message) || k;
+  });
+
   const r = await modal('Devices & sharing', `
     <div class="space-y-5 text-sm">
       <section class="space-y-2">
         <h3 class="font-semibold text-slate-900">Your devices</h3>
         <p class="text-xs text-slate-600">${esc(channelText)} · last sync ${esc(fmt(status.lastSyncAt))}${status.state === 'error' ? ` · <span class="text-red-700">${esc(status.error)}</span>` : ''}</p>
+        ${problemsList.length ? `
+          <div class="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-900 flex items-start justify-between gap-2">
+            <div>
+              <div class="font-medium">Sync issues detected:</div>
+              <p>${esc(problemsList.join('. '))}</p>
+            </div>
+            <sl-button size="small" variant="warning" data-action="clear-problems">Clear / Skip</sl-button>
+          </div>
+        ` : ''}
         <p class="text-xs text-slate-500">Linked devices share your submission key and recovery code, and keep classes, grades and materials in sync. Everything is encrypted before it leaves a device.</p>
         <div class="flex flex-wrap gap-2">
           <sl-button size="small" data-value="link"><sl-icon slot="prefix" name="phone"></sl-icon>Link a new device</sl-button>
@@ -250,6 +271,14 @@ export async function openDevicesDialog() {
     </div>`, [{ value: 'close', label: 'Close' }], {
     width: '600px',
     onReady: (d) => d.addEventListener('click', async (e) => {
+      const clearBtn = e.target.closest('[data-action="clear-problems"]');
+      if (clearBtn) {
+        await replication.clearProblems();
+        toast.info('Cleared sync issues and retried.');
+        d.hide();
+        openDevicesDialog();
+        return;
+      }
       const btn = e.target.closest('[data-stop]');
       if (!btn) return;
       await replication.stopSharing(btn.dataset.stop);

@@ -115,6 +115,8 @@ export class StudentLedger {
       due_date: asgMeta.due_date || existing?.due_date || null,
       submitted_at: feedbackPayload.submission?.submitted_at || existing?.submitted_at || null,
       received_at: feedbackPayload.generated_at || now,
+      feedback_unseen: true,
+      feedback_received_at: feedbackPayload.generated_at || now,
       receipt_id: existing?.receipt_id || null,
       submission_text: existing?.submission_text || null,
       local_answers: existing?.local_answers || null,
@@ -241,6 +243,8 @@ export class StudentLedger {
       due_date: taskMeta.due_date || existing?.due_date || null,
       submitted_at: feedbackPayload.submission?.submitted_at || existing?.submitted_at || null,
       received_at: feedbackPayload.generated_at || now,
+      feedback_unseen: true,
+      feedback_received_at: feedbackPayload.generated_at || now,
       receipt_id: existing?.receipt_id || null,
       submission_text: existing?.submission_text || null,
       updated_at: now
@@ -377,6 +381,137 @@ export class StudentLedger {
   }
 
   /**
+   * Apply feedback for an item (assessment or task) into the student's ledger.
+   *
+   * @param {object} params
+   * @param {'assignment'|'task'} [params.kind='assignment']
+   * @param {string} params.itemId - assignment_id or task_id
+   * @param {string} [params.courseId]
+   * @param {string} [params.title]
+   * @param {number} [params.score]
+   * @param {number} [params.maxScore]
+   * @param {number} [params.percent]
+   * @param {string} [params.feedback]
+   * @param {string} [params.released_at]
+   * @param {string} [params.source]
+   * @returns {Promise<object>}
+   */
+  static async applyFeedback({
+    kind = 'assignment',
+    itemId,
+    courseId = 'default_class',
+    title = '',
+    score = null,
+    maxScore = null,
+    percent = null,
+    feedback = '',
+    released_at = null,
+    source = 'relay',
+    ...rest
+  }) {
+    if (!itemId) throw new Error('MISSING_ITEM_ID');
+
+    const now = new Date().toISOString();
+    const resolvedCourseId = courseId || 'default_class';
+
+    // Find existing entry by [course_id + assignment_id] or assignment_id or id
+    let existing = null;
+    const byCompound = await storage.table('student_ledger')
+      .where('[course_id+assignment_id]')
+      .equals([resolvedCourseId, itemId])
+      .toArray()
+      .catch(() => []);
+    if (byCompound?.length) {
+      existing = byCompound[0];
+    } else {
+      const all = await storage.table('student_ledger').toArray().catch(() => []);
+      existing = all.find(e => e.assignment_id === itemId || e.id === itemId || e.id === `fb-${itemId}-${e.student_id || 'me'}`);
+    }
+
+    const earned = score !== null ? Number(score) : (existing?.score?.earned ?? null);
+    const possible = maxScore !== null ? Number(maxScore) : (existing?.score?.possible ?? null);
+    const scoreObj = (earned !== null || possible !== null) ? {
+      earned: earned ?? 0,
+      possible: possible ?? 0,
+      percent: percent ?? (possible > 0 ? Math.round((earned / possible) * 100) : null)
+    } : (existing?.score || null);
+
+    const history = Array.isArray(existing?.history) ? [...existing.history] : [];
+    if (existing && existing.score && (existing.score.earned !== earned || existing.score.possible !== possible)) {
+      history.push({
+        score: { ...existing.score },
+        overall_feedback: existing.overall_feedback || '',
+        received_at: existing.received_at || existing.updated_at || now,
+        updated_by: source || 'teacher'
+      });
+    }
+
+    const item = {
+      ...existing,
+      ...rest,
+      id: existing?.id || generateUUID(),
+      course_id: resolvedCourseId,
+      assignment_id: itemId,
+      title: title || existing?.title || (kind === 'task' ? 'Assignment' : 'Assessment'),
+      item_type: kind === 'task' ? 'task_feedback' : 'assignment_feedback',
+      score: scoreObj,
+      overall_feedback: feedback || existing?.overall_feedback || '',
+      feedback: feedback || existing?.feedback || '',
+      feedback_unseen: true,
+      feedback_received_at: released_at || now,
+      received_at: released_at || now,
+      history,
+      status: 'Reviewed',
+      submission_status: 'Reviewed',
+      updated_at: now
+    };
+
+    await storage.table('student_ledger').put(item);
+
+    // Also update student_items if it exists
+    const existingItem = await storage.table('student_items').get(itemId).catch(() => null);
+    if (existingItem) {
+      existingItem.status = 'reviewed';
+      if (score !== null) existingItem.grade = score;
+      if (feedback) existingItem.teacher_feedback = feedback;
+      existingItem.reviewed_at = item.feedback_received_at;
+      await storage.table('student_items').put(existingItem).catch(() => {});
+    }
+
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('kb-student-ledger-updated', { detail: { courseId: resolvedCourseId, item } }));
+      window.dispatchEvent(new CustomEvent('kb-feedback-imported', { detail: item }));
+    }
+
+    return item;
+  }
+
+  /**
+   * Mark feedback as seen by the student.
+   * @param {string} itemId
+   */
+  static async markFeedbackSeen(itemId) {
+    const all = await storage.table('student_ledger').toArray().catch(() => []);
+    const items = all.filter(e => e.assignment_id === itemId || e.id === itemId);
+    for (const it of items) {
+      it.feedback_unseen = false;
+      await storage.table('student_ledger').put(it);
+    }
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('kb-student-ledger-updated', { detail: { itemId, seen: true } }));
+    }
+  }
+
+  /**
+   * Count how many feedback items have not been seen yet by the student.
+   * @returns {Promise<number>}
+   */
+  static async getUnseenFeedbackCount() {
+    const all = await storage.table('student_ledger').toArray().catch(() => []);
+    return all.filter(e => e.feedback_unseen === true).length;
+  }
+
+  /**
    * Record a locally completed submission into the ledger.
    */
   static async recordSubmission({
@@ -390,7 +525,9 @@ export class StudentLedger {
     submittedAt = new Date().toISOString(),
     receiptId = null,
     answers = null,
-    submissionText = null
+    submissionText = null,
+    status = null,
+    releaseGradeImmediately = null
   }) {
     const cId = courseId || 'self_study';
     let course = await storage.table('student_courses').get(cId).catch(() => null);
@@ -427,6 +564,25 @@ export class StudentLedger {
       .catch(() => []);
     const existing = existingArr?.[0] || null;
 
+    let score = existing?.score || null;
+    const shouldRelease = releaseGradeImmediately === true || (releaseGradeImmediately !== false && (cId === 'self_study' || releaseGradeImmediately === null));
+    if (!score && shouldRelease && clientScore) {
+      score = {
+        earned: clientScore.earned ?? 0,
+        possible: clientScore.possible ?? 0,
+        pending: clientScore.pending ?? 0
+      };
+    }
+
+    let resolvedStatus = status;
+    if (!resolvedStatus) {
+      if (receiptId) {
+        resolvedStatus = `Handed in (server receipt ${receiptId})`;
+      } else {
+        resolvedStatus = 'Ready to hand in';
+      }
+    }
+
     const item = {
       id: existing?.id || generateUUID(),
       course_id: cId,
@@ -435,11 +591,9 @@ export class StudentLedger {
       item_type: existing?.item_type === 'assignment_feedback' ? 'assignment_feedback' : 'submission',
       student_id: studentId || existing?.student_id || '',
       student_name: studentName || existing?.student_name || '',
-      score: existing?.score || {
-        earned: clientScore?.earned ?? 0,
-        possible: clientScore?.possible ?? 0,
-        pending: clientScore?.pending ?? 0
-      },
+      score,
+      client_score: clientScore || existing?.client_score || null,
+      status: resolvedStatus,
       overall_feedback: existing?.overall_feedback || '',
       questions: Array.isArray(existing?.questions) ? existing.questions : [],
       history: Array.isArray(existing?.history) ? existing.history : [],

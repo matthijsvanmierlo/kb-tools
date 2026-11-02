@@ -7,6 +7,8 @@ export function computeHomeStats({
   students = [],
   assignments = [],
   submissions = [],
+  tasks = [],
+  taskSubmissions = [],
   videos = [],
   metadata = {},
   quota = null,
@@ -82,12 +84,22 @@ export function computeHomeStats({
   // 2. Needs Attention Items
   const attentionItems = [];
 
-  // A. Submissions to review
-  const unsyncedSubs = submissions.filter(s => s.is_latest !== false && !s.synced_at);
-  if (unsyncedSubs.length > 0) {
-    // Group by assignment
+  // A. Submissions to review (assessments needing manual review)
+  const pendingSubs = submissions.filter(s => {
+    if (s.is_latest === false) return false;
+    if (s.needs_review) return true;
+    if (s.reviewed_at) return false;
+    const asgn = assignments.find(a => a.id === s.assignment_id);
+    if (!asgn?.questions || asgn.questions.length === 0) {
+      return !s.synced_at;
+    }
+    const hasManual = asgn.questions.some(q => q.type === 'open' || q.type === 'essay' || q.grading === 'manual') || s.has_manual_questions;
+    return hasManual && (!s.manual || Object.keys(s.manual).length === 0);
+  });
+
+  if (pendingSubs.length > 0) {
     const grouped = new Map();
-    for (const sub of unsyncedSubs) {
+    for (const sub of pendingSubs) {
       const arr = grouped.get(sub.assignment_id) || [];
       arr.push(sub);
       grouped.set(sub.assignment_id, arr);
@@ -102,6 +114,28 @@ export function computeHomeStats({
         badgeVariant: 'warning',
         text: `${subs.length} submission(s) to review for "${title}"`,
         link: `#/assessments/submissions?id=${assignmentId}`
+      });
+    }
+  }
+
+  // A2. Task submissions to review
+  const pendingTasks = taskSubmissions.filter(t => t.is_latest !== false && (!t.review || !t.review.reviewed_at));
+  if (pendingTasks.length > 0) {
+    const groupedTasks = new Map();
+    for (const sub of pendingTasks) {
+      const arr = groupedTasks.get(sub.task_id) || [];
+      arr.push(sub);
+      groupedTasks.set(sub.task_id, arr);
+    }
+    for (const [taskId, subs] of groupedTasks.entries()) {
+      const tsk = tasks.find(t => t.id === taskId);
+      const title = tsk?.title || 'Assignment';
+      attentionItems.push({
+        type: 'tasks_to_review',
+        badge: 'Review',
+        badgeVariant: 'warning',
+        text: `${subs.length} submission(s) to review for "${title}"`,
+        link: `#/assignments/submissions?id=${taskId}`
       });
     }
   }

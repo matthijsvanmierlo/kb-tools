@@ -9,39 +9,21 @@ import { replication } from '../../core/replication/manager.js';
 import { downloadClickableHtmlFile } from '../../core/html-launcher.js';
 import { HandinInstructions } from '../../components/handin-instructions.js';
 import { LinkBuilder } from '../../core/links.js';
+import {
+  computeRosterHash,
+  getTaskRosterStatus,
+  randomSalt,
+  buildRosterChecksAndCards,
+  ensureDropBox,
+  computeContentHash
+} from '../../core/publish-core.js';
 
-const randomSalt = () => Array.from(crypto.getRandomValues(new Uint8Array(12))).map(b => b.toString(16).padStart(2, '0')).join('');
+export { computeRosterHash, getTaskRosterStatus };
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
-export async function computeRosterHash(students = []) {
-  if (!Array.isArray(students) || !students.length) return '';
-  const sorted = [...students]
-    .map(s => `${String(s.student_id || '').toUpperCase()}:${String(s.access_code || '')}`)
-    .sort()
-    .join('|');
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sorted));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
-}
-
-export async function getTaskRosterStatus(task) {
-  const courseId = task.gradebook?.course_id || task.class_id;
-  if (!courseId) return { courseId: null, course: null, students: [], withCode: [], withoutCode: [] };
-  const [course, students] = await Promise.all([
-    storage.table('gradebook_courses').get(courseId),
-    storage.table('gradebook_students').where('course_id').equals(courseId).toArray().catch(() => [])
-  ]);
-  return {
-    courseId,
-    course,
-    students,
-    withCode: students.filter(s => s.access_code),
-    withoutCode: students.filter(s => !s.access_code)
-  };
-}
-
 /**
- * Publishes a task: bumps version, derives keys, establishes drop box if relay enabled,
+ * Publishes a task: bumps version if content changed, derives keys, establishes drop box if relay enabled,
  * and builds the student-safe payload.
  *
  * @param {object} task
@@ -55,70 +37,19 @@ export async function publishTask(task, roster = null, { transport = null, handi
 
   const rosterStudents = roster?.students || roster?.withCode || [];
   const rosterHash = await computeRosterHash(rosterStudents);
-
   const cdnActive = await isCdnUploadConfigured();
 
-  const next = {
-    ...task,
-    publish: {
-      version: (task.publish?.version || 0) + 1,
-      salt: randomSalt(),
-      published_at: new Date().toISOString(),
-      fingerprint: keys.fingerprint,
-      roster_hash: rosterHash,
-      cdn_student_upload: cdnActive
-    },
-    updated_at: new Date().toISOString()
-  };
-
-  let rosterChecks = null;
-  let rosterCards = null;
-  if (roster?.withCode?.length) {
-    if (next.settings?.require_access_code) {
-      rosterChecks = {};
-      for (const s of roster.withCode) {
-        rosterChecks[String(s.student_id).toUpperCase()] = await SubmissionCrypto.accessCodeCheck(next.id, s.student_id, s.access_code);
-      }
-    }
-    rosterCards = {};
-    for (const s of roster.withCode) {
-      const card = await SubmissionCrypto.buildRosterCard(next.id, s, s.access_code);
-      if (card?.tag) {
-        rosterCards[card.tag] = card.ct;
-      }
-    }
-  }
+  const { rosterChecks, rosterCards } = await buildRosterChecksAndCards(
+    task.id,
+    roster,
+    !!task.settings?.require_access_code
+  );
 
   const courseMeta = roster?.course ? {
     course_id: roster.course.id,
     course_name: roster.course.name || '',
     section: roster.course.section || ''
   } : null;
-
-  let relayInfo = null;
-  if (activeTransport?.capabilities?.collectSubmissions) {
-    try {
-      const drop = await activeTransport.createDrop({
-        assignmentId: next.id,
-        publishVersion: next.publish.version,
-        expiresAt: new Date(Date.now() + 180 * 86400000).toISOString()
-      });
-      relayInfo = {
-        base_url: activeTransport.baseUrl,
-        drop_id: drop.dropId,
-        drop_secret: drop.dropSecret,
-        media: cdnActive ? {
-          enabled: true,
-          max_file_bytes: 25 * 1024 * 1024,
-          max_files: task.submission_types?.files?.max_files || 5,
-          accept: task.submission_types?.files?.accept || ['.pdf', '.png', '.jpg', '.jpeg', '.zip']
-        } : null
-      };
-      next.publish.relay = relayInfo;
-    } catch (e) {
-      console.warn('[tasks/publish] Could not create drop on relay:', e);
-    }
-  }
 
   // Load rubric and standards if referenced
   let rubric = null;
@@ -132,7 +63,23 @@ export async function publishTask(task, roster = null, { transport = null, handi
     standards = allStds.filter(s => task.grading.standard_ids.includes(s.id));
   }
 
-  const payload = await buildStudentTaskPayload(next, {
+  const salt = task.publish?.salt || randomSalt();
+  const relayInfo = await ensureDropBox(task, activeTransport, {
+    cdnActive,
+    filesConfig: task.submission_types?.files
+  });
+
+  const tempNext = {
+    ...task,
+    publish: {
+      ...(task.publish || {}),
+      salt,
+      cdn_student_upload: cdnActive,
+      relay: relayInfo
+    }
+  };
+
+  const candidatePayload = await buildStudentTaskPayload(tempNext, {
     teacherKeys: keys,
     rosterChecks,
     rosterCards,
@@ -143,11 +90,37 @@ export async function publishTask(task, roster = null, { transport = null, handi
   });
 
   if (handinEmail) {
-    payload.handin = { email: handinEmail };
+    candidatePayload.handin = { email: handinEmail };
   }
 
+  const contentHash = await computeContentHash(candidatePayload);
+  let version = task.publish?.version || 1;
+  if (!task.publish?.content_hash) {
+    version = task.publish?.version || 1;
+  } else if (task.publish.content_hash !== contentHash) {
+    version = (task.publish?.version || 0) + 1;
+  }
+
+  const next = {
+    ...task,
+    publish: {
+      version,
+      salt,
+      published_at: new Date().toISOString(),
+      fingerprint: keys.fingerprint,
+      roster_hash: rosterHash,
+      cdn_student_upload: cdnActive,
+      relay: relayInfo,
+      relay_history: task.publish?.relay_history || [],
+      content_hash: contentHash
+    },
+    updated_at: new Date().toISOString()
+  };
+
+  candidatePayload.publish_version = version;
+
   await storage.table('tasks').put(next);
-  return { task: next, payload, keys };
+  return { task: next, payload: candidatePayload, keys };
 }
 
 /**
@@ -210,9 +183,14 @@ export async function openTaskPublishDialog(task, { onPublished } = {}) {
       <sl-input id="task-pub-email" label="Hand-in Email (optional)" placeholder="teacher@school.edu" value="${esc(teacherProfile.email || '')}" size="small" help-text="Offers mailto submission fallback on student devices without relay access."></sl-input>
 
       <!-- Action Button -->
-      <sl-button variant="primary" id="task-pub-go-btn" class="w-full">
-        <sl-icon slot="prefix" name="send"></sl-icon> Publish Assignment
-      </sl-button>
+      <div class="space-y-2">
+        <sl-button variant="primary" id="task-pub-go-btn" class="w-full">
+          <sl-icon slot="prefix" name="send"></sl-icon> Publish Assignment
+        </sl-button>
+        <sl-button variant="default" id="task-pub-copy-existing-btn" class="w-full ${task.publish?.published_at ? '' : 'hidden'}">
+          <sl-icon slot="prefix" name="copy"></sl-icon> Copy existing link
+        </sl-button>
+      </div>
 
       <!-- Results Container -->
       <div id="task-pub-results" class="hidden space-y-4 pt-3 border-t border-slate-200">
@@ -265,6 +243,97 @@ export async function openTaskPublishDialog(task, { onPublished } = {}) {
 
   let currentPublished = null;
   let currentShareUrl = '';
+
+  const copyExistingBtn = dialog.querySelector('#task-pub-copy-existing-btn');
+
+  const buildExistingLink = async () => {
+    if (!task.publish?.published_at) return null;
+    const keys = await replication.publishKeysFor(task.class_id);
+    const { rosterChecks, rosterCards } = await buildRosterChecksAndCards(
+      task.id,
+      roster,
+      !!task.settings?.require_access_code
+    );
+    const courseMeta = roster?.course ? {
+      course_id: roster.course.id,
+      course_name: roster.course.name || '',
+      section: roster.course.section || ''
+    } : null;
+    let rubric = null;
+    if (task.grading?.rubric_id) {
+      rubric = await storage.table('gradebook_rubrics').get(task.grading.rubric_id).catch(() => null);
+    }
+    let standards = [];
+    if (Array.isArray(task.grading?.standard_ids) && task.grading.standard_ids.length && roster?.course) {
+      const { getStandards } = await import('../gradebook/grading-scales.js');
+      const allStds = getStandards(roster.course);
+      standards = allStds.filter(s => task.grading.standard_ids.includes(s.id));
+    }
+    const payload = await buildStudentTaskPayload(task, {
+      teacherKeys: keys,
+      rosterChecks,
+      rosterCards,
+      courseMeta,
+      relay: task.publish?.relay || null,
+      rubric,
+      standards
+    });
+    const share = await CryptoShareEngine.createSharePayload('task', payload);
+    let shareUrl = share.url;
+    if (hasShortLinks && transport?.capabilities?.hostPayload) {
+      try {
+        const wrapped = await CryptoShareEngine.wrapForHosting(share.rawFileContent);
+        const pub = await transport.publishPayload({
+          kind: 'task',
+          ciphertext: wrapped.ciphertext,
+          expiresAt: new Date(Date.now() + 180 * 86400000).toISOString(),
+          meta: { title: task.title }
+        });
+        shareUrl = LinkBuilder.hosted(pub.ref, wrapped.key);
+      } catch (_) {}
+    }
+    return { task, payload, keys, shareUrl };
+  };
+
+  if (task.publish?.published_at) {
+    buildExistingLink().then(res => {
+      if (!res) return;
+      currentPublished = { task: res.task, payload: res.payload, keys: res.keys };
+      currentShareUrl = res.shareUrl;
+      linkInput.value = res.shareUrl;
+      dialog.querySelector('#task-pub-ver').textContent = String(task.publish.version || 1);
+      dialog.querySelector('#task-pub-time').textContent = new Date(task.publish.published_at).toLocaleTimeString();
+      resultsDiv.classList.remove('hidden');
+
+      const handinContainer = dialog.querySelector('#task-pub-handin-container');
+      if (handinContainer) {
+        handinContainer.innerHTML = '';
+        handinContainer.appendChild(HandinInstructions.render({
+          assignment: task,
+          link: res.shareUrl,
+          dueDate: task.settings?.due_date,
+          dueTime: task.settings?.due_time
+        }));
+      }
+    }).catch(e => console.warn('Could not build existing task link:', e));
+  }
+
+  copyExistingBtn?.addEventListener('click', async () => {
+    if (!currentShareUrl) {
+      const res = await buildExistingLink();
+      if (res) currentShareUrl = res.shareUrl;
+    }
+    if (currentShareUrl) {
+      try {
+        await navigator.clipboard.writeText(currentShareUrl);
+        toast.success('Existing link copied!');
+      } catch (_) {
+        linkInput.select();
+        document.execCommand('copy');
+        toast.success('Existing link copied!');
+      }
+    }
+  });
 
   goBtn.addEventListener('click', async () => {
     goBtn.loading = true;

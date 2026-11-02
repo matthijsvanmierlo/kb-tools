@@ -379,21 +379,30 @@ async function bootstrapApp() {
     // 9. Execute initial route
     await router.handleRoute();
 
-    // 9. Sync unreviewed submissions badge in navigation
+    // 9. Sync unreviewed submissions badge in navigation / student unseen feedback badge
     const syncInboxBadge = async () => {
       try {
+        const { updateInboxBadge } = await import('./components/app-nav.js');
         if (RoleMode.get() !== 'teacher') {
-          const { updateInboxBadge } = await import('./components/app-nav.js');
-          updateInboxBadge(0);
+          const items = await storage.table('student_ledger').toArray().catch(() => []);
+          const unseen = items.filter(i => i.feedback_unseen === true).length;
+          updateInboxBadge(unseen);
           return;
         }
-        const [subRows, taskRows] = await Promise.all([
-          storage.table('assignment_submissions').getAll().catch(() => []),
-          storage.table('task_submissions').getAll().catch(() => [])
+        const [subRows, taskRows, asgRows] = await Promise.all([
+          storage.table('assignment_submissions').toArray().catch(() => []),
+          storage.table('task_submissions').toArray().catch(() => []),
+          storage.table('assignments').toArray().catch(() => [])
         ]);
-        const pendingSubs = subRows.filter(s => s.needs_review || (s.auto && !s.manual && s.has_manual_questions)).length;
-        const pendingTasks = taskRows.filter(t => !t.review || t.review.status === 'submitted' || t.review.status === 'revised').length;
-        const { updateInboxBadge } = await import('./components/app-nav.js');
+        const asgById = new Map(asgRows.map(a => [a.id, a]));
+        const pendingSubs = subRows.filter(s => {
+          if (s.is_latest === false) return false;
+          if (s.needs_review) return true;
+          const asg = asgById.get(s.assignment_id);
+          const hasManual = asg?.questions?.some(q => q.type === 'open' || q.type === 'essay' || q.grading === 'manual') || s.has_manual_questions;
+          return hasManual && !s.reviewed_at && (!s.manual || Object.keys(s.manual).length === 0);
+        }).length;
+        const pendingTasks = taskRows.filter(t => t.is_latest !== false && (!t.review || !t.review.reviewed_at)).length;
         updateInboxBadge(pendingSubs + pendingTasks);
       } catch (_) {}
     };
@@ -401,6 +410,14 @@ async function bootstrapApp() {
     window.addEventListener('hashchange', () => setTimeout(syncInboxBadge, 300));
     window.addEventListener('kb-role-mode-changed', syncInboxBadge);
     window.addEventListener('kb-content-imported', syncInboxBadge);
+    window.addEventListener('kb-submissions-changed', syncInboxBadge);
+    window.addEventListener('kb-student-ledger-updated', syncInboxBadge);
+    window.addEventListener('kb-feedback-imported', syncInboxBadge);
+
+    // 10. Start remote feedback poller
+    import('./modules/student/feedback-poller.js').then(({ feedbackPoller }) => {
+      feedbackPoller.start();
+    }).catch(() => {});
 
   } catch (err) {
     console.error('Fatal initialization error:', err);

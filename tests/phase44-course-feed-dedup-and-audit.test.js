@@ -47,6 +47,7 @@ describe('Phase 44: Course Feed, Roster Deduplication & Audit', () => {
         description: 'Complete the organelle identification report',
         points_possible: 100,
         submission_types: ['file'],
+        publish: { published_at: new Date().toISOString(), version: 1, salt: 'task-salt-123' },
         created_at: new Date().toISOString()
       });
 

@@ -14,11 +14,12 @@ import { importVideoReceipts, receiptErrorText } from '../video/receipt-import.j
 import { getTransport } from '../../core/transport.js';
 import { getPolicy } from '../../core/managed-config.js';
 import { generateUUID } from '../../utils/uuid.js';
+import { pullDrop } from '../../core/drop-pull.js';
 
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
 export async function renderInboxView(params, router, container) {
-  let staged = []; // Session-only staging array: { id, source, text, classification, targetTitle, studentClaim, status, statusTone, errorDetail }
+  let staged = (await storage.getMetadata('inbox_staged')) || [];
   let lastImportSummary = null; // Stored results after Import All: array of { title, type, added, duplicates, errors, link }
   let watchDirHandle = null;
   let watchInterval = null;
@@ -115,6 +116,7 @@ export async function renderInboxView(params, router, container) {
     }
 
     staged = [...staged, ...nextItems];
+    await storage.setMetadata('inbox_staged', staged);
     render();
   };
 
@@ -332,39 +334,38 @@ export async function renderInboxView(params, router, container) {
           return;
         }
 
-        const cursors = (await storage.getMetadata('relay_cursors')) || {};
         const newItems = [];
         let totalCount = 0;
+        let totalFailures = 0;
 
         for (const asg of dropAssignments) {
           const dropId = asg.publish?.relay?.drop_id || asg.relay?.drop_id;
-          const since = cursors[dropId] || undefined;
-          try {
-            const res = await transport.listDrop(dropId, { since });
-            if (res.items && res.items.length) {
-              let latestDate = since;
-              for (const item of res.items) {
-                newItems.push({
-                  source: `Server: ${asg.title || dropId}`,
-                  text: item.text
-                });
-                if (!latestDate || item.received_at > latestDate) {
-                  latestDate = item.received_at;
-                }
-              }
-              cursors[dropId] = latestDate;
-              totalCount += res.items.length;
+          if (!dropId) continue;
+          const pullRes = await pullDrop({
+            transport,
+            dropId,
+            dropHistory: asg.publish?.relay_history || [],
+            onItem: async (item) => {
+              const rawText = typeof item === 'string' ? item : (item.text || item.payload || '');
+              if (!rawText) return;
+              newItems.push({
+                source: `Server: ${asg.title || dropId}`,
+                text: rawText
+              });
+              return { ok: true };
             }
-          } catch (e) {
-            console.warn(`Failed to query drop ${dropId}:`, e);
-          }
+          });
+          totalCount += pullRes.count;
+          totalFailures += pullRes.failures.length;
         }
-
-        await storage.setMetadata('relay_cursors', cursors);
 
         if (newItems.length > 0) {
           await classifyAndStage(newItems);
-          toast.success(`Fetched ${totalCount} new submission(s) from server.`);
+          if (totalFailures > 0) {
+            toast.warning(`Fetched ${newItems.length} submission(s); ${totalFailures} couldn't be read.`);
+          } else {
+            toast.success(`Fetched ${newItems.length} new submission(s) from server.`);
+          }
         } else {
           toast.info('Server checked. No new submissions.');
         }
@@ -438,15 +439,26 @@ export async function renderInboxView(params, router, container) {
       toast.info(`Inbox auto-import ${autoImport ? 'enabled' : 'disabled'}.`);
     });
 
-    clearBtn?.addEventListener('click', () => {
-      staged = [];
-      render();
+    clearBtn?.addEventListener('click', async () => {
+      const { ConfirmDialog } = await import('../../utils/dialogs.js');
+      const ok = await ConfirmDialog.show({
+        title: 'Clear Staged Submissions?',
+        message: 'Items are still available through each assignment\'s Pull button. Are you sure you want to clear this list?',
+        confirmText: 'Clear List',
+        variant: 'danger'
+      });
+      if (ok) {
+        staged = [];
+        await storage.setMetadata('inbox_staged', []);
+        render();
+      }
     });
 
     container.querySelectorAll('.btn-remove-item').forEach(btn => {
-      btn.addEventListener('click', (e) => {
+      btn.addEventListener('click', async (e) => {
         const id = e.currentTarget.getAttribute('data-id');
         staged = staged.filter(item => item.id !== id);
+        await storage.setMetadata('inbox_staged', staged);
         render();
       });
     });
@@ -672,6 +684,7 @@ export async function renderInboxView(params, router, container) {
       const { importTaskSubmissions } = await import('../tasks/submissions.js');
 
       let added = 0;
+      let duplicates = 0;
       const errors = [];
 
       for (const it of items) {
@@ -682,6 +695,7 @@ export async function renderInboxView(params, router, container) {
           roster
         });
         added += res.imported;
+        duplicates += (res.duplicates || 0);
         if (res.failed > 0) {
           errors.push(...res.errors.map(m => ({ source: it.source, message: m })));
         }
@@ -691,7 +705,7 @@ export async function renderInboxView(params, router, container) {
         type: 'Assignment',
         title: task.title || 'Assignment',
         added,
-        duplicates: 0,
+        duplicates,
         errors,
         link: `#/assignments/review?id=${task.id}`
       });
@@ -767,6 +781,7 @@ export async function renderInboxView(params, router, container) {
 
     lastImportSummary = summaries;
     staged = []; // clear staging
+    await storage.setMetadata('inbox_staged', []);
     toast.success('Batch import complete!');
     render();
   };
@@ -775,6 +790,7 @@ export async function renderInboxView(params, router, container) {
   function kindBadgeClass(kind) {
     switch (kind) {
       case 'assignment': return 'bg-amber-100 text-amber-800';
+      case 'task': return 'bg-indigo-100 text-indigo-800';
       case 'video_receipt': return 'bg-blue-100 text-blue-800';
       case 'legacy_receipt': return 'bg-violet-100 text-violet-800';
       case 'kbshare': return 'bg-slate-100 text-slate-800';
@@ -784,7 +800,8 @@ export async function renderInboxView(params, router, container) {
 
   function kindLabel(kind) {
     switch (kind) {
-      case 'assignment': return 'Assignment';
+      case 'assignment': return 'Assessment';
+      case 'task': return 'Assignment';
       case 'video_receipt': return 'Video receipt';
       case 'legacy_receipt': return 'Legacy receipt';
       case 'kbshare': return 'Shared lesson';

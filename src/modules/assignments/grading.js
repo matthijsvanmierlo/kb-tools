@@ -450,7 +450,7 @@ export async function checkAnswerLocally(studentQuestion, answer, salt) {
  * @param {{ publicJwk: object, fingerprint: string }} opts.teacherKeys
  * @param {Record<string,string>|null} [opts.rosterChecks] - STUDENT_ID → access-code check value
  */
-export async function buildStudentPayload(assignment, { teacherKeys, rosterChecks = null, rosterCards = null, courseMeta = null }) {
+export async function buildStudentPayload(assignment, { teacherKeys, rosterChecks = null, rosterCards = null, courseMeta = null, relay = null }) {
   const settings = assignment.settings || {};
   const salt = assignment.publish?.salt;
   if (!salt) throw new Error('MISSING_PUBLISH_SALT');
@@ -487,6 +487,14 @@ export async function buildStudentPayload(assignment, { teacherKeys, rosterCheck
   }
   if (courseMeta && typeof courseMeta === 'object') {
     payload.course_meta = courseMeta;
+  }
+  const relayObj = relay || assignment.publish?.relay;
+  if (relayObj) {
+    payload.relay = {
+      base_url: relayObj.base_url,
+      drop_id: relayObj.drop_id,
+      drop_secret: relayObj.drop_secret
+    };
   }
 
   if (settings.show_correct_answers && settings.feedback_mode !== 'none') {

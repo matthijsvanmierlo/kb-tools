@@ -226,7 +226,9 @@ export class RelayTransport extends SyncTransport {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || `Failed to submit to drop: ${res.status}`);
+      const error = new Error(err.error || `Failed to submit to drop: ${res.status}`);
+      error.status = res.status;
+      throw error;
     }
     const data = await res.json();
     return {
@@ -235,9 +237,11 @@ export class RelayTransport extends SyncTransport {
     };
   }
 
-  async listDrop(dropId, { since } = {}) {
+  async listDrop(dropId, { since = null, after = null, limit = null } = {}) {
     const url = new URL(`${this.apiBase}/drops/${encodeURIComponent(dropId)}/submissions`);
-    if (since) url.searchParams.set('since', since);
+    if (after) url.searchParams.set('after', after);
+    else if (since) url.searchParams.set('since', since);
+    if (limit) url.searchParams.set('limit', String(limit));
     const res = await fetch(url.toString(), {
       headers: {
         'Authorization': `Bearer ${this.token}`
@@ -245,10 +249,16 @@ export class RelayTransport extends SyncTransport {
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || `Failed to list submissions: ${res.status}`);
+      const error = new Error(err.error || `Failed to list submissions: ${res.status}`);
+      error.status = res.status;
+      throw error;
     }
     const data = await res.json();
-    return { items: data.items || [] };
+    return {
+      items: data.items || [],
+      next_after: data.next_after || null,
+      more: !!data.more
+    };
   }
 
   async deleteDrop(dropId) {
@@ -565,7 +575,9 @@ export class PublicFeedTransport {
     }
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: res.statusText }));
-      throw new Error(err.error || `Failed to fetch course feed: ${res.status}`);
+      const error = new Error(err.error || `Failed to fetch course feed: ${res.status}`);
+      error.status = res.status;
+      throw error;
     }
     const data = await res.json();
     const etag = res.headers.get('ETag')?.replace(/^"|"$/g, '') || data.etag;
@@ -577,5 +589,23 @@ export class PublicFeedTransport {
       updatedAt: data.updated_at
     };
   }
+}
+
+/**
+ * Maps relay HTTP status or network failures to clear, user-friendly language.
+ * @param {Error|any} err
+ * @returns {string}
+ */
+export function describeRelayError(err) {
+  const status = err?.status || (err?.message && (/status[:\s]+(\d+)/i.exec(err.message)?.[1] ? Number(/status[:\s]+(\d+)/i.exec(err.message)[1]) : null));
+  if (status === 413) return 'File too large';
+  if (status === 410) return 'Drop box closed';
+  if (status === 403 || status === 401) return 'Wrong link or secret';
+  if (status === 429) return 'Busy – retry in a minute';
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return 'Offline';
+  if (err?.name === 'TypeError' || /offline|network|failed to fetch/i.test(err?.message || '')) {
+    return 'Offline';
+  }
+  return err?.message || 'Submission failed';
 }
 

@@ -42,7 +42,7 @@ export async function renderAssignmentsView(params, router, container) {
       history.replaceState(null, '', `#/assessments/edit?id=${assignment.id}`);
     }
     const { renderEditor } = await import('./editor.js');
-    return renderEditor(assignment, router, container);
+    return renderEditor(assignment, router, container, params);
   }
 
   if (hash.startsWith('#/assessments/submissions')) {

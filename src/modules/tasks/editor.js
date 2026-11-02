@@ -31,7 +31,7 @@ export function syncTaskCourseId(task, courseId) {
  * @param {object} router
  * @param {HTMLElement} container
  */
-export async function renderTaskEditor(task, router, container) {
+export async function renderTaskEditor(task, router, container, params = {}) {
   const t = task || createBlankTask();
 
   const currentCourseId = resolveTaskCourseId(t);
@@ -87,6 +87,16 @@ export async function renderTaskEditor(task, router, container) {
     clearTimeout(saveTimer);
     setSaveState('Saving…');
     const run = async () => {
+      try {
+        const stored = await storage.table('tasks').get(t.id);
+        if (stored?.publish?.published_at) {
+          const storedTime = new Date(stored.publish.published_at).getTime();
+          const localTime = t.publish?.published_at ? new Date(t.publish.published_at).getTime() : 0;
+          if (storedTime >= localTime || !t.publish) {
+            t.publish = stored.publish;
+          }
+        }
+      } catch (_) {}
       t.updated_at = new Date().toISOString();
       await storage.table('tasks').put(JSON.parse(JSON.stringify(t)));
       setSaveState('Saved');
@@ -329,7 +339,8 @@ export async function renderTaskEditor(task, router, container) {
   container.querySelector('#task-publish-btn').addEventListener('click', () => {
     save(true);
     openTaskPublishDialog(t, {
-      onPublished: () => {
+      onPublished: (next) => {
+        if (next) Object.assign(t, next);
         save(true);
       }
     });

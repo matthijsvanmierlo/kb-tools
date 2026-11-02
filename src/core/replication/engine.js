@@ -1,5 +1,5 @@
 import { mergeRecords, markRemoved } from './merge.js';
-import { HLC, hlc } from './hlc.js';
+import { HLC, hlc, compareStamp } from './hlc.js';
 import { scopeOf } from '../storage.js';
 import { supportsCompressionStreams } from '../crypto-share.js';
 import { generateUUID } from '../../utils/uuid.js';
@@ -138,6 +138,7 @@ const keyString = (k) => (Array.isArray(k) ? k.join('+') : String(k));
 export class ReplicationEngine {
   constructor({ store, channel, channelId, key, deviceId, courseId = null, onVaultOp = null }) {
     Object.assign(this, { store, channel, channelId, key, deviceId, courseId, onVaultOp });
+    this.problems = [];
   }
 
   get _cursorKey() { return `repl_cursor:${this.channelId}`; }
@@ -238,20 +239,55 @@ export class ReplicationEngine {
 
       if (ops.length) {
         const prevEnd = Number(await this.store.getMetadata(this._lastEndKey)) || 0;
-        const body = await sealJson(
-          this.key,
-          { v: CHUNK_VERSION, channel: this.channelId, device_id: this.deviceId, start, end, prev_end: prevEnd, ops },
-          chunkAad(this.channelId, this.deviceId, start, end)
-        );
-        await this.channel.putChunk({ deviceId: this.deviceId, start, end, body });
-        await this.store.setMetadata(this._lastEndKey, end);
-        pushed += ops.length;
+        let batchOps = ops;
+        let batchEnd = end;
+        let body = null;
+
+        while (batchOps.length > 0) {
+          body = await sealJson(
+            this.key,
+            { v: CHUNK_VERSION, channel: this.channelId, device_id: this.deviceId, start, end: batchEnd, prev_end: prevEnd, ops: batchOps },
+            chunkAad(this.channelId, this.deviceId, start, batchEnd)
+          );
+
+          const encodedSize = enc.encode(body).length;
+          if (encodedSize <= 900 * 1024) {
+            break;
+          }
+
+          if (batchOps.length > 1) {
+            const half = Math.floor(batchOps.length / 2);
+            batchOps = batchOps.slice(0, half);
+            const lastOp = batchOps[batchOps.length - 1];
+            const matchingRow = rows.find(r => r.table === lastOp.table && JSON.stringify(r.key) === JSON.stringify(lastOp.key));
+            batchEnd = matchingRow?.seq || batchOps[batchOps.length - 1].seq || start;
+          } else {
+            // Single op exceeds 900 KB limit
+            this.problems.push({ kind: 'oversize', message: '1 item too large to sync – reduce embedded media' });
+            if (typeof this.store.outbox?.markOversize === 'function') {
+              await this.store.outbox.markOversize([start]);
+            }
+            batchOps = [];
+            batchEnd = start;
+            break;
+          }
+        }
+
+        if (batchOps.length > 0 && body) {
+          await this.channel.putChunk({ deviceId: this.deviceId, start, end: batchEnd, body });
+          await this.store.setMetadata(this._lastEndKey, batchEnd);
+          pushed += batchOps.length;
+          cursor = batchEnd;
+        } else {
+          cursor = end;
+        }
+      } else {
+        cursor = end;
       }
 
-      cursor = end;
       await this.store.setMetadata(this._cursorKey, cursor);
       if (typeof this.store.outbox?.markPushed === 'function') {
-        const pushedSeqs = rows.filter(r => r.seq <= end).map(r => r.seq);
+        const pushedSeqs = rows.filter(r => r.seq <= cursor).map(r => r.seq);
         if (pushedSeqs.length) {
           await this.store.outbox.markPushed(pushedSeqs);
         }
@@ -269,19 +305,32 @@ export class ReplicationEngine {
     try {
       const qTable = this.store.table('repl_quarantine');
       if (qTable) {
-        await qTable.put({
-          channel_id: this.channelId,
-          device_id: chunkMeta.deviceId,
-          start_seq: chunkMeta.start,
-          end_seq: chunkMeta.end,
-          quarantined_at: new Date().toISOString(),
-          reason
-        });
+        const existing = await qTable
+          .where({
+            channel_id: this.channelId,
+            device_id: chunkMeta.deviceId,
+            start_seq: chunkMeta.start,
+            end_seq: chunkMeta.end
+          })
+          .first()
+          .catch(() => null);
+
+        if (!existing) {
+          await qTable.put({
+            channel_id: this.channelId,
+            device_id: chunkMeta.deviceId,
+            start_seq: chunkMeta.start,
+            end_seq: chunkMeta.end,
+            quarantined_at: new Date().toISOString(),
+            reason
+          });
+        }
       }
     } catch (_) {}
   }
 
   async pull() {
+    this.problems = (this.problems || []).filter(p => p.kind !== 'gap' && p.kind !== 'quarantine');
     let vector = await this.vector();
     const result = { applied: 0, conflicts: 0, bootstrapped: false };
 
@@ -297,16 +346,30 @@ export class ReplicationEngine {
     }
 
     const cursor = Number(await this.store.getMetadata(this._listCursorKey)) || null;
-    const { items: chunks } = await this.channel.listChunks({ after: cursor });
+    const listRes = await this.channel.listChunks({ after: cursor });
+    const chunks = listRes?.items || [];
+    const serverCursor = listRes?.cursor || null;
 
-    const sortedChunks = chunks
-      .filter(c => c.deviceId !== this.deviceId && c.end > (vector[c.deviceId] || 0))
+    const stoppedDevices = new Set();
+    const pending = await this._pendingLocalKeys();
+    const chunkStatus = new Map(); // c -> 'applied' | 'skipped' | 'stopped'
+
+    const sortedChunks = [...chunks]
       .sort((a, b) => a.deviceId.localeCompare(b.deviceId) || a.start - b.start);
 
-    const pending = await this._pendingLocalKeys();
-
     for (const c of sortedChunks) {
-      if (c.end <= (vector[c.deviceId] || 0)) continue;
+      if (c.deviceId === this.deviceId) {
+        chunkStatus.set(c, 'skipped');
+        continue;
+      }
+      if (c.end <= (vector[c.deviceId] || 0)) {
+        chunkStatus.set(c, 'skipped');
+        continue;
+      }
+      if (stoppedDevices.has(c.deviceId)) {
+        chunkStatus.set(c, 'stopped');
+        continue;
+      }
 
       let chunk;
       try {
@@ -317,6 +380,7 @@ export class ReplicationEngine {
         }
       } catch (err) {
         await this._quarantineChunk(c, err.message || 'Corrupt chunk');
+        this.problems.push({ kind: 'quarantine', message: `Corrupt chunk from ${c.deviceId}: ${err.message}` });
         // Recover from latest snapshot if available
         try {
           const snap = await this.channel.latestSnapshot({ deviceId: c.deviceId });
@@ -325,7 +389,14 @@ export class ReplicationEngine {
             vector = await this.vector();
           }
         } catch (_) {}
-        continue;
+        if (c.end > (vector[c.deviceId] || 0)) {
+          stoppedDevices.add(c.deviceId);
+          chunkStatus.set(c, 'stopped');
+          continue;
+        } else {
+          chunkStatus.set(c, 'applied');
+          continue;
+        }
       }
 
       if ((chunk.prev_end || 0) > (vector[c.deviceId] || 0)) {
@@ -333,13 +404,29 @@ export class ReplicationEngine {
           const snap = await this.channel.latestSnapshot({ deviceId: c.deviceId });
           if (!snap) {
             await this._quarantineChunk(c, 'GAP in chunk sequence');
+            this.problems.push({ kind: 'gap', message: `Unresolved gap from ${c.deviceId}` });
+            stoppedDevices.add(c.deviceId);
+            chunkStatus.set(c, 'stopped');
             continue;
           }
           result.applied += (await this._applySnapshot(snap)).applied;
           vector = await this.vector();
-          if (c.end <= (vector[c.deviceId] || 0)) continue;
+          if ((chunk.prev_end || 0) > (vector[c.deviceId] || 0)) {
+            await this._quarantineChunk(c, 'GAP in chunk sequence');
+            this.problems.push({ kind: 'gap', message: `Unresolved gap from ${c.deviceId}` });
+            stoppedDevices.add(c.deviceId);
+            chunkStatus.set(c, 'stopped');
+            continue;
+          }
+          if (c.end <= (vector[c.deviceId] || 0)) {
+            chunkStatus.set(c, 'skipped');
+            continue;
+          }
         } catch (err) {
           await this._quarantineChunk(c, err.message || 'Gap recovery failed');
+          this.problems.push({ kind: 'gap', message: `Gap recovery failed for ${c.deviceId}` });
+          stoppedDevices.add(c.deviceId);
+          chunkStatus.set(c, 'stopped');
           continue;
         }
       }
@@ -351,10 +438,30 @@ export class ReplicationEngine {
       }
       vector[c.deviceId] = Math.max(vector[c.deviceId] || 0, c.end);
       await this.store.setMetadata(this._vectorKey, vector);
+      chunkStatus.set(c, 'applied');
     }
 
-    if (cursor !== undefined && cursor !== null) {
-      await this.store.setMetadata(this._listCursorKey, cursor);
+    // Advance cursor safely:
+    // Persist only up to highest continuous seq S where every chunk with seq <= S
+    // was applied, skipped as already covered, or belongs to this device.
+    const seqChunks = [...chunks].sort((a, b) => (a.seq || 0) - (b.seq || 0));
+    let newCursor = cursor;
+    for (const c of seqChunks) {
+      const st = chunkStatus.get(c);
+      if (st === 'stopped') {
+        break;
+      }
+      if (c.seq && c.seq > (newCursor || 0)) {
+        newCursor = c.seq;
+      }
+    }
+
+    if (!stoppedDevices.size && serverCursor && (!newCursor || serverCursor > newCursor)) {
+      newCursor = serverCursor;
+    }
+
+    if (newCursor !== null && newCursor !== undefined && newCursor !== cursor) {
+      await this.store.setMetadata(this._listCursorKey, newCursor);
     }
     return result;
   }
@@ -375,7 +482,7 @@ export class ReplicationEngine {
   _newer(incoming, sourceDevice, local) {
     const incHlc = incoming?._hlc || incoming?.updated_at || '';
     const locHlc = local?._hlc || local?.updated_at || '';
-    const cmp = HLC.compare(incHlc, locHlc);
+    const cmp = compareStamp(incHlc, locHlc);
     if (cmp !== 0) return cmp > 0;
     return sourceDevice > this.deviceId;
   }
@@ -413,7 +520,7 @@ export class ReplicationEngine {
 
     if (op.op === 'delete') {
       const localHlc = local?._hlc || local?.updated_at || '';
-      if (local && HLC.compare(localHlc, incomingHlc) > 0) {
+      if (local && compareStamp(localHlc, incomingHlc) > 0) {
         // Local edit after delete wins
         return none;
       }

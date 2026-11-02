@@ -5,11 +5,15 @@ import { generateUUID } from '../../utils/uuid.js';
  * Demo assignment covering every question type (seeded once when the library is empty).
  */
 export async function ensureSampleAssignment() {
+  const seeded = await storage.getMetadata('sample_assignment_seeded');
+  if (seeded) return null;
   const table = storage.table('assignments');
-  if ((await table.count()) > 0) return null;
+  if ((await table.count()) > 0) {
+    await storage.setMetadata('sample_assignment_seeded', true);
+    return null;
+  }
+  await storage.setMetadata('sample_assignment_seeded', true);
 
-  const courses = await storage.table('gradebook_courses').toArray().catch(() => []);
-  const course = courses.find(c => /chem/i.test(c.name || '')) || courses[0] || null;
   const now = new Date().toISOString();
   const due = new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10);
   const id8 = () => generateUUID().slice(0, 8);
@@ -20,8 +24,8 @@ export async function ensureSampleAssignment() {
     title: 'Stoichiometry & Equilibrium Check-In',
     description: 'Auto-graded practice covering moles, balancing, and Le Chatelier shifts.',
     instructions: 'Answer every question. You will see your score as soon as you submit. Hand in the **submission file** or **submission code** at the end.',
-    class_id: course?.id || null,
-    gradebook: { course_id: course?.id || null, category_id: course?.categories?.[0]?.id || null, column_id: null },
+    class_id: null,
+    gradebook: { course_id: null, category_id: null, column_id: null },
     settings: {
       feedback_mode: 'immediate',
       show_correct_answers: true,

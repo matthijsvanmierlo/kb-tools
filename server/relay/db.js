@@ -78,9 +78,15 @@ export function createDatabase(filePath = ':memory:') {
       try {
         const expiredDrops = db.prepare('SELECT id FROM drops WHERE expires_at < ?').all(now);
         for (const drop of expiredDrops) {
-          // Collect media keys
+          // Collect media keys only if not referenced by other drops or teacher refs
           const mediaRows = db.prepare('SELECT key FROM drop_media WHERE drop_id = ?').all(drop.id);
-          for (const m of mediaRows) expiredBlobKeys.push(m.key);
+          for (const m of mediaRows) {
+            const otherDrop = db.prepare('SELECT 1 FROM drop_media WHERE key = ? AND drop_id != ?').get(m.key, drop.id);
+            const teacherRef = db.prepare("SELECT 1 FROM media_refs WHERE sha = ? AND owner_kind = 'teacher'").get(m.key);
+            if (!otherDrop && !teacherRef) {
+              expiredBlobKeys.push(m.key);
+            }
+          }
           // Collect submission blob keys
           const subRows = db.prepare('SELECT body_key FROM submissions WHERE drop_id = ? AND body_key IS NOT NULL').all(drop.id);
           for (const s of subRows) expiredBlobKeys.push(s.body_key);
@@ -223,11 +229,12 @@ export function createDatabase(filePath = ':memory:') {
         }
       }
 
-      // 12. Media GC: drop_media or media_refs with zero references older than 24h
+      // 12. Media GC: drop_media or media_refs with zero references older than 24h (excluding teacher refs)
       try {
         const unreferenced = db.prepare(`
           SELECT sha, size FROM media_refs
           WHERE created_at < ?
+            AND owner_kind != 'teacher'
             AND NOT EXISTS (SELECT 1 FROM drop_media WHERE drop_media.key = media_refs.sha)
         `).all(oneDayAgo);
         for (const u of unreferenced) {
@@ -603,18 +610,32 @@ export function createDatabase(filePath = ':memory:') {
         let sql = 'SELECT id, received_at, text, body_key, size FROM submissions WHERE drop_id = ?';
         const params = [dropId];
 
-        if (since) {
+        if (after) {
+          if (typeof after === 'string' && after.includes('|')) {
+            const [afterRec, afterId] = after.split('|');
+            sql += ' AND (received_at > ? OR (received_at = ? AND id > ?))';
+            params.push(afterRec, afterRec, afterId);
+          } else {
+            sql += ' AND received_at > ?';
+            params.push(after);
+          }
+        } else if (since) {
           sql += ' AND received_at > ?';
           params.push(since);
         }
-        if (after) {
-          sql += ' AND received_at > ?';
-          params.push(after);
-        }
-        sql += ' ORDER BY received_at ASC LIMIT ?';
-        params.push(safeLimit);
+        sql += ' ORDER BY received_at ASC, id ASC LIMIT ?';
+        params.push(safeLimit + 1);
 
-        return db.prepare(sql).all(...params);
+        const rows = db.prepare(sql).all(...params);
+        const more = rows.length > safeLimit;
+        const items = more ? rows.slice(0, safeLimit) : rows;
+        const last = items[items.length - 1];
+        const next_after = last ? `${last.received_at}|${last.id}` : null;
+
+        items.items = items;
+        items.next_after = next_after;
+        items.more = more;
+        return items;
       },
       count(dropId) {
         return db.prepare('SELECT count(*) as count FROM submissions WHERE drop_id = ?').get(dropId)?.count || 0;

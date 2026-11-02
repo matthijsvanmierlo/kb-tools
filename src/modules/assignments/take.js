@@ -7,10 +7,11 @@ import { ConfirmDialog } from '../../utils/dialogs.js';
 import { buildStudentPayload, checkAnswerLocally, gradeSubmission, INSTANT_CHECK_TYPES, BLANK_TOKEN } from './grading.js';
 import { createSubmission, checkAccessCode } from './pipeline.js';
 import { QUESTION_TYPE_META } from './question-types.js';
-import { RelayTransport } from '../../core/transport.js';
+import { RelayTransport, describeRelayError } from '../../core/transport.js';
 import { DraftRoamer } from './draft-roaming.js';
 import { StudentProfile } from '../../core/student-profile.js';
 import { StudentLedger } from '../student/ledger.js';
+import { HandinState } from '../../core/handin-state.js';
 
 /**
  * Student Take Mode (KB-ASSIGN-005)
@@ -407,8 +408,11 @@ export async function renderTakeView(params, router, container) {
           accessCode: state.student.code
         });
         try {
-          const remote = await roamer.load();
-          if (remote && (!draft || (remote.saved_at || '') > (draft.saved_at || ''))) {
+          const remote = await roamer.load({ includeSubmitted: true });
+          if (remote?.submitted) {
+            fromElsewhere = true;
+            draft = remote;
+          } else if (remote && (!draft || (remote.saved_at || '') > (draft.saved_at || ''))) {
             draft = remote;
             fromElsewhere = true;
           }
@@ -439,7 +443,10 @@ export async function renderTakeView(params, router, container) {
           toast.info('Updated assignment loaded — your previous answers were preserved.');
         }
       }
-      if (draft) {
+      if (draft?.submitted) {
+        toast.info('This assessment was already handed in on another device.');
+        state.screen = 'results';
+      } else if (draft) {
         state.answers = draft.answers || {};
         state.checked = draft.checked || {};
         state.startedAt = draft.startedAt || new Date().toISOString();
@@ -865,6 +872,13 @@ export async function renderTakeView(params, router, container) {
       const resolvedCourseId = payload.course_id || payload.class_id || payload.course_meta?.course_id || payload.course_meta?.id || null;
       const resolvedCourseName = payload.course_meta?.course_name || payload.course_meta?.name || payload.course_name || '';
 
+      // Initialize persistent handin state
+      HandinState.set('assignment', payload.assignment_id, state.student.id, payload.publish_version, {
+        envelope_text: submission?.text || '',
+        submitted_at: state.result.submittedAt,
+        status: 'prepared'
+      });
+
       StudentProfile.saveIdentity({
         studentId: state.student.id,
         fullName: state.student.name,
@@ -885,7 +899,9 @@ export async function renderTakeView(params, router, container) {
         studentName: state.student.name,
         clientScore,
         submittedAt: state.result.submittedAt,
-        receiptId: state.result.receiptId,
+        receiptId: null,
+        status: 'Ready to hand in',
+        releaseGradeImmediately: !!payload.settings?.release_grade_immediately,
         answers: state.answers,
         submissionText: submission?.text || null
       }).catch(err => console.warn('Could not record to student ledger:', err));
@@ -1012,14 +1028,59 @@ export async function renderTakeView(params, router, container) {
       render();
     });
 
+    const resolvedCourseId = payload.course_id || payload.class_id || payload.course_meta?.course_id || payload.course_meta?.id || null;
+    const resolvedCourseName = payload.course_meta?.course_name || payload.course_meta?.name || payload.course_name || '';
+
     const btnServerHandin = container.querySelector('#res-server-handin');
     const serverStatus = container.querySelector('#res-server-status');
+
+    const handin = !preview ? HandinState.get('assignment', payload.assignment_id, state.student.id, payload.publish_version) : null;
+    if (handin?.status === 'sent_relay' && serverStatus) {
+      const receipt = handin.relay_receipt || r.receiptId || 'CONFIRMED';
+      const recTime = new Date(handin.relay_received_at || handin.submitted_at || Date.now()).toLocaleTimeString();
+      serverStatus.className = 'mt-2 p-3 rounded-xl bg-emerald-100/90 border border-emerald-300 text-emerald-950 text-xs space-y-1';
+      serverStatus.innerHTML = `
+        <div class="font-bold flex items-center gap-1.5"><sl-icon name="check-circle-fill" class="text-emerald-600 text-sm"></sl-icon> Handed in successfully!</div>
+        <div>Server receipt: <strong class="font-mono bg-white/70 px-1 py-0.5 rounded">${esc(receipt)}</strong> (received at ${recTime}). You can still download your file below as a backup.</div>
+      `;
+      serverStatus.classList.remove('hidden');
+      if (btnServerHandin) {
+        btnServerHandin.variant = 'default';
+        btnServerHandin.disabled = true;
+        btnServerHandin.innerHTML = `<sl-icon slot="prefix" name="check2"></sl-icon> Handed in at ${recTime} (receipt ${esc(receipt)})`;
+      }
+    }
+
     btnServerHandin?.addEventListener('click', async () => {
       btnServerHandin.loading = true;
       try {
         const relayTransport = new RelayTransport({ baseUrl: payload.relay.base_url || '' });
         const res = await relayTransport.submitToDrop(payload.relay.drop_id, r.text, { dropSecret: payload.relay.drop_secret });
         const receipt = res.receiptId || res.receipt_id;
+
+        HandinState.set('assignment', payload.assignment_id, state.student.id, payload.publish_version, {
+          status: 'sent_relay',
+          relay_receipt: receipt,
+          relay_received_at: res.received_at
+        });
+        HandinState.recordChannel('assignment', payload.assignment_id, state.student.id, payload.publish_version, 'relay', {
+          receiptId: receipt,
+          received_at: res.received_at
+        });
+
+        await StudentLedger.recordSubmission({
+          assignmentId: payload.assignment_id,
+          courseId: resolvedCourseId,
+          courseName: resolvedCourseName,
+          title: payload.title,
+          studentId: state.student.id,
+          studentName: state.student.name,
+          receiptId: receipt,
+          submittedAt: state.result.submittedAt,
+          status: `Handed in (server receipt ${receipt})`,
+          releaseGradeImmediately: !!payload.settings?.release_grade_immediately
+        });
+
         serverStatus.className = 'mt-2 p-3 rounded-xl bg-emerald-100/90 border border-emerald-300 text-emerald-950 text-xs space-y-1';
         serverStatus.innerHTML = `
           <div class="font-bold flex items-center gap-1.5"><sl-icon name="check-circle-fill" class="text-emerald-600 text-sm"></sl-icon> Handed in successfully!</div>
@@ -1031,16 +1092,44 @@ export async function renderTakeView(params, router, container) {
         btnServerHandin.innerHTML = '<sl-icon slot="prefix" name="check2"></sl-icon> Handed in to server';
         toast.success('Your work was received by the teacher server!');
       } catch (err) {
-        serverStatus.className = 'mt-2 p-3 rounded-xl bg-rose-100/90 border border-rose-300 text-rose-950 text-xs';
-        serverStatus.innerHTML = `<strong>Hand-in failed:</strong> ${esc(err.message)}. Please use the file download below to submit.`;
+        const errDesc = describeRelayError(err);
+        serverStatus.className = 'mt-2 p-3 rounded-xl bg-rose-100/90 border border-rose-300 text-rose-950 text-xs space-y-2';
+        serverStatus.innerHTML = `
+          <div><strong>Hand-in failed:</strong> ${esc(errDesc)}. Please use the file download below to submit.</div>
+          <div class="flex gap-2">
+            <sl-button size="small" id="res-server-retry" variant="danger">
+              <sl-icon slot="prefix" name="arrow-clockwise"></sl-icon> Retry
+            </sl-button>
+          </div>
+        `;
         serverStatus.classList.remove('hidden');
-        toast.danger('Could not hand in to server: ' + err.message);
+        serverStatus.querySelector('#res-server-retry')?.addEventListener('click', () => btnServerHandin.click());
+        toast.danger('Could not hand in to server: ' + errDesc);
       } finally {
         btnServerHandin.loading = false;
       }
     });
 
     const subFilename = `${payload.title}_${state.student.id}`.replace(/[^a-z0-9_-]+/gi, '_') + '.kbsub';
+
+    const recordFileDownload = async () => {
+      HandinState.recordChannel('assignment', payload.assignment_id, state.student.id, payload.publish_version, 'download');
+      const cur = HandinState.get('assignment', payload.assignment_id, state.student.id, payload.publish_version);
+      if (cur?.status !== 'sent_relay') {
+        HandinState.set('assignment', payload.assignment_id, state.student.id, payload.publish_version, { status: 'downloaded' });
+        await StudentLedger.recordSubmission({
+          assignmentId: payload.assignment_id,
+          courseId: resolvedCourseId,
+          courseName: resolvedCourseName,
+          title: payload.title,
+          studentId: state.student.id,
+          studentName: state.student.name,
+          submittedAt: state.result.submittedAt,
+          status: 'File saved – upload it to your teacher',
+          releaseGradeImmediately: !!payload.settings?.release_grade_immediately
+        });
+      }
+    };
 
     container.querySelector('#res-download-html')?.addEventListener('click', async () => {
       const { downloadClickableHtmlFile } = await import('../../core/html-launcher.js');
@@ -1052,12 +1141,14 @@ export async function renderTakeView(params, router, container) {
         studentId: state.student.id,
         instructions: 'Student submission package for KennisBoost Tools.'
       }, `${subFilename}.html`);
+      await recordFileDownload();
       toast.success('Clickable submission file downloaded (.kbsub.html). Now hand it in.');
     });
 
     container.querySelector('#res-download')?.addEventListener('click', async () => {
       const { downloadText } = await import('../../components/send-sheet.js');
       downloadText(r.text, subFilename);
+      await recordFileDownload();
       toast.success('Submission file downloaded. Now hand it in.');
     });
 
@@ -1071,7 +1162,30 @@ export async function renderTakeView(params, router, container) {
         studentId: state.student.id,
         receiptId: r.receiptId,
         relay: payload.relay || null,
-        email: payload.handin?.email || ''
+        email: payload.handin?.email || '',
+        onHandedIn: async (receiptRes) => {
+          const receipt = receiptRes?.receiptId || receiptRes?.receipt_id;
+          if (receipt) {
+            HandinState.set('assignment', payload.assignment_id, state.student.id, payload.publish_version, {
+              status: 'sent_relay',
+              relay_receipt: receipt,
+              relay_received_at: receiptRes.received_at
+            });
+            await StudentLedger.recordSubmission({
+              assignmentId: payload.assignment_id,
+              courseId: resolvedCourseId,
+              courseName: resolvedCourseName,
+              title: payload.title,
+              studentId: state.student.id,
+              studentName: state.student.name,
+              receiptId: receipt,
+              submittedAt: state.result.submittedAt,
+              status: `Handed in (server receipt ${receipt})`,
+              releaseGradeImmediately: !!payload.settings?.release_grade_immediately
+            });
+            render();
+          }
+        }
       });
     });
   }

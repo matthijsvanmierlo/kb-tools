@@ -104,10 +104,10 @@ export class JoinService {
         const transport = new PublicFeedTransport({ baseUrl: effectiveRelay });
         feedRes = await transport.fetchCourseFeed(feedId);
       } catch (err) {
-        if (err?.message?.includes('404') || err?.status === 404) {
-          // Feed strictly not found on relay
+        if (err?.status === 404 || err?.status === 410 || String(err?.message).includes('404') || String(err?.message).includes('410')) {
+          // Feed strictly not found or expired on relay - never create ghost pending course
           if (!localCourse) {
-            return { status: 'not_found', classCode: normClassCode, feedId };
+            return { status: 'not_found', classCode: normClassCode, feedId, httpStatus: err.status || 404 };
           }
         } else {
           // Network error or offline
@@ -118,14 +118,17 @@ export class JoinService {
       isOffline = true;
     }
 
-    // 3. Handle Code Rotation Forwarding Stub
+    // 3. Handle Code Rotation Forwarding Stub (limit to 3 hops)
     if (feedRes && typeof feedRes === 'object' && feedRes.moved_to) {
-      const forwardedCode = feedRes.moved_to;
+      const hops = (options._hops || 0) + 1;
+      if (hops > 3) {
+        return { status: 'error', error: 'Too many forwarding hops' };
+      }
       return JoinService.join({
         ...parsed,
-        classCode: forwardedCode,
+        classCode: feedRes.moved_to,
         feedId: null
-      }, options);
+      }, { ...options, _hops: hops });
     }
 
     // 4. Decrypt & Merge Feed if fetched
@@ -138,7 +141,11 @@ export class JoinService {
           try {
             const stub = JSON.parse(feedRes.ciphertext);
             if (stub?.moved_to) {
-              return JoinService.join({ ...parsed, classCode: stub.moved_to, feedId: null }, options);
+              const hops = (options._hops || 0) + 1;
+              if (hops > 3) {
+                return { status: 'error', error: 'Too many forwarding hops' };
+              }
+              return JoinService.join({ ...parsed, classCode: stub.moved_to, feedId: null }, { ...options, _hops: hops });
             }
           } catch (_) {}
         }
@@ -276,4 +283,22 @@ export class JoinService {
 
     return true;
   }
+}
+
+/**
+ * Remove course-pending-* rows with no feed after 7 days.
+ */
+export async function cleanupPendingCourses() {
+  try {
+    const courses = await storage.table('student_courses').toArray();
+    const sevenDaysAgo = Date.now() - 7 * 86400000;
+    for (const c of courses) {
+      if (c.id && c.id.startsWith('course-pending-') && c.status === 'pending_content') {
+        const updated = new Date(c.updated_at || 0).getTime();
+        if (updated < sevenDaysAgo) {
+          await storage.table('student_courses').delete(c.id);
+        }
+      }
+    }
+  } catch (_) {}
 }

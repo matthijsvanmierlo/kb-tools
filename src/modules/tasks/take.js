@@ -6,10 +6,12 @@ import { generateUUID } from '../../utils/uuid.js';
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { checkTaskAccessCode, createTaskSubmission } from './pipeline.js';
 import { buildStudentTaskPayload } from './publish-core.js';
-import { RelayTransport } from '../../core/transport.js';
+import { RelayTransport, describeRelayError } from '../../core/transport.js';
 import { StudentLedger } from '../student/ledger.js';
 import { StudentProfile } from '../../core/student-profile.js';
 import { downloadClickableHtmlFile } from '../../core/html-launcher.js';
+import { HandinState } from '../../core/handin-state.js';
+import { HandinInstructions } from '../../components/handin-instructions.js';
 import { createCodeEditor } from '../../components/code-editor.js';
 import { RichTextEditor } from '../../components/rich-text-editor.js';
 import { uploadStudentFile } from '../../utils/student-media.js';
@@ -25,9 +27,19 @@ const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 
 export const PAYLOAD_SESSION_KEY = 'kb_active_task_payload';
 
+let quotaWarned = false;
 const safeStorage = {
   get(key) { try { return JSON.parse(localStorage.getItem(key)); } catch (_) { return null; } },
-  set(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch (_) {} },
+  set(key, value) {
+    try {
+      localStorage.setItem(key, JSON.stringify(value));
+    } catch (err) {
+      if (!quotaWarned && (err?.name === 'QuotaExceededError' || err?.code === 22 || err?.number === -2147024882 || String(err).includes('quota'))) {
+        quotaWarned = true;
+        toast.warning('Browser storage is full. Draft autosave could not save all changes.');
+      }
+    }
+  },
   remove(key) { try { localStorage.removeItem(key); } catch (_) {} }
 };
 
@@ -254,6 +266,10 @@ export async function renderTaskTake(params = {}, router = null, container = nul
   // ---------------------------------------------------------------------------
   function renderStart() {
     const needsCode = !!payload.settings?.require_access_code && !!payload.roster_checks;
+    // Check if previous handin exists
+    const existingHandin = (!preview && state.student.id)
+      ? HandinState.get('task', payload.task_id, state.student.id, payload.publish_version)
+      : null;
 
     container.innerHTML = `
       <div class="max-w-xl mx-auto space-y-6 pt-4">
@@ -279,6 +295,19 @@ export async function renderTaskTake(params = {}, router = null, container = nul
               <span class="px-2.5 py-1 rounded-full bg-slate-100 text-slate-600">${payload.scoring === 'proficiency' ? 'Proficiency Rubric' : `${payload.max_points ?? 100} points`}</span>
             </div>
           </div>
+
+          ${existingHandin?.submitted_at ? `
+            <div class="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-900 space-y-2">
+              <div class="flex items-center gap-2 font-bold text-sm">
+                <sl-icon name="check-circle-fill" class="text-emerald-600 text-base"></sl-icon>
+                You already handed this in on ${new Date(existingHandin.submitted_at).toLocaleString()}
+              </div>
+              ${existingHandin.relay_receipt ? `<div>Server receipt: <strong class="font-mono bg-white/70 px-1 py-0.5 rounded">${esc(existingHandin.relay_receipt)}</strong></div>` : ''}
+              <div class="pt-1">
+                <sl-button size="small" id="task-rehandin-btn" variant="default">Hand in a new version</sl-button>
+              </div>
+            </div>
+          ` : ''}
 
           ${payload.description ? `
             <div class="kb-prose text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-xl p-4 max-h-60 overflow-y-auto">
@@ -316,6 +345,14 @@ export async function renderTaskTake(params = {}, router = null, container = nul
     const codeInput = container.querySelector('#task-student-code');
     const errorBox = container.querySelector('#task-start-error');
     const errorText = container.querySelector('#task-start-error-text');
+
+    const rehandinBtn = container.querySelector('#task-rehandin-btn');
+    if (rehandinBtn) {
+      rehandinBtn.addEventListener('click', () => {
+        HandinState.clear('task', payload.task_id, state.student.id, payload.publish_version);
+        renderStart();
+      });
+    }
 
     const tryUnlockWithCode = async (code) => {
       if (!code || !payload.roster_cards) return;
@@ -366,9 +403,14 @@ export async function renderTaskTake(params = {}, router = null, container = nul
 
       // Validate access code if required
       if (payload.settings?.require_access_code && payload.roster_checks) {
-        const ok = await checkTaskAccessCode(payload, sid, code);
-        if (!ok) {
+        const status = await checkTaskAccessCode(payload, sid, code);
+        if (status === 'mismatch') {
           errorText.textContent = 'Access code does not match this Student ID. Please check with your teacher.';
+          errorBox.classList.remove('hidden');
+          return;
+        }
+        if (status === 'unknown_student') {
+          errorText.textContent = 'ID not on roster. Please check with your teacher.';
           errorBox.classList.remove('hidden');
           return;
         }
@@ -644,29 +686,42 @@ export async function renderTaskTake(params = {}, router = null, container = nul
           saveLocalDraft();
           toast.success(`Attached "${file.name}"`);
         } catch (err) {
-          // If <= 4MB, fall back to inline base64 attachment for offline / no-CDN relay hand-in
+          // If <= 4MB, fall back to inline/idb attachment for offline / no-CDN relay hand-in
           if (file.size <= 4 * 1024 * 1024) {
             try {
-              const reader = new FileReader();
-              const b64Promise = new Promise((resolve, reject) => {
-                reader.onload = () => resolve(reader.result);
-                reader.onerror = reject;
-                reader.readAsDataURL(file);
-              });
-              const inlineData = await b64Promise;
-              state.content.attachments.push({
-                id: generateUUID(),
-                name: file.name,
-                size: file.size,
-                mime: file.type || 'application/octet-stream',
-                ref: null,
-                inline_data_b64: inlineData
-              });
+              if (file.size > 256 * 1024) {
+                const saved = await storage.saveContentAddressedBlob(file);
+                state.content.attachments.push({
+                  id: generateUUID(),
+                  name: file.name,
+                  size: file.size,
+                  mime: file.type || 'application/octet-stream',
+                  ref: null,
+                  blob_uri: saved.uri,
+                  inline_data_b64: null
+                });
+              } else {
+                const reader = new FileReader();
+                const b64Promise = new Promise((resolve, reject) => {
+                  reader.onload = () => resolve(reader.result);
+                  reader.onerror = reject;
+                  reader.readAsDataURL(file);
+                });
+                const inlineData = await b64Promise;
+                state.content.attachments.push({
+                  id: generateUUID(),
+                  name: file.name,
+                  size: file.size,
+                  mime: file.type || 'application/octet-stream',
+                  ref: null,
+                  inline_data_b64: inlineData
+                });
+              }
               lastFailedFile = null;
               renderAttachmentList();
               updateSizeMeter();
               saveLocalDraft();
-              toast.warning(`Server media upload not available; attached "${file.name}" inline.`);
+              toast.warning(`Server media upload not available; attached "${file.name}" locally.`);
               return;
             } catch (_) {}
           }
@@ -1072,6 +1127,17 @@ export async function renderTaskTake(params = {}, router = null, container = nul
             <sl-button variant="primary" id="btn-submit-relay" class="w-full" size="medium">
               <sl-icon slot="prefix" name="cloud-upload"></sl-icon> Submit via School Relay (1-Click)
             </sl-button>
+
+            <div id="task-relay-error-box" class="hidden p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 space-y-2">
+              <div class="flex items-center gap-2 font-semibold">
+                <sl-icon name="exclamation-triangle" class="text-rose-600"></sl-icon>
+                <span>Submission failed: <span id="task-relay-error-msg"></span></span>
+              </div>
+              <p class="text-[11px] text-rose-700">You can retry sending to the server or download your encrypted file below to hand in manually.</p>
+              <sl-button size="small" variant="danger" outline id="btn-submit-relay-retry">
+                <sl-icon slot="prefix" name="arrow-clockwise"></sl-icon> Retry Server Send
+              </sl-button>
+            </div>
           ` : ''}
 
           <sl-button variant="${exceedsRelay ? 'primary' : 'default'}" id="btn-submit-file" class="w-full" size="medium">
@@ -1122,7 +1188,7 @@ export async function renderTaskTake(params = {}, router = null, container = nul
     const resolvedCourseId = payload.course_id || payload.class_id || payload.course_meta?.course_id || payload.course_meta?.id || null;
     const resolvedCourseName = payload.course_meta?.course_name || payload.course_meta?.name || payload.course_name || '';
 
-    const recordSuccess = async (subId, envelopeText, submittedAt) => {
+    const recordSuccess = async (subId, envelopeText, submittedAt, statusText = 'Ready to hand in') => {
       StudentProfile.saveIdentity({
         studentId: state.student.id,
         fullName: state.student.name,
@@ -1142,57 +1208,96 @@ export async function renderTaskTake(params = {}, router = null, container = nul
         studentName: state.student.name,
         receiptId: subId,
         submissionText: envelopeText,
-        submittedAt
+        submittedAt,
+        status: statusText
       });
     };
 
-    const relayBtn = dialog.querySelector('#btn-submit-relay');
-    if (relayBtn) {
-      relayBtn.addEventListener('click', async () => {
-        relayBtn.loading = true;
-        try {
+    // Cache sealed envelope promise so all channels reuse the same envelope_text
+    let sealedEnvelopePromise = null;
+    const getEnvelope = () => {
+      if (!sealedEnvelopePromise) {
+        sealedEnvelopePromise = (async () => {
           const submissionContent = await getPreparedContent(false);
-          const { submission, envelopeText } = await createTaskSubmission(
+          const sealed = await createTaskSubmission(
             payload,
             { id: state.student.id, name: state.student.name, code: state.student.code },
             submissionContent
           );
+          HandinState.set('task', payload.task_id, state.student.id, payload.publish_version, {
+            envelope_text: sealed.envelopeText,
+            submitted_at: sealed.submission.submitted_at,
+            status: 'prepared'
+          });
+          return sealed;
+        })();
+      }
+      return sealedEnvelopePromise;
+    };
 
-          const transport = new RelayTransport({ baseUrl: payload.relay.base_url });
-          const res = await transport.submitToDrop(payload.relay.drop_id, envelopeText, { dropSecret: payload.relay.drop_secret });
-          if (!res || !res.receiptId) {
-            throw new Error('Relay server did not return a valid receipt');
-          }
-          if (res.receiptId) {
-            submission.id = res.receiptId;
-          }
+    const relayBtn = dialog.querySelector('#btn-submit-relay');
+    const relayRetryBtn = dialog.querySelector('#btn-submit-relay-retry');
+    const errBox = dialog.querySelector('#task-relay-error-box');
+    const errMsg = dialog.querySelector('#task-relay-error-msg');
 
-          // Record in Student Ledger & Keychain
-          await recordSuccess(submission.id, envelopeText, submission.submitted_at);
-
-          dialog.hide();
-          state.submittedReceipt = submission;
-          state.screen = 'receipt';
-          renderReceipt();
-        } catch (err) {
-          console.error(err);
-          toast.error('Relay submission failed: ' + (err.message || String(err)));
-        } finally {
-          relayBtn.loading = false;
+    const doRelaySubmit = async () => {
+      if (!relayBtn) return;
+      relayBtn.loading = true;
+      if (errBox) errBox.classList.add('hidden');
+      try {
+        const { submission, envelopeText } = await getEnvelope();
+        const transport = new RelayTransport({ baseUrl: payload.relay.base_url });
+        const res = await transport.submitToDrop(payload.relay.drop_id, envelopeText, { dropSecret: payload.relay.drop_secret });
+        if (!res || !res.receiptId) {
+          throw new Error('Relay server did not return a valid receipt');
         }
-      });
+        if (res.receiptId) {
+          submission.id = res.receiptId;
+        }
+
+        HandinState.set('task', payload.task_id, state.student.id, payload.publish_version, {
+          envelope_text: envelopeText,
+          submitted_at: submission.submitted_at,
+          status: 'sent_relay',
+          relay_receipt: submission.id,
+          relay_received_at: res.receivedAt || Date.now()
+        });
+
+        // Record in Student Ledger & Keychain
+        await recordSuccess(submission.id, envelopeText, submission.submitted_at, `Handed in (server receipt ${submission.id})`);
+
+        // Clear local task draft
+        safeStorage.remove(draftKey());
+
+        dialog.hide();
+        state.submittedReceipt = submission;
+        state.screen = 'receipt';
+        renderReceipt('sent_relay');
+      } catch (err) {
+        console.error(err);
+        const mapped = describeRelayError(err);
+        toast.danger('Relay submission failed: ' + mapped);
+        if (errBox && errMsg) {
+          errMsg.textContent = mapped;
+          errBox.classList.remove('hidden');
+        }
+      } finally {
+        relayBtn.loading = false;
+      }
+    };
+
+    if (relayBtn) {
+      relayBtn.addEventListener('click', doRelaySubmit);
+    }
+    if (relayRetryBtn) {
+      relayRetryBtn.addEventListener('click', doRelaySubmit);
     }
 
     const fileBtn = dialog.querySelector('#btn-submit-file');
     fileBtn.addEventListener('click', async () => {
       fileBtn.loading = true;
       try {
-        const submissionContent = await getPreparedContent(true);
-        const { submission, envelopeText } = await createTaskSubmission(
-          payload,
-          { id: state.student.id, name: state.student.name, code: state.student.code },
-          submissionContent
-        );
+        const { submission, envelopeText } = await getEnvelope();
 
         const filename = `${state.student.id || 'student'}_${(payload.title || 'Assignment').replace(/[^a-z0-9_-]/gi, '_')}.kbsub`;
         const blob = new Blob([envelopeText], { type: 'text/plain' });
@@ -1202,15 +1307,23 @@ export async function renderTaskTake(params = {}, router = null, container = nul
         a.click();
         URL.revokeObjectURL(a.href);
 
-        await recordSuccess(submission.id, envelopeText, submission.submitted_at);
+        const cur = HandinState.get('task', payload.task_id, state.student.id, payload.publish_version);
+        if (cur?.status !== 'sent_relay') {
+          HandinState.set('task', payload.task_id, state.student.id, payload.publish_version, {
+            envelope_text: envelopeText,
+            submitted_at: submission.submitted_at,
+            status: 'downloaded'
+          });
+          await recordSuccess(submission.id, envelopeText, submission.submitted_at, 'File saved – upload it to your teacher');
+        }
 
         dialog.hide();
         state.submittedReceipt = submission;
         state.screen = 'receipt';
-        renderReceipt();
+        renderReceipt('downloaded', filename);
       } catch (err) {
         console.error(err);
-        toast.error('File generation failed: ' + (err.message || String(err)));
+        toast.danger('File generation failed: ' + (err.message || String(err)));
       } finally {
         fileBtn.loading = false;
       }
@@ -1220,12 +1333,7 @@ export async function renderTaskTake(params = {}, router = null, container = nul
     htmlBtn.addEventListener('click', async () => {
       htmlBtn.loading = true;
       try {
-        const submissionContent = await getPreparedContent(true);
-        const { submission, envelopeText } = await createTaskSubmission(
-          payload,
-          { id: state.student.id, name: state.student.name, code: state.student.code },
-          submissionContent
-        );
+        const { submission, envelopeText } = await getEnvelope();
 
         const filename = `${state.student.id || 'student'}_${(payload.title || 'Assignment').replace(/[^a-z0-9_-]/gi, '_')}.kbsub.html`;
         downloadClickableHtmlFile({
@@ -1235,15 +1343,23 @@ export async function renderTaskTake(params = {}, router = null, container = nul
           shareUrl: ''
         }, filename);
 
-        await recordSuccess(submission.id, envelopeText, submission.submitted_at);
+        const cur = HandinState.get('task', payload.task_id, state.student.id, payload.publish_version);
+        if (cur?.status !== 'sent_relay') {
+          HandinState.set('task', payload.task_id, state.student.id, payload.publish_version, {
+            envelope_text: envelopeText,
+            submitted_at: submission.submitted_at,
+            status: 'downloaded'
+          });
+          await recordSuccess(submission.id, envelopeText, submission.submitted_at, 'File saved – upload it to your teacher');
+        }
 
         dialog.hide();
         state.submittedReceipt = submission;
         state.screen = 'receipt';
-        renderReceipt();
+        renderReceipt('downloaded', filename);
       } catch (err) {
         console.error(err);
-        toast.error('HTML generation failed: ' + (err.message || String(err)));
+        toast.danger('HTML generation failed: ' + (err.message || String(err)));
       } finally {
         htmlBtn.loading = false;
       }
@@ -1253,17 +1369,20 @@ export async function renderTaskTake(params = {}, router = null, container = nul
   // ---------------------------------------------------------------------------
   // Render Receipt Screen
   // ---------------------------------------------------------------------------
-  function renderReceipt() {
+  function renderReceipt(channel = 'sent_relay', filename = '') {
     const sub = state.submittedReceipt;
+    const isRelay = channel === 'sent_relay';
     container.innerHTML = `
       <div class="max-w-xl mx-auto space-y-6 pt-6">
         <div class="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 sm:p-8 space-y-6 text-center">
-          <div class="w-16 h-16 mx-auto rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center text-3xl">
-            <sl-icon name="check-circle-fill"></sl-icon>
+          <div class="w-16 h-16 mx-auto rounded-full ${isRelay ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'} flex items-center justify-center text-3xl">
+            <sl-icon name="${isRelay ? 'check-circle-fill' : 'file-earmark-arrow-down'}"></sl-icon>
           </div>
           <div class="space-y-1">
-            <h1 class="text-2xl font-bold text-slate-900">Work Handed In!</h1>
-            <p class="text-sm text-slate-500">${esc(payload.title)}</p>
+            <h1 class="text-2xl font-bold text-slate-900">${isRelay ? 'Work Handed In!' : 'Submission File Saved'}</h1>
+            <p class="text-sm ${isRelay ? 'text-slate-500' : 'text-amber-700 font-medium'}">
+              ${isRelay ? esc(payload.title) : `Not yet received – upload <code class="bg-amber-100 px-1 py-0.5 rounded font-mono">${esc(filename || 'your file')}</code> to your teacher (LMS/email)`}
+            </p>
           </div>
 
           <div class="p-4 bg-slate-50 rounded-xl border border-slate-200 text-left space-y-2 text-xs font-mono">
@@ -1272,14 +1391,25 @@ export async function renderTaskTake(params = {}, router = null, container = nul
               <strong class="text-slate-800">${esc(state.student.name)} (${esc(state.student.id)})</strong>
             </div>
             <div class="flex justify-between">
-              <span class="text-slate-500">Receipt ID:</span>
-              <strong class="text-slate-800">${esc(sub?.id || 'SUB-OK')}</strong>
+              <span class="text-slate-500">${isRelay ? 'Receipt ID:' : 'Submission ID:'}</span>
+              <strong class="text-slate-800">${esc(sub?.id || 'SUB-LOCAL')}</strong>
             </div>
             <div class="flex justify-between">
               <span class="text-slate-500">Submitted at:</span>
               <span class="text-slate-700">${esc(new Date(sub?.submitted_at || Date.now()).toLocaleString())}</span>
             </div>
           </div>
+
+          ${!isRelay ? `
+            <div class="text-left bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-2 text-xs text-amber-900">
+              <div class="font-semibold flex items-center gap-1.5">
+                <sl-icon name="info-circle"></sl-icon> Next Step: Hand in to your teacher
+              </div>
+              <p class="text-[11px] leading-relaxed">
+                Your file is saved on this device. To complete your submission, upload <strong>${esc(filename || 'the downloaded file')}</strong> to your class LMS (Canvas, Google Classroom, Teams) or email it directly to your teacher.
+              </p>
+            </div>
+          ` : ''}
 
           <div class="flex justify-center gap-3 pt-2">
             <sl-button variant="primary" href="#/student/gradebook">

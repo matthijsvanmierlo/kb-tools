@@ -4,6 +4,7 @@ import { toast } from '../../utils/toast.js';
 import { GradebookBridge } from '../gradebook/bridge.js';
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { RelayTransport, getTransport } from '../../core/transport.js';
+import { pullDrop } from '../../core/drop-pull.js';
 import { evaluateTaskSubmission, IDENTITY_LABELS } from './pipeline.js';
 import { renderTaskReview } from './review.js';
 import { FeedbackCapsule } from '../../core/feedback-capsule.js';
@@ -41,22 +42,41 @@ export async function recordTaskSubmission(submission) {
     String(s.student_id).toUpperCase() === String(submission.student_id).toUpperCase()
   );
 
+  // De-duplicate: skip if a row already exists with same student_id and submitted_at
+  const subTime = new Date(submission.submitted_at || 0).getTime();
+  const existingDup = studentSubs.find(s => {
+    const sTime = new Date(s.submitted_at || 0).getTime();
+    return sTime === subTime;
+  });
+  if (existingDup) {
+    return { ...existingDup, duplicate: true };
+  }
+
   // Check if student resubmitted after teacher returned feedback
   const priorReturned = studentSubs.find(s => s.returned_at);
   if (priorReturned) {
     submission.resubmitted_after_feedback = true;
   }
 
-  // Mark all older submissions as is_latest = false
+  // Decide is_latest by newest submitted_at, NOT by import order.
+  // Never mark a graded row (reviewed_at or grade or score) not-latest when incoming row is older.
+  let isLatest = true;
   for (const s of studentSubs) {
-    if (s.id !== submission.id && s.is_latest !== false) {
-      s.is_latest = false;
-      s.updated_at = new Date().toISOString();
-      await storage.table('task_submissions').put(s);
+    const sTime = new Date(s.submitted_at || 0).getTime();
+    if (sTime > subTime) {
+      // Existing row is newer than incoming row
+      isLatest = false;
+    } else {
+      // Existing row is older than incoming row
+      if (s.is_latest !== false) {
+        s.is_latest = false;
+        s.updated_at = new Date().toISOString();
+        await storage.table('task_submissions').put(s);
+      }
     }
   }
 
-  submission.is_latest = true;
+  submission.is_latest = isLatest;
   submission.updated_at = new Date().toISOString();
   await storage.table('task_submissions').put(submission);
   return submission;
@@ -182,13 +202,14 @@ export async function syncTaskSubmissionsToGradebook({ task, submissions = [], c
  * Parse and evaluate one or more submission envelopes from a pasted string or array of strings.
  */
 export async function importTaskSubmissions({ text, task, teacherPrivateKey, roster = [] }) {
-  if (!text) return { imported: 0, failed: 0, errors: [] };
+  if (!text) return { imported: 0, duplicates: 0, failed: 0, errors: [] };
 
   const trimmed = String(text || '').trim();
   const codes = trimmed.match(/KBSUB1\.[A-Za-z0-9+/=_-]+/g);
   const lines = codes && codes.length ? codes : trimmed.split('\n').map(s => s.trim()).filter(Boolean);
 
   let imported = 0;
+  let duplicates = 0;
   let failed = 0;
   const errors = [];
 
@@ -200,15 +221,19 @@ export async function importTaskSubmissions({ text, task, teacherPrivateKey, ros
         task,
         roster
       });
-      await recordTaskSubmission(sub);
-      imported++;
+      const rec = await recordTaskSubmission(sub);
+      if (rec?.duplicate) {
+        duplicates++;
+      } else {
+        imported++;
+      }
     } catch (err) {
       failed++;
       errors.push(err.message || String(err));
     }
   }
 
-  return { imported, failed, errors };
+  return { imported, duplicates, failed, errors };
 }
 
 /**
@@ -594,6 +619,12 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
     a.download = `kennisboost-${task.id}-feedback.kbclasspack`;
     a.click();
     URL.revokeObjectURL(url);
+    const now = new Date().toISOString();
+    for (const s of reviewedSubs) {
+      s.returned_at = now;
+      await storage.table('task_submissions').put(s);
+    }
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('kb-submissions-changed'));
     toast.success(`Exported feedback capsule for ${items.length} student(s) (.kbclasspack)!`);
   });
 
@@ -647,6 +678,15 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
       items
     });
 
+    if (res.published > 0) {
+      const now = new Date().toISOString();
+      for (const s of reviewedSubs) {
+        s.returned_at = now;
+        await storage.table('task_submissions').put(s);
+      }
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('kb-submissions-changed'));
+    }
+
     toast.success(`Published ${res.published} feedback drop(s) to relay! (${res.failed} failed)`);
   });
 
@@ -676,40 +716,30 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
           throw new Error('No drop ID found for this assignment. Re-publish the assignment to establish a drop box.');
         }
 
-        const res = await transport.listDrop(dropId, { since: task.publish?.relay?.last_pulled_at });
-        const items = res?.items || [];
-        let imported = 0;
-        let lastSuccessReceivedAt = task.publish?.relay?.last_pulled_at || null;
-
-        for (const item of items) {
-          try {
+        const pullRes = await pullDrop({
+          transport,
+          dropId,
+          dropHistory: task.publish?.relay_history || [],
+          onItem: async (item) => {
             const rawText = typeof item === 'string' ? item : (item.text || item.payload || '');
-            if (!rawText) continue;
+            if (!rawText) return;
             const sub = await evaluateTaskSubmission({
               text: rawText,
               teacherPrivateKey: keys.privateJwk,
               task,
               roster
             });
-            await recordTaskSubmission(sub);
-            imported++;
-            if (item.received_at && (!lastSuccessReceivedAt || item.received_at > lastSuccessReceivedAt)) {
-              lastSuccessReceivedAt = item.received_at;
-            }
-          } catch (itemErr) {
-            console.warn('[task-submissions] Failed to evaluate submission item:', itemErr);
-            break;
+            return await recordTaskSubmission(sub);
           }
-        }
+        });
 
-        if (task.publish?.relay && lastSuccessReceivedAt) {
-          task.publish.relay.last_pulled_at = lastSuccessReceivedAt;
-          await storage.table('tasks').put(task);
-        }
-
-        if (imported > 0) {
-          toast.success(`Pulled ${imported} new submission(s) from server!`);
+        if (pullRes.imported > 0) {
+          toast.success(`Pulled ${pullRes.imported} new submission(s) from server!`);
           await renderTaskSubmissions(params, router, container);
+        } else if (pullRes.duplicates > 0) {
+          toast.info(`Server checked: ${pullRes.duplicates} duplicate submission(s) skipped.`);
+        } else if (pullRes.failures.length > 0) {
+          toast.warning(`Server checked: ${pullRes.failures.length} submission(s) could not be read.`);
         } else {
           toast.info('No new submissions found on the server.');
         }

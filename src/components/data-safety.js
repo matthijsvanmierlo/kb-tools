@@ -53,8 +53,25 @@ export function computeDataSafety(s, now = Date.now()) {
   }
 
   if (s.sync.configured) {
-    add('sync', s.sync.state !== 'error', 'attention', s.sync.state === 'error' ? 'Sync between devices has a problem' : 'Devices in sync',
-      s.sync.state === 'error' ? s.sync.error : (s.sync.lastSyncAt ? `Last sync ${new Date(s.sync.lastSyncAt).toLocaleString()}.` : 'Waiting for the first sync.'),
+    const problems = Array.isArray(s.sync.problems) ? s.sync.problems : [];
+    const hasProblems = problems.length > 0;
+    const isError = s.sync.state === 'error' || hasProblems;
+    let problemMsg = s.sync.error;
+    if (hasProblems) {
+      const descriptions = {
+        gap: 'Sync sequence skipped',
+        quarantine: 'Unrecognized data quarantined',
+        oversize: 'One record too large to sync',
+        auth: 'Authentication failed for sync',
+        quota: 'Storage quota exceeded during sync'
+      };
+      problemMsg = problems.map(p => {
+        const k = typeof p === 'string' ? p : p.kind;
+        return descriptions[k] || p.message || k;
+      }).join('; ');
+    }
+    add('sync', !isError, 'attention', isError ? 'Sync between devices has a problem' : 'Devices in sync',
+      isError ? problemMsg : (s.sync.lastSyncAt ? `Last sync ${new Date(s.sync.lastSyncAt).toLocaleString()}.` : 'Waiting for the first sync.'),
       { id: 'devices', label: 'Devices & sharing' });
   }
 

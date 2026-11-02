@@ -1218,7 +1218,10 @@ export function createRelayFetchHandler(options = {}) {
         const since = url.searchParams.get('since') || undefined;
         const after = url.searchParams.get('after') || undefined;
         const limit = parseInt(url.searchParams.get('limit') || '100', 10);
-        const rawItems = await db.submissions.list(dropId, { since, after, limit });
+        const listResult = await db.submissions.list(dropId, { since, after, limit });
+        const rawItems = Array.isArray(listResult) ? listResult : (listResult.items || []);
+        const next_after = listResult.next_after || null;
+        const more = !!listResult.more;
 
         const items = [];
         for (const item of rawItems) {
@@ -1236,7 +1239,7 @@ export function createRelayFetchHandler(options = {}) {
           });
         }
 
-        return json(200, { items });
+        return json(200, { items, next_after, more });
       }
 
       // GET /drops/:dropId/stats
@@ -1363,9 +1366,12 @@ export function createRelayFetchHandler(options = {}) {
           if (!feed) {
             return error(404, 'Course feed not found');
           }
+          if (feed.expired) {
+            return error(410, 'Course feed expired');
+          }
 
           const ifNoneMatch = request.headers.get('if-none-match');
-          if (ifNoneMatch && (ifNoneMatch === feed.etag || ifNoneMatch === `"${feed.etag}"`)) {
+          if (feed.etag && ifNoneMatch && (ifNoneMatch === feed.etag || ifNoneMatch === `"${feed.etag}"`)) {
             return new Response(null, {
               status: 304,
               headers: {
@@ -1375,12 +1381,17 @@ export function createRelayFetchHandler(options = {}) {
             });
           }
 
+          const responseHeaders = {};
+          if (feed.etag) {
+            responseHeaders['ETag'] = `"${feed.etag}"`;
+          }
+
           return json(200, {
             course_id: feed.courseId,
             ciphertext: feed.ciphertext,
             etag: feed.etag,
             updated_at: feed.updatedAt
-          }, { 'ETag': `"${feed.etag}"` });
+          }, responseHeaders);
         }
 
         // DELETE /feed/:courseId

@@ -20,7 +20,7 @@ export async function renderHomeView(params, r, container) {
   if (!container) return;
 
   // 1. Gather live storage data
-  const [courses, students, decks, timelines, videos, assignments, submissions, tasks] = await Promise.all([
+  const [courses, students, decks, timelines, videos, assignments, submissions, tasks, taskSubmissions] = await Promise.all([
     storage.table('gradebook_courses').toArray().catch(() => []),
     storage.table('gradebook_students').toArray().catch(() => []),
     storage.table('flashcards').toArray().catch(() => []),
@@ -28,7 +28,8 @@ export async function renderHomeView(params, r, container) {
     storage.table('video_assessments').toArray().catch(() => []),
     storage.table('assignments').toArray().catch(() => []),
     storage.table('assignment_submissions').toArray().catch(() => []),
-    storage.table('tasks').toArray().catch(() => [])
+    storage.table('tasks').toArray().catch(() => []),
+    storage.table('task_submissions').toArray().catch(() => [])
   ]);
 
   const quota = await storage.checkStorageQuota();
@@ -45,6 +46,8 @@ export async function renderHomeView(params, r, container) {
     students,
     assignments,
     submissions,
+    tasks,
+    taskSubmissions,
     videos,
     metadata,
     quota,

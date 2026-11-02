@@ -166,15 +166,23 @@ export class ReplicationManager {
   // Sync rounds
   // ---------------------------------------------------------------------------
 
+  /** Clear quarantined items and retry sync */
+  async clearProblems() {
+    try {
+      await this.store.table('repl_quarantine').clear();
+    } catch (_) {}
+    return this.syncNow();
+  }
+
   /** Pull, then push (so local edits not yet sent count as conflicts), then snapshot/prune */
-  async syncNow({ forceSnapshot = false } = {}) {
+  async syncNow({ forceSnapshot = false, pushOnly = false } = {}) {
     if (this._running) return this._running;
     this._running = (async () => {
       const { engines, problems } = await this.engines();
       if (!engines.length && !problems.length) {
         // Nothing to sync to: the outbox would only grow
         await this.store.outbox.pruneThrough(await this.store.outbox.latestSeq());
-        this._setStatus({ state: 'off', error: null, channels: [] });
+        this._setStatus({ state: 'off', error: null, channels: [], problems: [] });
         return this.status;
       }
       this._setStatus({ state: 'syncing' });
@@ -193,18 +201,22 @@ export class ReplicationManager {
         let pullErr = null;
         let pushErr = null;
 
-        // Decouple pull from push: run push even if pull throws
-        try {
-          const pulled = await engine.pull();
-          applied += pulled.applied;
-          pullOk = true;
-          if (typeof engine.channel.ackVector === 'function') {
-            const vec = await engine.vector();
-            await engine.channel.ackVector(vec);
+        // Decouple pull from push: run push even if pull throws (skip pull if pushOnly)
+        if (!pushOnly) {
+          try {
+            const pulled = await engine.pull();
+            applied += pulled.applied;
+            pullOk = true;
+            if (typeof engine.channel.ackVector === 'function') {
+              const vec = await engine.vector();
+              await engine.channel.ackVector(vec);
+            }
+          } catch (err) {
+            pullErr = err;
+            console.warn(`[sync pull] ${name}:`, err);
           }
-        } catch (err) {
-          pullErr = err;
-          console.warn(`[sync pull] ${name}:`, err);
+        } else {
+          pullOk = true;
         }
 
         try {
@@ -243,14 +255,30 @@ export class ReplicationManager {
         }
       }
 
-      // Outbox pruning: prune based on the minimum cursor across channels that pushed
-      const pushedEngines = engines.filter(({ name, engine }) => {
-        const ch = channels.find(c => c.channelId === engine.channelId || c.name === name);
-        return ch ? ch.pushOk : false;
-      });
-      if (pushedEngines.length > 0) {
-        const cursors = await Promise.all(pushedEngines.map(({ engine }) => engine.pushedThrough()));
-        await this.store.outbox.pruneThrough(Math.min(...cursors));
+      // Outbox pruning: prune based on the minimum cursor across ALL active engines.
+      // If any channel has not pushed (cursor <= 0), do not prune.
+      if (engines.length > 0) {
+        const cursors = await Promise.all(engines.map(({ engine }) => engine.pushedThrough()));
+        const minCursor = Math.min(...cursors);
+        if (minCursor > 0 && Number.isFinite(minCursor) && !cursors.some(c => !c || c <= 0)) {
+          await this.store.outbox.pruneThrough(minCursor);
+        }
+      }
+
+      // Collect problems across engines and channels
+      const allProblems = [];
+      for (const p of problems) allProblems.push({ kind: p.error?.code || 'error', message: p.error?.message, channel: p.name });
+      for (const { name, engine } of engines) {
+        if (engine.problems && engine.problems.length) {
+          for (const pr of engine.problems) {
+            allProblems.push({ kind: pr.kind, message: pr.message, channel: name });
+          }
+        }
+      }
+      for (const ch of channels) {
+        if (!ch.ok && !ch.skipped) {
+          allProblems.push({ kind: ch.code || 'channel_error', message: ch.error, channel: ch.name });
+        }
       }
 
       const conflicts = ((await this.store.getMetadata(CONFLICTS_METADATA)) || []).length;
@@ -260,7 +288,8 @@ export class ReplicationManager {
         error: failed ? failed.error : null,
         lastSyncAt: channels.some(c => c.ok) ? new Date().toISOString() : this.status.lastSyncAt,
         conflicts,
-        channels
+        channels,
+        problems: allProblems
       });
       if (applied && typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('kb-remote-changes', { detail: { applied } }));
       return this.status;
@@ -277,24 +306,52 @@ export class ReplicationManager {
     if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('kb-replication-status', { detail: this.status }));
   }
 
-  /** Background sync: every minute while visible, and shortly after local edits */
+  /** Background sync: every minute while visible, flush on leave, and shortly after local edits */
   start() {
     if (this._timer || typeof window === 'undefined') return;
     const tick = () => {
       if (document.visibilityState === 'visible') this.syncNow().catch(() => {});
     };
+    this._flushOnLeave = () => {
+      this.syncNow({ pushOnly: true }).catch(() => {});
+    };
+    this._onVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        this._flushOnLeave();
+      } else {
+        tick();
+      }
+    };
+    this._onOnline = () => {
+      this._backoffs.clear();
+      this.syncNow().catch(() => {});
+    };
+
     this._timer = setInterval(tick, 60 * 1000);
     this.store.onMutation((change) => {
       if (change?.tableName === 'outbox' || change?.tableName === 'app_metadata') return;
       clearTimeout(this._debounce);
       this._debounce = setTimeout(tick, 15 * 1000);
     });
-    document.addEventListener('visibilitychange', tick);
-    window.addEventListener('online', () => {
-      this._backoffs.clear();
-      this.syncNow().catch(() => {});
-    });
+
+    document.addEventListener('visibilitychange', this._onVisibilityChange);
+    window.addEventListener('pagehide', this._flushOnLeave);
+    window.addEventListener('online', this._onOnline);
     setTimeout(tick, 3000);
+  }
+
+  stop() {
+    if (this._timer) {
+      clearInterval(this._timer);
+      this._timer = null;
+    }
+    clearTimeout(this._debounce);
+    if (this._flushOnLeave) {
+      window.removeEventListener('pagehide', this._flushOnLeave);
+      document.removeEventListener('visibilitychange', this._onVisibilityChange);
+      window.removeEventListener('online', this._onOnline);
+      this._flushOnLeave = null;
+    }
   }
 
   // ---------------------------------------------------------------------------

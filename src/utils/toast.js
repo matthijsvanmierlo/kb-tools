@@ -80,6 +80,10 @@ export class ToastNotifier {
     return this.notify(msg, { variant: 'danger', icon: 'exclamation-octagon', duration });
   }
 
+  static error(msg, duration = 8000) {
+    return this.danger(msg, duration);
+  }
+
   static info(msg, duration = 3500) {
     return this.notify(msg, { variant: 'primary', icon: 'info-circle', duration });
   }
@@ -144,4 +148,5 @@ export class ToastNotifier {
 }
 
 export const toast = ToastNotifier;
+export const Toast = ToastNotifier;
 export default toast;

@@ -129,7 +129,10 @@ export async function renderStudentGradebookView(params, router, container) {
                     return `
                       <tr class="hover:bg-slate-50/80 cursor-pointer transition-colors" data-open-detail="${esc(it.id)}" tabindex="0">
                         <td class="px-5 py-4">
-                          <div class="font-semibold text-slate-900">${esc(it.title)}</div>
+                          <div class="flex items-center gap-2">
+                            <div class="font-semibold text-slate-900">${esc(it.title)}</div>
+                            ${it.feedback_unseen ? `<span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-100 text-emerald-800 border border-emerald-300">New Feedback</span>` : ''}
+                          </div>
                           ${it.overall_feedback ? `<div class="text-xs text-slate-500 line-clamp-1 mt-0.5"><sl-icon name="chat-square-text"></sl-icon> “${esc(it.overall_feedback)}”</div>` : ''}
                         </td>
                         <td class="px-5 py-4 hidden sm:table-cell">
@@ -145,7 +148,11 @@ export async function renderStudentGradebookView(params, router, container) {
                           ` : '<span class="text-slate-400">Awaiting grade</span>'}
                         </td>
                         <td class="px-5 py-4 text-center">
-                          ${(it.item_type === 'assignment_feedback' || it.item_type === 'task_feedback') ? `
+                          ${it.status ? `
+                            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium ${it.status.startsWith('Handed in') ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : (it.status.startsWith('File saved') ? 'bg-amber-50 text-amber-700 border border-amber-200' : 'bg-slate-100 text-slate-700 border border-slate-200')}">
+                              <sl-icon name="${it.status.startsWith('Handed in') ? 'check2-circle' : (it.status.startsWith('File saved') ? 'file-earmark-arrow-down' : 'clock')}"></sl-icon> ${esc(it.status)}
+                            </span>
+                          ` : ((it.item_type === 'assignment_feedback' || it.item_type === 'task_feedback') ? `
                             <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200">
                               <sl-icon name="check2-circle"></sl-icon> Feedback Returned
                             </span>
@@ -153,7 +160,7 @@ export async function renderStudentGradebookView(params, router, container) {
                             <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200">
                               <sl-icon name="clock"></sl-icon> Submitted
                             </span>
-                          `}
+                          `)}
                         </td>
                         <td class="px-5 py-4 text-right text-xs text-slate-400 tabular-nums hidden md:table-cell">
                           ${esc(dateStr)}
@@ -212,6 +219,10 @@ export async function renderStudentGradebookView(params, router, container) {
   }
 
   function openDetailDrawer(item) {
+    if (item.feedback_unseen) {
+      item.feedback_unseen = false;
+      StudentLedger.markFeedbackSeen(item.assignment_id || item.id).catch(() => {});
+    }
     const existing = document.getElementById('kb-student-feedback-drawer');
     if (existing) existing.remove();
 

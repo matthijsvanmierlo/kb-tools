@@ -36,7 +36,7 @@ export function syncAssignmentCourseId(assignment, courseId) {
 const esc = (v) => Sanitizer.escapeHTML(String(v ?? ''));
 const shortId = () => generateUUID().slice(0, 8);
 
-export async function renderEditor(assignment, router, container) {
+export async function renderEditor(assignment, router, container, params = {}) {
   const a = assignment;
   const currentCourseId = resolveAssignmentCourseId(a);
   syncAssignmentCourseId(a, currentCourseId);

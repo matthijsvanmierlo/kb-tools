@@ -150,6 +150,7 @@ CREATE INDEX IF NOT EXISTS idx_drafts_updated ON drafts(updated_at);
 CREATE INDEX IF NOT EXISTS idx_payloads_expires ON payloads(expires_at);
 CREATE INDEX IF NOT EXISTS idx_drops_expires ON drops(expires_at);
 CREATE INDEX IF NOT EXISTS idx_submissions_drop ON submissions(drop_id, received_at);
+CREATE INDEX IF NOT EXISTS idx_submissions_drop_keyset ON submissions(drop_id, received_at, id);
 CREATE INDEX IF NOT EXISTS idx_course_feeds_updated ON course_feeds(updated_at);
 CREATE INDEX IF NOT EXISTS idx_course_feeds_expires ON course_feeds(expires_at);
 CREATE INDEX IF NOT EXISTS idx_drop_media_drop ON drop_media(drop_id);

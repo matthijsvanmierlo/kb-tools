@@ -60,11 +60,12 @@ export async function buildCourseFeed(courseId, opts = {}) {
         if (kind === 'assignment') {
           const rawAsg = await storage.table('assignments').get(sourceId).catch(() => null);
           if (rawAsg) {
+            const isPub = Boolean(rawAsg.publish?.published_at || rawAsg.publish?.version || rawAsg.published === true);
+            if (!isPub) return null;
             if (!rawAsg.publish) {
               rawAsg.publish = { version: 1, salt: 'asg-salt-' + rawAsg.id.slice(0, 8), published_at: new Date().toISOString() };
-              await storage.table('assignments').put(rawAsg).catch(() => {});
             }
-            const asgSalt = rawAsg.publish?.salt || 'course-salt';
+            const asgSalt = rawAsg.publish.salt || 'course-salt';
             const asgRosterChecks = rosterWithCode.length ? await SubmissionCrypto.buildRosterChecks(sourceId, rosterWithCode) : null;
             const asgRosterCards = rosterWithCode.length ? await SubmissionCrypto.buildRosterCards(sourceId, rosterWithCode) : null;
             itemPayload = await buildStudentPayload(rawAsg, {
@@ -79,11 +80,12 @@ export async function buildCourseFeed(courseId, opts = {}) {
         } else if (kind === 'task') {
           const rawTask = await storage.table('tasks').get(sourceId).catch(() => null);
           if (rawTask) {
+            const isPub = Boolean(rawTask.publish?.published_at || rawTask.publish?.version || rawTask.published === true);
+            if (!isPub) return null;
             if (!rawTask.publish) {
               rawTask.publish = { version: 1, salt: 'task-salt-' + rawTask.id.slice(0, 8), published_at: new Date().toISOString() };
-              await storage.table('tasks').put(rawTask).catch(() => {});
             }
-            const taskSalt = rawTask.publish?.salt || 'course-salt';
+            const taskSalt = rawTask.publish.salt || 'course-salt';
             let taskRosterChecks = null;
             let taskRosterCards = null;
             if (rosterWithCode.length > 0) {
@@ -92,6 +94,7 @@ export async function buildCourseFeed(courseId, opts = {}) {
             }
             itemPayload = await buildStudentTaskPayload(rawTask, {
               teacherKeys: keys,
+              salt: taskSalt,
               rosterChecks: taskRosterChecks,
               rosterCards: taskRosterCards,
               courseMeta: { id: course.id, course_id: course.id, name: course.name, course_name: course.name, section: course.section, access_code: course.access_code },
@@ -164,7 +167,7 @@ export async function buildCourseFeed(courseId, opts = {}) {
       created_at: u.created_at,
       updated_at: u.updated_at
     })).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
-    items: enrichedItems.sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
+    items: enrichedItems.filter(Boolean).sort((a, b) => (a.order ?? 0) - (b.order ?? 0)),
     published_at: new Date().toISOString(),
     revision: revisionHash
   };

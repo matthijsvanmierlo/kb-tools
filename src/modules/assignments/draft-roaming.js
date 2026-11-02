@@ -98,12 +98,16 @@ export class DraftRoamer {
   }
 
   /** The newest saved draft, or null (none, unreadable, or the work was already handed in) */
-  async load() {
+  async load({ includeSubmitted = false } = {}) {
     const secrets = await this._getSecrets();
     const row = await this.transport.getDraft(this.dropId, secrets.id, this.dropOpts);
     if (!row) return null;
     const draft = await openDraft(secrets, row.ciphertext);
-    return draft && !draft.submitted ? draft : null;
+    if (!draft) return null;
+    if (draft.submitted) {
+      return includeSubmitted ? { submitted: true, submitted_at: draft.submitted_at || null } : null;
+    }
+    return draft;
   }
 
   schedule(draft) {

@@ -11,6 +11,9 @@ import { QRCode } from '../../core/qrcode.js';
 import { GradebookBridge } from '../gradebook/bridge.js';
 import { router } from '../../router.js';
 import '../../components/rubric-picker.js';
+import { publishAssignment } from '../assignments/publish.js';
+import { publishTask } from '../tasks/publish.js';
+import { getRosterStatus } from '../../core/publish-core.js';
 
 const esc = (v) => Sanitizer.escapeHTML(v ?? '');
 
@@ -502,31 +505,38 @@ export async function renderCoursePage(courseId, container) {
       } catch (_) {}
     };
 
+    const publishItemSource = async (kind, sourceId, title) => {
+      if (kind === 'assignment') {
+        const asg = allAssignments.find(a => a.id === sourceId) || await storage.table('assignments').get(sourceId).catch(() => null);
+        if (!asg) return false;
+        if (!asg.questions || !asg.questions.length) {
+          toast.warning(`Cannot publish "${title}": Assessment has no questions.`);
+          return false;
+        }
+        const roster = await getRosterStatus(asg);
+        await publishAssignment(asg, roster);
+        return true;
+      } else if (kind === 'task') {
+        const t = allTasks.find(x => x.id === sourceId) || await storage.table('tasks').get(sourceId).catch(() => null);
+        if (!t) return false;
+        const hasTypes = Object.values(t.submission_types || {}).some(st => st?.enabled);
+        if (!hasTypes) {
+          toast.warning(`Cannot publish "${title}": Assignment has no submission types enabled.`);
+          return false;
+        }
+        const roster = await getRosterStatus(t);
+        await publishTask(t, roster);
+        return true;
+      }
+      return true;
+    };
+
     const publishSingleItem = async (itemId, kind, sourceId) => {
       const it = items.find(i => i.id === itemId);
       if (!it) return;
 
-      if (kind === 'assignment') {
-        const asg = allAssignments.find(a => a.id === sourceId) || await storage.table('assignments').get(sourceId).catch(() => null);
-        if (asg) {
-          asg.publish = {
-            version: (asg.publish?.version || 0) + 1,
-            salt: asg.publish?.salt || ('asg-salt-' + asg.id.slice(0, 8)),
-            published_at: new Date().toISOString()
-          };
-          await storage.table('assignments').put(asg);
-        }
-      } else if (kind === 'task') {
-        const t = allTasks.find(x => x.id === sourceId) || await storage.table('tasks').get(sourceId).catch(() => null);
-        if (t) {
-          t.publish = {
-            version: (t.publish?.version || 0) + 1,
-            salt: t.publish?.salt || ('task-salt-' + t.id.slice(0, 8)),
-            published_at: new Date().toISOString()
-          };
-          await storage.table('tasks').put(t);
-        }
-      }
+      const ok = await publishItemSource(kind, sourceId, it.title);
+      if (!ok) return;
 
       it.published = true;
       it.hidden = false;
@@ -553,39 +563,23 @@ export async function renderCoursePage(courseId, container) {
     };
 
     const publishUnitItems = async (unitId) => {
-      const unitItems = items.filter(it => it.unit_id === unitId);
+      const unitItems = items.filter(it => it.unit_id === unitId && !it.hidden && !it.published);
+      let count = 0;
       for (const it of unitItems) {
         const kind = it.kind || it.type || 'assignment';
         const sourceId = it.source_id || it.id;
-        if (kind === 'assignment') {
-          const asg = allAssignments.find(a => a.id === sourceId) || await storage.table('assignments').get(sourceId).catch(() => null);
-          if (asg) {
-            asg.publish = {
-              version: (asg.publish?.version || 0) + 1,
-              salt: asg.publish?.salt || ('asg-salt-' + asg.id.slice(0, 8)),
-              published_at: new Date().toISOString()
-            };
-            await storage.table('assignments').put(asg);
-          }
-        } else if (kind === 'task') {
-          const t = allTasks.find(x => x.id === sourceId) || await storage.table('tasks').get(sourceId).catch(() => null);
-          if (t) {
-            t.publish = {
-              version: (t.publish?.version || 0) + 1,
-              salt: t.publish?.salt || ('task-salt-' + t.id.slice(0, 8)),
-              published_at: new Date().toISOString()
-            };
-            await storage.table('tasks').put(t);
-          }
+        const ok = await publishItemSource(kind, sourceId, it.title);
+        if (ok) {
+          it.published = true;
+          it.hidden = false;
+          it.updated_at = new Date().toISOString();
+          await storage.table('course_items').put(it);
+          count++;
         }
-        it.published = true;
-        it.hidden = false;
-        it.updated_at = new Date().toISOString();
-        await storage.table('course_items').put(it);
       }
       await markCourseFeedDirty(courseId);
       await syncFeedToRelayIfConfigured();
-      toast.success(`Published all items in folder!`);
+      toast.success(`Published ${count} items in folder!`);
       render();
     };
 
@@ -604,38 +598,23 @@ export async function renderCoursePage(courseId, container) {
     };
 
     const publishAllDrafts = async () => {
-      for (const it of items) {
+      const drafts = items.filter(it => !it.hidden && !it.published);
+      let count = 0;
+      for (const it of drafts) {
         const kind = it.kind || it.type || 'assignment';
         const sourceId = it.source_id || it.id;
-        if (kind === 'assignment') {
-          const asg = allAssignments.find(a => a.id === sourceId) || await storage.table('assignments').get(sourceId).catch(() => null);
-          if (asg) {
-            asg.publish = {
-              version: (asg.publish?.version || 0) + 1,
-              salt: asg.publish?.salt || ('asg-salt-' + asg.id.slice(0, 8)),
-              published_at: new Date().toISOString()
-            };
-            await storage.table('assignments').put(asg);
-          }
-        } else if (kind === 'task') {
-          const t = allTasks.find(x => x.id === sourceId) || await storage.table('tasks').get(sourceId).catch(() => null);
-          if (t) {
-            t.publish = {
-              version: (t.publish?.version || 0) + 1,
-              salt: t.publish?.salt || ('task-salt-' + t.id.slice(0, 8)),
-              published_at: new Date().toISOString()
-            };
-            await storage.table('tasks').put(t);
-          }
+        const ok = await publishItemSource(kind, sourceId, it.title);
+        if (ok) {
+          it.published = true;
+          it.hidden = false;
+          it.updated_at = new Date().toISOString();
+          await storage.table('course_items').put(it);
+          count++;
         }
-        it.published = true;
-        it.hidden = false;
-        it.updated_at = new Date().toISOString();
-        await storage.table('course_items').put(it);
       }
       await markCourseFeedDirty(courseId);
       await syncFeedToRelayIfConfigured();
-      toast.success(`All ${items.length} items published! Students can now access them.`);
+      toast.success(`${count} draft items published! Students can now access them.`);
       render();
     };
 

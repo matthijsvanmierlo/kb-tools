@@ -3,58 +3,33 @@ import { CryptoShareEngine } from '../../core/crypto-share.js';
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { Sanitizer } from '../../core/sanitizer.js';
 import { toast } from '../../utils/toast.js';
+import { ConfirmDialog } from '../../utils/dialogs.js';
 import { buildStudentPayload, totalPoints } from './grading.js';
 export { buildStudentPayload };
 import { validateQuestion } from './question-types.js';
 import { generateUUID } from '../../utils/uuid.js';
 import { syncContentClassLink } from '../gradebook/bridge.js';
 import { downloadClickableHtmlFile } from '../../core/html-launcher.js';
-
-/**
- * Publish & Share (KB-ASSIGN-003)
- * Builds the key-free student payload, signs nothing secret into it, and produces a link/file.
- */
-
-const randomSalt = () => Array.from(crypto.getRandomValues(new Uint8Array(12))).map(b => b.toString(16).padStart(2, '0')).join('');
-
-/**
- * Roster state for the linked class: who has an access code, and the check values to publish.
- */
-export async function getRosterStatus(assignment) {
-  const courseId = assignment.gradebook?.course_id || assignment.class_id;
-  if (!courseId) return { courseId: null, course: null, students: [], withCode: [], withoutCode: [] };
-  const [course, students] = await Promise.all([
-    storage.table('gradebook_courses').get(courseId),
-    storage.table('gradebook_students').where('course_id').equals(courseId).toArray().catch(() => [])
-  ]);
-  return {
-    courseId,
-    course,
-    students,
-    withCode: students.filter(s => s.access_code),
-    withoutCode: students.filter(s => !s.access_code)
-  };
-}
-
 import { HandinInstructions } from '../../components/handin-instructions.js';
 import { LinkBuilder } from '../../core/links.js';
 import { toCSV, downloadCSV } from '../../core/csv.js';
 import { splitName, joinName } from '../../core/names.js';
 import { getTransport } from '../../core/transport.js';
 import { replication } from '../../core/replication/manager.js';
+import {
+  computeRosterHash,
+  getRosterStatus,
+  randomSalt,
+  buildRosterChecksAndCards,
+  ensureDropBox,
+  computeContentHash
+} from '../../core/publish-core.js';
 
-export async function computeRosterHash(students = []) {
-  if (!Array.isArray(students) || !students.length) return '';
-  const sorted = [...students]
-    .map(s => `${String(s.student_id || '').toUpperCase()}:${String(s.access_code || '')}`)
-    .sort()
-    .join('|');
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(sorted));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('').slice(0, 16);
-}
+export { computeRosterHash, getRosterStatus };
 
 /**
- * Bump the publish version and build the student payload.
+ * Bump the publish version if content changed and build the student payload.
+ * Reuses existing stable drop box if valid.
  * @param {object} assignment
  * @param {object} roster
  * @param {object} [opts]
@@ -68,35 +43,12 @@ export async function publishAssignment(assignment, roster, { handinEmail = '', 
   const keys = await replication.publishKeysFor(assignment.class_id);
   const rosterStudents = roster?.students || roster?.withCode || [];
   const rosterHash = await computeRosterHash(rosterStudents);
-  const next = {
-    ...assignment,
-    publish: {
-      version: (assignment.publish?.version || 0) + 1,
-      salt: randomSalt(),
-      published_at: new Date().toISOString(),
-      fingerprint: keys.fingerprint,
-      roster_hash: rosterHash
-    },
-    updated_at: new Date().toISOString()
-  };
 
-  let rosterChecks = null;
-  let rosterCards = null;
-  if (roster?.withCode?.length) {
-    if (next.settings?.require_access_code) {
-      rosterChecks = {};
-      for (const s of roster.withCode) {
-        rosterChecks[String(s.student_id).toUpperCase()] = await SubmissionCrypto.accessCodeCheck(next.id, s.student_id, s.access_code);
-      }
-    }
-    rosterCards = {};
-    for (const s of roster.withCode) {
-      const card = await SubmissionCrypto.buildRosterCard(next.id, s, s.access_code);
-      if (card?.tag) {
-        rosterCards[card.tag] = card.ct;
-      }
-    }
-  }
+  const { rosterChecks, rosterCards } = await buildRosterChecksAndCards(
+    assignment.id,
+    roster,
+    !!assignment.settings?.require_access_code
+  );
 
   const courseMeta = roster?.course ? {
     course_id: roster.course.id,
@@ -104,27 +56,58 @@ export async function publishAssignment(assignment, roster, { handinEmail = '', 
     section: roster.course.section || ''
   } : null;
 
-  const payload = await buildStudentPayload(next, { teacherKeys: keys, rosterChecks, rosterCards, courseMeta });
+  const salt = assignment.publish?.salt || randomSalt();
+
+  // Create or reuse stable drop box
+  const relayInfo = await ensureDropBox(assignment, activeTransport);
+
+  const tempNext = {
+    ...assignment,
+    publish: {
+      ...(assignment.publish || {}),
+      salt,
+      relay: relayInfo
+    }
+  };
+
+  const candidatePayload = await buildStudentPayload(tempNext, {
+    teacherKeys: keys,
+    rosterChecks,
+    rosterCards,
+    courseMeta,
+    relay: relayInfo
+  });
   if (handinEmail) {
-    payload.handin = { email: handinEmail };
+    candidatePayload.handin = { email: handinEmail };
   }
 
-  if (activeTransport?.capabilities?.collectSubmissions) {
-    try {
-      const drop = await activeTransport.createDrop({
-        assignmentId: next.id,
-        publishVersion: next.publish.version,
-        expiresAt: new Date(Date.now() + 180 * 86400000).toISOString()
-      });
-      payload.relay = { base_url: activeTransport.baseUrl, drop_id: drop.dropId, drop_secret: drop.dropSecret };
-      next.publish.relay = payload.relay;
-    } catch (e) {
-      console.warn('Could not create drop on relay:', e);
-    }
+  const contentHash = await computeContentHash(candidatePayload);
+  let version = assignment.publish?.version || 1;
+  if (!assignment.publish?.content_hash) {
+    version = assignment.publish?.version || 1;
+  } else if (assignment.publish.content_hash !== contentHash) {
+    version = (assignment.publish?.version || 0) + 1;
   }
+
+  const next = {
+    ...assignment,
+    publish: {
+      version,
+      salt,
+      published_at: new Date().toISOString(),
+      fingerprint: keys.fingerprint,
+      roster_hash: rosterHash,
+      relay: relayInfo,
+      relay_history: assignment.publish?.relay_history || [],
+      content_hash: contentHash
+    },
+    updated_at: new Date().toISOString()
+  };
+
+  candidatePayload.publish_version = version;
 
   await storage.table('assignments').put(next);
-  return { assignment: next, payload, keys };
+  return { assignment: next, payload: candidatePayload, keys };
 }
 
 /**
@@ -268,7 +251,7 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
     <div slot="footer" class="flex justify-end gap-2">
       <sl-button id="btn-publish-close">Close</sl-button>
       <sl-button variant="default" id="btn-publish-go" ${qCount === 0 ? 'disabled' : ''}>
-        <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Regenerate link
+        <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> ${assignment.publish?.published_at ? 'Update link' : 'Generate link'}
       </sl-button>
     </div>
   `;
@@ -281,17 +264,49 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
   const close = () => dialog.hide();
   dialog.querySelector('#btn-publish-close').addEventListener('click', close);
 
+  const markUnsaved = () => {
+    const btnGo = dialog.querySelector('#btn-publish-go');
+    if (btnGo) {
+      btnGo.variant = 'primary';
+      btnGo.innerHTML = '<sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Unsaved changes – Update link';
+    }
+  };
+
   const emailChk = dialog.querySelector('#chk-include-email');
   const emailInput = dialog.querySelector('#input-teacher-email');
   emailChk?.addEventListener('sl-change', () => {
     if (emailInput) emailInput.disabled = !emailChk.checked;
-    generateLink(true);
+    markUnsaved();
   });
-  emailInput?.addEventListener('sl-change', () => generateLink(true));
+  emailInput?.addEventListener('sl-change', () => markUnsaved());
 
   const classSelect = dialog.querySelector('#select-publish-class');
   classSelect?.addEventListener('sl-change', async (e) => {
     const targetClassId = e.target.value || null;
+    if (!targetClassId) {
+      const cols = await storage.table('gradebook_assignments').toArray().catch(() => []);
+      const linkedCols = cols.filter(c => c.source?.type === 'assignment' && c.source?.id === assignment.id);
+      let hasGrades = false;
+      for (const col of linkedCols) {
+        const grades = await storage.table('gradebook_grades').where('assignment_id').equals(col.id).toArray().catch(() => []);
+        if (grades.length > 0) {
+          hasGrades = true;
+          break;
+        }
+      }
+      if (hasGrades) {
+        const ok = await ConfirmDialog.show({
+          title: 'Remove from Gradebook?',
+          message: 'This assignment already has grades recorded in the gradebook. Switching to Formative Practice will remove the gradebook column and grades. Do you want to proceed?',
+          confirmText: 'Proceed',
+          variant: 'danger'
+        });
+        if (!ok) {
+          classSelect.value = assignment.gradebook?.course_id || assignment.class_id || '';
+          return;
+        }
+      }
+    }
     await syncContentClassLink(assignment, 'assignments', targetClassId);
     roster = await getRosterStatus(assignment);
     const hint = dialog.querySelector('#publish-mode-hint');
@@ -302,7 +317,7 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
     }
     const btnCsv = dialog.querySelector('#btn-publish-per-student-csv');
     if (btnCsv) btnCsv.disabled = !roster.students.length;
-    await generateLink(true);
+    markUnsaved();
   });
 
   const releaseChk = dialog.querySelector('#chk-release-grade');
@@ -310,14 +325,88 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
     if (!assignment.settings) assignment.settings = {};
     assignment.settings.release_grade_immediately = releaseChk.checked;
     await storage.table('assignments').put(assignment);
-    await generateLink(true);
+    markUnsaved();
   });
 
   const shortLinkChk = dialog.querySelector('#chk-publish-short-link');
-  shortLinkChk?.addEventListener('sl-change', () => generateLink(true));
+  shortLinkChk?.addEventListener('sl-change', () => markUnsaved());
 
   const passInput = dialog.querySelector('#input-publish-passphrase');
-  passInput?.addEventListener('sl-change', () => generateLink(true));
+  passInput?.addEventListener('sl-change', () => markUnsaved());
+
+  async function showExistingLink() {
+    if (!assignment.publish?.published_at || !assignment.questions?.length) return;
+    try {
+      const keys = await replication.publishKeysFor(assignment.class_id);
+      const { rosterChecks, rosterCards } = await buildRosterChecksAndCards(
+        assignment.id,
+        roster,
+        !!assignment.settings?.require_access_code
+      );
+      const courseMeta = roster?.course ? {
+        course_id: roster.course.id,
+        course_name: roster.course.name || '',
+        section: roster.course.section || ''
+      } : null;
+      const includeEmail = emailChk?.checked;
+      const teacherEmail = emailInput?.value.trim() || '';
+      const payload = await buildStudentPayload(assignment, {
+        teacherKeys: keys,
+        rosterChecks,
+        rosterCards,
+        courseMeta,
+        relay: assignment.publish?.relay || null
+      });
+      if (includeEmail && teacherEmail) {
+        payload.handin = { email: teacherEmail };
+      }
+      const passphrase = passInput?.value || '';
+      share = await CryptoShareEngine.createSharePayload('assignment', payload, passphrase);
+      activeUrl = share.url;
+
+      if (shortLinkChk?.checked && transport?.capabilities?.hostPayload) {
+        try {
+          const wrapped = await CryptoShareEngine.wrapForHosting(share.rawFileContent);
+          const pub = await transport.publishPayload({
+            kind: 'assignment',
+            ciphertext: wrapped.ciphertext,
+            expiresAt: new Date(Date.now() + 180 * 86400000).toISOString(),
+            meta: { title: assignment.title }
+          });
+          activeUrl = LinkBuilder.hosted(pub.ref, wrapped.key);
+        } catch (_) {}
+      }
+
+      const urlInput = dialog.querySelector('#input-publish-url');
+      if (urlInput) urlInput.value = activeUrl;
+
+      const meter = dialog.querySelector('#publish-meter');
+      if (meter) {
+        meter.className = 'text-[11px] px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200';
+        meter.textContent = `${activeUrl.length} chars · link ready`;
+      }
+
+      const fp = dialog.querySelector('#publish-fingerprint');
+      if (fp) {
+        fp.innerHTML = `Encrypted for key <strong class="font-mono text-slate-700">${Sanitizer.escapeHTML(keys.fingerprint)}</strong>`;
+      }
+
+      const mount = dialog.querySelector('#publish-instructions-mount');
+      if (mount) {
+        mount.innerHTML = '';
+        mount.appendChild(HandinInstructions.render({
+          assignment,
+          link: activeUrl,
+          dueDate: assignment.settings?.due_date,
+          teacherEmail: includeEmail ? teacherEmail : ''
+        }));
+      }
+
+      dialog.querySelector('#publish-result')?.classList.remove('hidden');
+    } catch (e) {
+      console.warn('Could not show existing link:', e);
+    }
+  }
 
   dialog.querySelector('#btn-add-starter-q')?.addEventListener('click', async () => {
     assignment.questions = [{
@@ -409,6 +498,10 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
       }
 
       dialog.querySelector('#publish-result')?.classList.remove('hidden');
+      if (btnGo) {
+        btnGo.variant = 'default';
+        btnGo.innerHTML = '<sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Update link';
+      }
       if (!silent) toast.success(`Share link ready!`);
       if (typeof onPublished === 'function') onPublished(updated);
     } catch (err) {
@@ -486,8 +579,10 @@ export async function openPublishDialog(assignment, { onPublished } = {}) {
     toast.success(`Exported ${rows.length} per-student links.`);
   });
 
-  // Automatically generate link immediately if questions exist!
-  if (qCount > 0) {
+  // Show existing link if already published, otherwise generate immediately if questions exist
+  if (assignment.publish?.published_at) {
+    showExistingLink();
+  } else if (qCount > 0) {
     generateLink(true);
   }
 }

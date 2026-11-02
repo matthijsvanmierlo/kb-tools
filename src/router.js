@@ -647,13 +647,13 @@ export class Router {
       store.setState('activeVideo', payload);
       this.navigate('#/video?kiosk=1');
     } else if (type === 'student_grade_report') {
-      StudentLedger.ingestGradeReport(payload).catch(console.error);
+      await StudentLedger.ingestGradeReport(payload).catch(console.error);
       if (RoleMode.get() !== 'teacher') {
         RoleMode.set('student');
       }
       this.navigate('#/student/gradebook');
     } else if (type === 'assignment_feedback') {
-      StudentLedger.ingestAssignmentFeedback(payload).catch(console.error);
+      await StudentLedger.ingestAssignmentFeedback(payload).catch(console.error);
       if (RoleMode.get() !== 'teacher') {
         RoleMode.set('student');
       }
@@ -661,7 +661,7 @@ export class Router {
       this.navigate('#/student/gradebook');
     } else if (type === 'task_feedback') {
       if (StudentLedger.ingestTaskFeedback) {
-        StudentLedger.ingestTaskFeedback(payload).catch(console.error);
+        await StudentLedger.ingestTaskFeedback(payload).catch(console.error);
       }
       if (RoleMode.get() !== 'teacher') {
         RoleMode.set('student');
@@ -862,6 +862,17 @@ export class Router {
         const cid = res.course?.id || res.course?.course_id;
         this.navigate(cid ? `#/student/course?id=${encodeURIComponent(cid)}` : '#/student/courses');
       } else {
+        if (res.status === 'not_found') {
+          toast.danger('Course not found or link has expired. Please check with your teacher.');
+        } else if (res.status === 'untrusted_relay') {
+          toast.warning('Server relay not recognized or untrusted.');
+        } else if (res.status === 'duplicate_name') {
+          toast.info('You are already enrolled in a class with this name.');
+        } else if (res.status === 'offline') {
+          toast.info('Class saved offline. Content will load once connected to the school server.');
+        } else if (res.error) {
+          toast.danger('Failed to join class: ' + res.error);
+        }
         this.navigate('#/student/courses');
       }
     } catch (_) {

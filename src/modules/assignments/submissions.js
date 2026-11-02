@@ -2,6 +2,7 @@ import { storage } from '../../core/storage.js';
 import { Sanitizer } from '../../core/sanitizer.js';
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
 import { toast } from '../../utils/toast.js';
+import { pullDrop } from '../../core/drop-pull.js';
 import { GradebookBridge } from '../gradebook/bridge.js';
 import { evaluateSubmission, splitSubmissionText, reconcileSubmissionWithAssignment, IDENTITY_LABELS, DECRYPT_ERRORS } from './pipeline.js';
 import { finalScore, totalPoints, describeCorrectAnswer, BLANK_TOKEN } from './grading.js';
@@ -577,6 +578,7 @@ export async function renderSubmissions(assignment, router, container) {
     const studentSubs = submissions
       .filter(s => String(s.student_id).toUpperCase() === String(sub.student_id).toUpperCase())
       .sort((x, y) => (x.submitted_at || '').localeCompare(y.submitted_at || ''));
+    const priorGradedAttempt = studentSubs.find(s => s.id !== sub.id && (s.feedback || (s.manual && Object.keys(s.manual).length > 0)));
 
     const scoreLine = () => {
       const s = finalScore(a, { ...sub, manual: draft.manual });
@@ -609,6 +611,18 @@ export async function renderSubmissions(assignment, router, container) {
               </div>` : ''}
           </div>
         </div>
+
+        ${priorGradedAttempt ? `
+          <div class="p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-3 text-xs text-amber-900">
+            <div class="flex items-center gap-1.5 font-medium">
+              <sl-icon name="info-circle" class="text-amber-600 text-sm"></sl-icon>
+              <span>Previous attempt was graded</span>
+            </div>
+            <sl-button size="small" variant="default" id="review-copy-prior-grades">
+              <sl-icon slot="prefix" name="clipboard-check"></sl-icon> View / copy grades
+            </sl-button>
+          </div>
+        ` : ''}
 
         ${sub.identity === 'suggested_match' && sub.suggested_student ? `
           <div class="p-4 bg-indigo-50 border border-indigo-200 rounded-xl flex items-center justify-between gap-3 text-sm">
@@ -681,6 +695,7 @@ export async function renderSubmissions(assignment, router, container) {
           <sl-button size="small" id="review-show-feedback-qr" variant="primary"><sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Show QR</sl-button>
           <sl-button size="small" id="review-copy-feedback-link"><sl-icon slot="prefix" name="link-45deg"></sl-icon> Copy link</sl-button>
           <sl-button size="small" id="review-download-feedback-html"><sl-icon slot="prefix" name="file-earmark-code"></sl-icon> Download (.html)</sl-button>
+          <sl-button size="small" id="review-return-relay-feedback" variant="neutral"><sl-icon slot="prefix" name="hdd-network"></sl-icon> Return via server</sl-button>
         </div>
         <div class="flex items-center gap-2">
           <sl-button id="review-cancel">Cancel</sl-button>
@@ -817,9 +832,67 @@ export async function renderSubmissions(assignment, router, container) {
           studentId: sub.student_id,
           shareUrl: link.url
         }, `${cleanName}.kbfeedback.html`);
+        sub.returned_at = new Date().toISOString();
+        await storage.table('assignment_submissions').put(sub);
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('kb-submissions-changed'));
         toast.success('Downloaded feedback launcher file (.kbfeedback.html)!');
       } catch (err) {
         toast.danger('Could not download feedback file: ' + err.message);
+      }
+    });
+
+    drawer.querySelector('#review-return-relay-feedback')?.addEventListener('click', async () => {
+      try {
+        const student = roster.find(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase());
+        const accessCode = student?.access_code || sub.access_code;
+        if (!accessCode) {
+          toast.warning('Student does not have an access code on roster to encrypt feedback.');
+          return;
+        }
+        const syncConfig = (await storage.getMetadata('sync_config')) || {};
+        const relayUrl = a.publish?.relay?.relay_url || a.publish?.relay?.base_url || syncConfig.baseUrl;
+        const teacherToken = syncConfig.token || '';
+        if (!relayUrl || !teacherToken) {
+          toast.warning('No school server connection or token found. Go to Settings > Connect to a school server.');
+          return;
+        }
+
+        const score = finalScore(a, { ...sub, manual: draft.manual, feedback: draft.feedback });
+        const { FeedbackCapsule } = await import('../../core/feedback-capsule.js');
+        const res = await FeedbackCapsule.publishBatchToRelay({
+          relayUrl,
+          teacherToken,
+          assignmentId: a.id,
+          items: [{
+            studentAccessCode: accessCode,
+            feedback: {
+              assignment_id: a.id,
+              student_id: sub.student_id,
+              title: a.title,
+              score: score.earned,
+              max_points: score.possible,
+              feedback: draft.feedback,
+              manual: draft.manual,
+              reviewed_at: new Date().toISOString()
+            }
+          }]
+        });
+
+        if (res.published > 0) {
+          sub.returned_at = new Date().toISOString();
+          sub.manual = draft.manual;
+          sub.feedback = draft.feedback;
+          sub.updated_at = new Date().toISOString();
+          await storage.table('assignment_submissions').put(sub);
+          if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('kb-submissions-changed'));
+          toast.success('Feedback published to server for student!');
+          drawer.hide();
+          render();
+        } else {
+          toast.danger('Failed to return feedback to server.');
+        }
+      } catch (err) {
+        toast.danger('Could not return feedback: ' + err.message);
       }
     });
 
@@ -839,6 +912,30 @@ export async function renderSubmissions(assignment, router, container) {
       toast.success(`Linked submission to ${suggested.full_name || suggested.name}`);
       await load();
       render();
+    });
+
+    drawer.querySelector('#review-copy-prior-grades')?.addEventListener('click', () => {
+      if (!priorGradedAttempt) return;
+      if (priorGradedAttempt.feedback && !draft.feedback) {
+        draft.feedback = priorGradedAttempt.feedback;
+        const fbInput = drawer.querySelector('#review-feedback');
+        if (fbInput) fbInput.value = draft.feedback;
+      }
+      if (priorGradedAttempt.manual) {
+        draft.manual = { ...priorGradedAttempt.manual, ...(draft.manual || {}) };
+        drawer.querySelectorAll('[data-review-q]').forEach(li => {
+          const qid = li.dataset.reviewQ;
+          const pts = draft.manual[qid]?.points;
+          const fb = draft.manual[qid]?.feedback;
+          const ptsInput = li.querySelector('[data-manual-points]');
+          const fbInput = li.querySelector('[data-manual-feedback]');
+          if (ptsInput && pts !== undefined && pts !== null) ptsInput.value = pts;
+          if (fbInput && fb) fbInput.value = fb;
+        });
+        const scoreEl = drawer.querySelector('#review-score');
+        if (scoreEl) scoreEl.innerHTML = scoreLine();
+      }
+      toast.success('Copied grades and feedback from previous attempt.');
     });
 
     drawer.querySelector('#review-add-roster')?.addEventListener('click', async () => {
@@ -1299,25 +1396,30 @@ export async function renderSubmissions(assignment, router, container) {
         const dropId = a.publish?.relay?.drop_id;
         if (!dropId) throw new Error('No drop ID found on this assessment.');
 
-        const res = await transport.listDrop(dropId, { since: a.publish?.relay?.last_pulled_at });
-        const items = res?.items || [];
-        const texts = [];
-        let maxReceivedAt = a.publish?.relay?.last_pulled_at || null;
-        for (const item of items) {
-          const raw = typeof item === 'string' ? item : (item.text || item.payload || '');
-          if (raw) {
-            texts.push({ text: raw, source: 'Server Dropbox' });
-            if (item.received_at && (!maxReceivedAt || item.received_at > maxReceivedAt)) {
-              maxReceivedAt = item.received_at;
-            }
+        const keys = await SubmissionCrypto.getOrCreateTeacherKeys(storage);
+        const pullRes = await pullDrop({
+          transport,
+          dropId,
+          dropHistory: a.publish?.relay_history || [],
+          onItem: async (item) => {
+            const raw = typeof item === 'string' ? item : (item.text || item.payload || '');
+            if (!raw) return;
+            const res = await importSubmissionTexts({ assignment: a, texts: [{ text: raw, source: 'Server Dropbox' }], roster, keys });
+            if (res.duplicates) return { duplicate: true };
+            if (res.errors?.length) throw new Error(res.errors[0].message);
+            return { ok: true };
           }
-        }
-        if (texts.length) {
-          await importTexts(texts);
-          if (a.publish?.relay && maxReceivedAt) {
-            a.publish.relay.last_pulled_at = maxReceivedAt;
-            await storage.table('assignments').put(a);
-          }
+        });
+
+        await load();
+        render();
+
+        if (pullRes.imported > 0) {
+          toast.success(`Pulled ${pullRes.imported} new submission(s) from server!`);
+        } else if (pullRes.duplicates > 0) {
+          toast.info(`Server checked: ${pullRes.duplicates} duplicate submission(s) skipped.`);
+        } else if (pullRes.failures.length > 0) {
+          toast.warning(`Server checked: ${pullRes.failures.length} submission(s) could not be read.`);
         } else {
           toast.info('No new submissions found on the server.');
         }

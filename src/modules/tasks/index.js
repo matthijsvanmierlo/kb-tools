@@ -133,7 +133,7 @@ export default async function tasksModule(routeOrParams, maybeParamsOrRouter = {
         window.location.hash = `#/assignments/create?id=${task.id}`;
       }
     }
-    await renderTaskEditor(task, router || { navigate: (h) => { window.location.hash = h; } }, mount);
+    await renderTaskEditor(task, router || { navigate: (h) => { window.location.hash = h; } }, mount, params);
     return;
   }
 
