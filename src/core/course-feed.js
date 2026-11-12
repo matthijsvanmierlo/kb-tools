@@ -5,7 +5,7 @@ import { getDue } from './due-dates.js';
 import { SubmissionCrypto } from './submission-crypto.js';
 import { buildStudentPayload } from '../modules/assignments/grading.js';
 import { buildStudentTaskPayload } from '../modules/tasks/publish-core.js';
-import { normalizeAccessCode, formatAccessCode } from './access-codes.js';
+import { normalizeAccessCode, formatAccessCode, AccessCodes } from './access-codes.js';
 
 /**
  * Course Feed Builder & Decryptor (KB-COURSE-001)
@@ -360,6 +360,90 @@ export async function autoSyncCourseFeed(courseId) {
     console.warn('[course-feed] autoSyncCourseFeed failed:', err);
     return null;
   }
+}
+
+const _pendingFeedSyncTimers = new Map();
+
+/**
+ * Mark a course feed dirty and schedule a debounced background sync to the relay.
+ * @param {string} courseId
+ * @param {number} [delayMs=1200]
+ */
+export async function scheduleCourseFeedSync(courseId, delayMs = 1200) {
+  if (!courseId) return;
+  try {
+    const { markCourseFeedDirty } = await import('./course-revision.js');
+    await markCourseFeedDirty(courseId);
+  } catch (_) {}
+
+  if (_pendingFeedSyncTimers.has(courseId)) {
+    clearTimeout(_pendingFeedSyncTimers.get(courseId));
+  }
+  const timer = setTimeout(() => {
+    _pendingFeedSyncTimers.delete(courseId);
+    autoSyncCourseFeed(courseId).catch(() => {});
+  }, delayMs);
+  _pendingFeedSyncTimers.set(courseId, timer);
+}
+
+/**
+ * Rotate a class access code using 8-character generateClassCode().
+ * Publishes the course feed under the new code and optionally writes a { moved_to }
+ * forwarding stub at the old feedId so already-enrolled students migrate seamlessly.
+ * @param {string} courseId
+ * @param {{ forwardOldCode?: boolean }} [opts]
+ * @returns {Promise<{ newCode: string, formattedCode: string, oldCode: string|null, forwarded: boolean, synced: boolean }>}
+ */
+export async function rotateClassAccessCode(courseId, { forwardOldCode = true } = {}) {
+  const course = await storage.table('gradebook_courses').get(courseId);
+  if (!course) throw new Error(`Course not found: ${courseId}`);
+
+  const oldCode = course.access_code || null;
+  const newCode = AccessCodes.generateClassCode();
+  course.access_code = newCode;
+  course.updated_at = new Date().toISOString();
+  await storage.table('gradebook_courses').put(course);
+
+  let synced = false;
+  let forwarded = false;
+
+  try {
+    const { getTransport, isTeacherRelayConfigured, PublicFeedTransport } = await import('./transport.js');
+    const transport = await getTransport();
+    if (isTeacherRelayConfigured(transport)) {
+      const feedTransport = new PublicFeedTransport({ baseUrl: transport.baseUrl, token: transport.token });
+      const syncRes = await autoSyncCourseFeed(courseId);
+      synced = Boolean(syncRes?.synced);
+
+      if (oldCode && normalizeAccessCode(oldCode) !== normalizeAccessCode(newCode)) {
+        const oldFeedId = await deriveCourseFeedId(oldCode);
+        if (forwardOldCode) {
+          const stub = {
+            moved_to: newCode,
+            course_id: courseId,
+            rotated_at: new Date().toISOString()
+          };
+          const sealed = await CryptoShareEngine.createSharePayload('course_feed', stub, normalizeAccessCode(oldCode));
+          const stubCt = sealed.d || '';
+          const stubEtag = `moved-${await sha256Short(stubCt)}`;
+          await feedTransport.publishCourseFeed(oldFeedId, stubCt, stubEtag);
+          forwarded = true;
+        } else {
+          await deleteCourseFeedById(transport.baseUrl, transport.token, oldFeedId);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[course-feed] rotateClassAccessCode relay update failed:', err);
+  }
+
+  return {
+    newCode,
+    formattedCode: formatAccessCode(newCode),
+    oldCode,
+    forwarded,
+    synced
+  };
 }
 
 /**

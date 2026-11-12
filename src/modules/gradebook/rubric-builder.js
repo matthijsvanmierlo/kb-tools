@@ -57,6 +57,79 @@ export class RubricScorer {
   }
 
   /**
+   * Derive per-standard proficiency scores from rubric criterion evaluations.
+   * For any criterion with `standard_id` set, maps its selected tier's percentage of max
+   * (or direct proficiency value when `rubric.scoring_mode === 'proficiency'`) to `sbgLevels`.
+   * @param {object} rubric
+   * @param {Record<string, string>} selectedEval
+   * @param {Array<{ value: number, label?: string, min_pct?: number }>} sbgLevels
+   * @returns {Record<string, number>}
+   */
+  static deriveStandardScores(rubric, selectedEval = {}, sbgLevels = []) {
+    const out = {};
+    if (!rubric?.criteria?.length || !selectedEval) return out;
+
+    const levels = (sbgLevels && sbgLevels.length)
+      ? [...sbgLevels].sort((a, b) => Number(b.value) - Number(a.value))
+      : [
+          { value: 4, label: 'Exemplary', min_pct: 90 },
+          { value: 3, label: 'Proficient', min_pct: 75 },
+          { value: 2, label: 'Developing', min_pct: 55 },
+          { value: 1, label: 'Beginning', min_pct: 0 }
+        ];
+
+    const buckets = new Map();
+    for (const crit of rubric.criteria) {
+      if (!crit.standard_id) continue;
+      const tierId = selectedEval[crit.id];
+      if (!tierId) continue;
+
+      const tier = (rubric.tiers || []).find(t => t.id === tierId);
+      const cell = crit.cells?.[tierId];
+      const pts = (cell && cell.points !== undefined && cell.points !== null)
+        ? Number(cell.points)
+        : Number(tier?.default_points ?? 0);
+
+      let maxPts = 0;
+      for (const t of (rubric.tiers || [])) {
+        const c = crit.cells?.[t.id];
+        const p = (c && c.points !== undefined && c.points !== null) ? Number(c.points) : Number(t.default_points ?? 0);
+        if (p > maxPts) maxPts = p;
+      }
+
+      const ratio = maxPts > 0 ? Math.min(1, Math.max(0, pts / maxPts)) : 0;
+      const weight = crit.weight !== undefined ? Number(crit.weight) : 1;
+      const acc = buckets.get(crit.standard_id) || { sum: 0, w: 0, directSum: 0 };
+      acc.sum += ratio * weight;
+      acc.directSum += pts * weight;
+      acc.w += weight;
+      buckets.set(crit.standard_id, acc);
+    }
+
+    for (const [stdId, acc] of buckets.entries()) {
+      if (acc.w <= 0) continue;
+      if (rubric.scoring_mode === 'proficiency') {
+        const avgVal = acc.directSum / acc.w;
+        // Snap to nearest sbgLevel value
+        let best = levels[0];
+        let bestDist = Infinity;
+        for (const lvl of levels) {
+          const d = Math.abs(Number(lvl.value) - avgVal);
+          if (d < bestDist) { bestDist = d; best = lvl; }
+        }
+        if (best) out[stdId] = Number(best.value);
+      } else {
+        const pct = (acc.sum / acc.w) * 100;
+        const matched = levels.find(l => l.min_pct !== undefined && pct >= Number(l.min_pct)) ||
+          levels[Math.min(levels.length - 1, Math.max(0, Math.round((1 - pct / 100) * (levels.length - 1))))];
+        if (matched) out[stdId] = Number(matched.value);
+      }
+    }
+
+    return out;
+  }
+
+  /**
    * Open interactive click-scorer drawer for an assignment and student
    */
   static openScoringDrawer(rubric, existingGradeRecord, onCommit) {
@@ -468,20 +541,45 @@ export class RubricDesigner {
           }
         }
       ],
-      onReady: (dialog) => {
+      onReady: async (dialog) => {
         const mount = dialog.querySelector('#rubric-designer-mount');
+        let availableStandards = [];
+        try {
+          if (currentRubric.course_id) {
+            const c = await storage.table('gradebook_courses').get(currentRubric.course_id);
+            availableStandards = c?.standards || [];
+          } else {
+            const courses = await storage.table('gradebook_courses').toArray();
+            const seen = new Set();
+            for (const c of courses) {
+              for (const s of c.standards || []) {
+                if (!seen.has(s.id)) {
+                  seen.add(s.id);
+                  availableStandards.push({ ...s, _courseName: c.name });
+                }
+              }
+            }
+          }
+        } catch (_) {}
 
         const render = () => {
           if (!mount) return;
           mount.innerHTML = `
-            <!-- Title & Tiers Bar -->
+            <!-- Title, Scoring Mode & Tiers Bar -->
             <div class="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-              <div class="md:col-span-8">
+              <div class="md:col-span-6">
                 <sl-input id="input-rubric-title" label="Rubric Title" value="${Sanitizer.escapeHTML(currentRubric.title || '')}" required></sl-input>
               </div>
-              <div class="md:col-span-4 flex justify-end">
+              <div class="md:col-span-3">
+                <sl-select id="select-rubric-scoring-mode" label="Scoring Mode" size="medium" value="${Sanitizer.escapeHTML(currentRubric.scoring_mode || 'points')}">
+                  <sl-option value="points">Points (Analytical)</sl-option>
+                  <sl-option value="proficiency">Proficiency (SBG)</sl-option>
+                  <sl-option value="single_point">Single-Point</sl-option>
+                </sl-select>
+              </div>
+              <div class="md:col-span-3 flex justify-end">
                 <sl-button size="small" variant="default" id="btn-add-tier">
-                  <sl-icon slot="prefix" name="plus"></sl-icon> Add Performance Tier
+                  <sl-icon slot="prefix" name="plus"></sl-icon> Add Tier
                 </sl-button>
               </div>
             </div>
@@ -519,20 +617,33 @@ export class RubricDesigner {
               <div class="space-y-3 max-h-[360px] overflow-y-auto pr-1" id="criteria-list-mount">
                 ${currentRubric.criteria.map((c, cIdx) => `
                   <div class="p-3 border border-slate-200 rounded-xl bg-slate-50 space-y-2 crit-row" data-crit-id="${Sanitizer.escapeHTML(c.id)}">
-                    <div class="flex items-center justify-between gap-3">
-                      <div class="flex items-center gap-2 flex-1">
+                    <div class="flex items-center justify-between gap-2 flex-wrap">
+                      <div class="flex items-center gap-2 flex-1 min-w-[240px]">
                         <span class="font-bold text-slate-600 text-xs font-mono">#${cIdx + 1}</span>
                         <sl-input size="small" class="crit-name-inp flex-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" value="${Sanitizer.escapeHTML(c.name)}" placeholder="Criterion Name (press Enter to add row)"></sl-input>
-                        <sl-input size="small" type="number" step="0.1" min="0" class="crit-weight-inp w-24" data-crit-id="${Sanitizer.escapeHTML(c.id)}" value="${Sanitizer.escapeHTML(c.weight ?? 1.0)}" label="Weight"></sl-input>
+                        <sl-input size="small" type="number" step="0.1" min="0" class="crit-weight-inp w-20" data-crit-id="${Sanitizer.escapeHTML(c.id)}" value="${Sanitizer.escapeHTML(c.weight ?? 1.0)}" label="Weight"></sl-input>
+                        ${availableStandards.length ? `
+                          <sl-select size="small" clearable class="crit-std-sel w-44" data-crit-id="${Sanitizer.escapeHTML(c.id)}" value="${Sanitizer.escapeHTML(c.standard_id || '')}" label="Aligned Standard" placeholder="None">
+                            ${availableStandards.map(s => `<sl-option value="${Sanitizer.escapeHTML(s.id)}">${Sanitizer.escapeHTML(s.code)}${s._courseName ? ` (${Sanitizer.escapeHTML(s._courseName)})` : ''}</sl-option>`).join('')}
+                          </sl-select>
+                        ` : ''}
                       </div>
-                      ${currentRubric.criteria.length > 1 ? `
-                        <button type="button" class="btn-del-crit text-slate-400 hover:text-red-600 p-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" title="Delete Criterion">
-                          <sl-icon name="trash"></sl-icon>
-                        </button>
-                      ` : ''}
+                      <div class="flex items-center gap-0.5">
+                        ${currentRubric.criteria.length > 1 ? `
+                          <button type="button" class="btn-move-crit text-slate-400 hover:text-slate-700 p-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" data-dir="-1" title="Move Up" ${cIdx === 0 ? 'disabled' : ''}>
+                            <sl-icon name="arrow-up"></sl-icon>
+                          </button>
+                          <button type="button" class="btn-move-crit text-slate-400 hover:text-slate-700 p-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" data-dir="1" title="Move Down" ${cIdx === currentRubric.criteria.length - 1 ? 'disabled' : ''}>
+                            <sl-icon name="arrow-down"></sl-icon>
+                          </button>
+                          <button type="button" class="btn-del-crit text-slate-400 hover:text-red-600 p-1" data-crit-id="${Sanitizer.escapeHTML(c.id)}" title="Delete Criterion">
+                            <sl-icon name="trash"></sl-icon>
+                          </button>
+                        ` : ''}
+                      </div>
                     </div>
 
-                    <!-- Per-Tier Descriptors -->
+                    <!-- Per-Tier Descriptors & Custom Points -->
                     <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                       ${currentRubric.tiers.map(t => {
                         const cell = c.cells ? c.cells[t.id] : null;
@@ -542,9 +653,12 @@ export class RubricDesigner {
                           : (t.default_points !== undefined && t.default_points !== null ? Number(t.default_points) : 0);
                         return `
                           <div class="p-2 border rounded-lg bg-white space-y-1">
-                            <div class="flex items-center justify-between text-[10px] text-slate-500 font-medium">
-                              <span>${Sanitizer.escapeHTML(t.label)}</span>
-                              <span class="font-mono text-blue-600">${Sanitizer.escapeHTML(Sanitizer.safeNumber(pts))} pts</span>
+                            <div class="flex items-center justify-between gap-1 text-[10px] text-slate-500 font-medium">
+                              <span class="truncate">${Sanitizer.escapeHTML(t.label)}</span>
+                              <label class="flex items-center gap-0.5 font-mono text-blue-600 flex-shrink-0">
+                                <input type="number" min="0" step="0.5" class="cell-pts-inp w-12 px-1 py-0.5 border border-slate-200 rounded text-right text-[11px] font-mono text-blue-700 bg-slate-50" data-crit-id="${Sanitizer.escapeHTML(c.id)}" data-tier-id="${Sanitizer.escapeHTML(t.id)}" value="${Sanitizer.escapeHTML(Sanitizer.safeNumber(pts))}" />
+                                <span>pts</span>
+                              </label>
                             </div>
                             <sl-textarea size="small" class="cell-desc-inp" data-crit-id="${Sanitizer.escapeHTML(c.id)}" data-tier-id="${Sanitizer.escapeHTML(t.id)}" rows="2" placeholder="Quality descriptor..." value="${Sanitizer.escapeHTML(desc)}"></sl-textarea>
                           </div>
@@ -571,6 +685,9 @@ export class RubricDesigner {
         const bindEvents = () => {
           mount.querySelector('#input-rubric-title')?.addEventListener('sl-input', (e) => {
             currentRubric.title = e.target.value;
+          });
+          mount.querySelector('#select-rubric-scoring-mode')?.addEventListener('sl-change', (e) => {
+            currentRubric.scoring_mode = e.target.value;
           });
 
           mount.querySelectorAll('.tier-label-inp').forEach(inp => {
@@ -663,6 +780,44 @@ export class RubricDesigner {
               cells: {}
             });
             render();
+          });
+
+          mount.querySelectorAll('.crit-std-sel').forEach(sel => {
+            sel.addEventListener('sl-change', () => {
+              const cId = sel.getAttribute('data-crit-id');
+              const crit = currentRubric.criteria.find(c => c.id === cId);
+              if (crit) crit.standard_id = sel.value || null;
+            });
+          });
+
+          mount.querySelectorAll('.btn-move-crit').forEach(btn => {
+            btn.addEventListener('click', () => {
+              const cId = btn.getAttribute('data-crit-id');
+              const dir = Number(btn.getAttribute('data-dir'));
+              const idx = currentRubric.criteria.findIndex(c => c.id === cId);
+              const nextIdx = idx + dir;
+              if (idx >= 0 && nextIdx >= 0 && nextIdx < currentRubric.criteria.length) {
+                const [item] = currentRubric.criteria.splice(idx, 1);
+                currentRubric.criteria.splice(nextIdx, 0, item);
+                render();
+              }
+            });
+          });
+
+          mount.querySelectorAll('.cell-pts-inp').forEach(inp => {
+            inp.addEventListener('input', () => {
+              const cId = inp.getAttribute('data-crit-id');
+              const tId = inp.getAttribute('data-tier-id');
+              const crit = currentRubric.criteria.find(c => c.id === cId);
+              if (crit) {
+                if (!crit.cells) crit.cells = {};
+                if (!crit.cells[tId]) {
+                  const tier = currentRubric.tiers.find(t => t.id === tId);
+                  crit.cells[tId] = { points: tier ? tier.default_points : 0, descriptor: '' };
+                }
+                crit.cells[tId].points = Math.max(0, parseFloat(inp.value) || 0);
+              }
+            });
           });
 
           mount.querySelectorAll('.cell-desc-inp').forEach(area => {

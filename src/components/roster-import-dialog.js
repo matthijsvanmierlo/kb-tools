@@ -611,6 +611,187 @@ export class RosterImportDialog {
 
     return dialog;
   }
+
+  /**
+   * Batch-provision multiple classes and their rosters from parsed OneRoster classes.
+   * Creates or updates gradebook_courses, generates 8-char class codes, and enrolls students
+   * with generated personal access codes.
+   * @param {Array<{ sourcedId?: string, title: string, classCode?: string, schoolYear?: string, students: Array<object> }>} selectedClasses
+   * @returns {Promise<{ createdCourses: number, updatedCourses: number, addedStudents: number }>}
+   */
+  static async importOneRosterClassesBatch(selectedClasses = []) {
+    const { generateUUID } = await import('../utils/uuid.js');
+    const existingCourses = await storage.table('gradebook_courses').toArray().catch(() => []);
+    let createdCourses = 0;
+    let updatedCourses = 0;
+    let addedStudents = 0;
+
+    for (const cls of selectedClasses) {
+      if (!cls || !cls.title) continue;
+      let course = existingCourses.find(c =>
+        (cls.sourcedId && c.oneroster_sourced_id === cls.sourcedId) ||
+        (c.name === cls.title && (c.section || '') === (cls.classCode || ''))
+      );
+
+      if (!course) {
+        course = {
+          id: generateUUID(),
+          name: cls.title,
+          section: cls.classCode || '',
+          academic_year: cls.schoolYear || '2026-2027',
+          oneroster_sourced_id: cls.sourcedId || null,
+          access_code: AccessCodes.generateClassCode(),
+          grading_scale: 'traditional',
+          categories: [
+            { id: 'cat-classwork', name: 'Classwork', weight_pct: 40 },
+            { id: 'cat-assessments', name: 'Assessments', weight_pct: 60 }
+          ],
+          standards: [],
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        await storage.table('gradebook_courses').put(course);
+        existingCourses.push(course);
+        createdCourses++;
+      } else {
+        if (!course.access_code) course.access_code = AccessCodes.generateClassCode();
+        if (cls.sourcedId && !course.oneroster_sourced_id) course.oneroster_sourced_id = cls.sourcedId;
+        course.updated_at = new Date().toISOString();
+        await storage.table('gradebook_courses').put(course);
+        updatedCourses++;
+      }
+
+      const existingStudents = await storage.table('gradebook_students').where('course_id').equals(course.id).toArray().catch(() => []);
+      const existingById = new Map(existingStudents.map(s => [String(s.student_id).toUpperCase(), s]));
+
+      for (const st of cls.students || []) {
+        const sid = String(st.student_id || st.sourced_id || '').trim();
+        if (!sid) continue;
+        const key = sid.toUpperCase();
+        if (existingById.has(key)) continue;
+        const fullName = [st.given_name, st.family_name].filter(Boolean).join(' ').trim() || st.full_name || sid;
+        const newStudent = {
+          id: generateUUID(),
+          course_id: course.id,
+          student_id: sid,
+          given_name: st.given_name || '',
+          family_name: st.family_name || '',
+          full_name: fullName,
+          email: st.email || '',
+          access_code: AccessCodes.generateCode(),
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        await storage.table('gradebook_students').put(newStudent);
+        existingById.set(key, newStudent);
+        addedStudents++;
+      }
+    }
+
+    return { createdCourses, updatedCourses, addedStudents };
+  }
+
+  /**
+   * Open a wizard to bulk-import multiple classes & rosters from a OneRoster ZIP archive.
+   */
+  static async openOneRosterBulkImportDialog({ onComplete } = {}) {
+    const dialog = document.createElement('sl-dialog');
+    dialog.label = 'Bulk Import Classes (OneRoster ZIP)';
+    dialog.style.setProperty('--width', '640px');
+    let parsedClasses = [];
+
+    const renderBody = () => {
+      dialog.innerHTML = `
+        <div class="space-y-4 text-sm">
+          <p class="text-xs text-slate-600">Drop a OneRoster 1.1/1.2 <code>.zip</code> archive containing <code>classes.csv</code>, <code>users.csv</code>, and <code>enrollments.csv</code> to provision multiple classes and rosters at once.</p>
+          <div class="border-2 border-dashed border-slate-300 rounded-xl p-6 text-center bg-slate-50 hover:border-primary-400 transition-colors cursor-pointer" id="bulk-or-drop">
+            <input type="file" id="bulk-or-file" accept=".zip" class="hidden">
+            <sl-icon name="file-earmark-zip" class="text-3xl text-primary-600 mb-1"></sl-icon>
+            <div class="font-medium text-slate-800">Click to select OneRoster .zip</div>
+            <div class="text-xs text-slate-500 mt-0.5">Generates 8-char class codes and student passcodes automatically</div>
+          </div>
+          ${parsedClasses.length ? `
+            <div class="space-y-2">
+              <div class="flex items-center justify-between text-xs font-semibold text-slate-700">
+                <span>Found ${parsedClasses.length} class${parsedClasses.length === 1 ? '' : 'es'}</span>
+                <label class="flex items-center gap-1.5 cursor-pointer font-normal">
+                  <input type="checkbox" id="bulk-or-toggle-all" checked> Select All
+                </label>
+              </div>
+              <div class="max-h-60 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-xl bg-white">
+                ${parsedClasses.map((c, idx) => `
+                  <label class="flex items-center justify-between p-3 hover:bg-slate-50 cursor-pointer text-xs">
+                    <div class="flex items-center gap-2.5">
+                      <input type="checkbox" class="bulk-or-cls-chk" data-idx="${idx}" checked>
+                      <div>
+                        <div class="font-semibold text-slate-900">${Sanitizer.escapeHTML(c.title)}</div>
+                        <div class="text-slate-500">${c.classCode ? `Section ${Sanitizer.escapeHTML(c.classCode)} · ` : ''}${c.students.length} student${c.students.length === 1 ? '' : 's'}</div>
+                      </div>
+                    </div>
+                  </label>
+                `).join('')}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+        <div slot="footer" class="flex justify-end gap-2">
+          <sl-button variant="default" id="bulk-or-cancel">Cancel</sl-button>
+          <sl-button variant="primary" id="bulk-or-import" ${parsedClasses.length ? '' : 'disabled'}>Import Selected Classes</sl-button>
+        </div>
+      `;
+
+      const fileInput = dialog.querySelector('#bulk-or-file');
+      dialog.querySelector('#bulk-or-drop')?.addEventListener('click', () => fileInput?.click());
+      fileInput?.addEventListener('change', async (e) => {
+        const file = e.target.files?.[0];
+        if (!file) return;
+        try {
+          const res = await parseOneRosterBundle(file);
+          parsedClasses = res.classes || [];
+          if (!parsedClasses.length) toast.warning('No classes found in this OneRoster archive.');
+          renderBody();
+        } catch (err) {
+          toast.error('Failed to parse OneRoster ZIP: ' + err.message);
+        }
+      });
+
+      dialog.querySelector('#bulk-or-toggle-all')?.addEventListener('change', (e) => {
+        const checked = e.target.checked;
+        dialog.querySelectorAll('.bulk-or-cls-chk').forEach(chk => { chk.checked = checked; });
+      });
+
+      dialog.querySelector('#bulk-or-cancel')?.addEventListener('click', () => dialog.hide());
+      dialog.querySelector('#bulk-or-import')?.addEventListener('click', async () => {
+        const selected = [];
+        dialog.querySelectorAll('.bulk-or-cls-chk').forEach(chk => {
+          if (chk.checked) selected.push(parsedClasses[Number(chk.dataset.idx)]);
+        });
+        if (!selected.length) {
+          toast.warning('Select at least one class to import.');
+          return;
+        }
+        const btn = dialog.querySelector('#bulk-or-import');
+        btn.loading = true;
+        try {
+          const summary = await RosterImportDialog.importOneRosterClassesBatch(selected);
+          toast.success(`Imported ${summary.createdCourses} new and ${summary.updatedCourses} existing classes (${summary.addedStudents} students added).`);
+          dialog.hide();
+          if (onComplete) onComplete(summary);
+        } catch (err) {
+          toast.error('Bulk import failed: ' + err.message);
+          btn.loading = false;
+        }
+      });
+    };
+
+    document.body.appendChild(dialog);
+    renderBody();
+    dialog.show();
+    dialog.addEventListener('sl-after-hide', (e) => {
+      if (e.target === dialog) dialog.remove();
+    });
+    return dialog;
+  }
 }
 
 export default RosterImportDialog;

@@ -120,6 +120,10 @@ export async function publishTask(task, roster = null, { transport = null, handi
   candidatePayload.publish_version = version;
 
   await storage.table('tasks').put(next);
+  const linkedCourseId = next.class_id || next.gradebook?.course_id;
+  if (linkedCourseId) {
+    import('../../core/course-feed.js').then(m => m.scheduleCourseFeedSync(linkedCourseId)).catch(() => {});
+  }
   return { task: next, payload: candidatePayload, keys };
 }
 

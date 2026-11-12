@@ -125,23 +125,28 @@ export async function renderGradebookView(params, router, container) {
   }
   store.setState('activeCourse', activeCourse);
 
+  const showStandardsTab = activeCourse.grading_scale === 'sbg' ||
+    activeCourse.grading_scale === 'hybrid' ||
+    (Array.isArray(activeCourse.standards) && activeCourse.standards.length > 0);
+
   // Term filtering state
   let selectedTermId = 'all';
   // Determine view mode: 'assignments', 'standards', or 'roster'
   let viewMode = 'assignments';
   if (params?.view === 'roster' || store.getState('gradebookViewMode') === 'roster') {
     viewMode = 'roster';
-  } else if ((params?.view === 'standards' || store.getState('gradebookViewMode') === 'standards') && activeCourse.grading_scale === 'sbg') {
+  } else if ((params?.view === 'standards' || store.getState('gradebookViewMode') === 'standards') && showStandardsTab) {
     viewMode = 'standards';
   }
 
-  // Fetch course data
-  let [students, allAssignments, gradesList, rubrics] = await Promise.all([
+  // Fetch course data (include both course-scoped and shared global rubrics)
+  let [students, allAssignments, gradesList, allRubrics] = await Promise.all([
     storage.table('gradebook_students').where('course_id').equals(activeCourse.id).toArray(),
     storage.table('gradebook_assignments').where('course_id').equals(activeCourse.id).toArray(),
     storage.table('gradebook_grades').where('course_id').equals(activeCourse.id).toArray(),
-    storage.table('gradebook_rubrics').where('course_id').equals(activeCourse.id).toArray()
+    storage.table('gradebook_rubrics').toArray()
   ]);
+  let rubrics = allRubrics.filter(r => !r.course_id || r.course_id === activeCourse.id);
 
   // Stable roster order: by last name, then first name
   const lastName = (n) => String(n || '').trim().split(/\s+/).slice(-1)[0] || '';
@@ -257,7 +262,7 @@ export async function renderGradebookView(params, router, container) {
         <div class="flex flex-wrap items-center gap-2 px-4 py-2.5 border-t border-slate-100 bg-slate-50/60 rounded-b-xl">
           <div class="flex items-center bg-slate-200/60 p-0.5 rounded-lg text-xs" role="group" aria-label="View">
             <button id="btn-view-assignments" class="px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${viewMode === 'assignments' ? 'bg-white text-slate-900 shadow-xs font-semibold' : 'text-slate-500 hover:text-slate-800'}"><sl-icon name="table"></sl-icon> Assignments</button>
-            ${activeCourse.grading_scale === 'sbg' ? `
+            ${showStandardsTab ? `
               <button id="btn-view-standards" class="px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${viewMode === 'standards' ? 'bg-white text-slate-900 shadow-xs font-semibold' : 'text-slate-500 hover:text-slate-800'}"><sl-icon name="bullseye"></sl-icon> Standards</button>
             ` : ''}
             <button id="btn-view-roster" class="px-2.5 py-1 rounded-md font-medium transition-colors flex items-center gap-1 ${viewMode === 'roster' ? 'bg-white text-slate-900 shadow-xs font-semibold' : 'text-slate-500 hover:text-slate-800'}"><sl-icon name="people"></sl-icon> Roster</button>

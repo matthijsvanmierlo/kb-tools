@@ -493,6 +493,16 @@ export class ReplicationManager {
   async stopSharing(courseId) {
     const share = await this.classShare(courseId);
     if (!share) return;
+    if (share.owner && share.relay?.workspace_id && share.relay?.workspace_key) {
+      try {
+        const relay = await this._relayFor(share.relay.base_url);
+        if (relay && typeof relay.syncDeleteWorkspace === 'function') {
+          await relay.syncDeleteWorkspace(share.relay.workspace_id, share.relay.workspace_key);
+        }
+      } catch (_) {
+        // Offline or already deleted on relay — still retire local keys
+      }
+    }
     if (share.owner) {
       const old = await KeyVault.exportClassKey(this.store, courseId);
       if (old) await this._shareSecret(`retired_class_key:${courseId}:${old.fingerprint}`, old);

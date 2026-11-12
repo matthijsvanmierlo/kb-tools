@@ -215,6 +215,7 @@ export async function evaluateSubmission({ text, teacherPrivateKey, assignment, 
   return {
     id: generateUUID(),
     assignment_id: assignment.id,
+    course_id: assignment.class_id || assignment.gradebook?.course_id || null,
     student_id: student ? student.student_id : body.student_id,
     student_name: student ? (student.full_name || student.name) : body.student_name,
     claimed_name: body.student_name,

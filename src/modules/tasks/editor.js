@@ -99,6 +99,10 @@ export async function renderTaskEditor(task, router, container, params = {}) {
       } catch (_) {}
       t.updated_at = new Date().toISOString();
       await storage.table('tasks').put(JSON.parse(JSON.stringify(t)));
+      const cid = resolveTaskCourseId(t);
+      if (cid && t.publish?.published_at) {
+        import('../../core/course-feed.js').then(m => m.scheduleCourseFeedSync(cid)).catch(() => {});
+      }
       setSaveState('Saved');
       updateSummary();
     };

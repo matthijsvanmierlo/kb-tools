@@ -109,6 +109,7 @@ export async function evaluateTaskSubmission({ text, teacherPrivateKey, task, ro
   return {
     id: generateUUID(),
     task_id: task.id,
+    course_id: task.class_id || task.gradebook?.course_id || null,
     student_id: student ? student.student_id : body.student_id,
     student_name: student ? (student.full_name || student.name) : body.student_name,
     claimed_name: body.student_name,

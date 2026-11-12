@@ -4,14 +4,17 @@ import { toast } from '../../utils/toast.js';
 import { ConfirmDialog } from '../../utils/dialogs.js';
 import { ClassManager } from '../../components/class-manager.js';
 import { ClassSetupWizard } from '../../components/class-setup-wizard.js';
-import { AccessCodes, generateAccessCode } from '../../core/access-codes.js';
+import { AccessCodes, formatAccessCode } from '../../core/access-codes.js';
 import { loadRosterContext } from './roster-data.js';
 import { openAddStudentModal, openStudentDrawer } from './student-actions.js';
 import { renderRosterView } from '../gradebook/roster-view.js';
 import { openCourseSettingsDialog } from '../gradebook/course-settings.js';
 import { QRCode } from '../../core/qrcode.js';
 import { AppUrl } from '../../core/app-url.js';
-import { ReplicationEngine } from '../../core/replication/engine.js';
+import { replication } from '../../core/replication/manager.js';
+import { rotateClassAccessCode, autoSyncCourseFeed } from '../../core/course-feed.js';
+import { isFeedDirty } from '../../core/course-revision.js';
+import RosterImportDialog from '../../components/roster-import-dialog.js';
 
 /**
  * Classes & Rosters Module (KB-CLASS-001)
@@ -64,16 +67,23 @@ export async function renderClassesView(params, router, container) {
         <aside class="w-full md:w-80 lg:w-96 flex-shrink-0 bg-white border-r border-slate-200 flex flex-col h-auto md:h-full">
           <!-- Master Header -->
           <div class="p-4 border-b border-slate-200 space-y-3">
-            <div class="flex items-center justify-between">
-              <div>
+            <div class="flex items-center justify-between gap-2">
+              <div class="min-w-0">
                 <h1 class="text-base font-bold text-slate-900 flex items-center gap-2">
                   <sl-icon name="collection" class="text-primary-600"></sl-icon> Classes &amp; Rosters
                 </h1>
                 <p class="text-xs text-slate-500">Manage courses, student enrollments, and settings</p>
               </div>
-              <sl-button variant="primary" size="small" id="btn-create-class">
-                <sl-icon slot="prefix" name="plus-lg"></sl-icon> New Class
-              </sl-button>
+              <div class="flex items-center gap-1.5 flex-shrink-0">
+                <sl-tooltip content="Bulk Import Classes (OneRoster ZIP)">
+                  <sl-button variant="default" size="small" id="btn-bulk-oneroster">
+                    <sl-icon name="file-earmark-zip"></sl-icon>
+                  </sl-button>
+                </sl-tooltip>
+                <sl-button variant="primary" size="small" id="btn-create-class">
+                  <sl-icon slot="prefix" name="plus-lg"></sl-icon> New Class
+                </sl-button>
+              </div>
             </div>
             <div class="flex items-center gap-2">
               <sl-input size="small" id="input-search-classes" placeholder="Search classes..." value="${esc(searchQuery)}" clearable class="flex-1">
@@ -226,9 +236,22 @@ export async function renderClassesView(params, router, container) {
 
                 <sl-tab-panel name="sharing" class="py-4">
                   <div class="max-w-2xl bg-white rounded-xl border border-slate-200 p-6 space-y-6 shadow-xs">
-                    <div>
-                      <h3 class="text-sm font-semibold text-slate-900">Student Enrollment &amp; Class Access</h3>
-                      <p class="text-xs text-slate-500">Students use this code or link to enroll in this class on their devices.</p>
+                    <div class="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h3 class="text-sm font-semibold text-slate-900">Student Enrollment &amp; Class Access</h3>
+                        <p class="text-xs text-slate-500">Students use this 8-character code or link to enroll in this class on their devices.</p>
+                      </div>
+                      <div class="flex items-center gap-2 flex-wrap">
+                        <sl-button size="small" variant="primary" outline id="btn-project-join">
+                          <sl-icon slot="prefix" name="easel"></sl-icon> Project Join Screen
+                        </sl-button>
+                        <sl-button size="small" variant="default" id="btn-sharing-passcards">
+                          <sl-icon slot="prefix" name="card-text"></sl-icon> Print Passcards
+                        </sl-button>
+                        <sl-button size="small" variant="default" id="btn-sync-feed-now">
+                          <sl-icon slot="prefix" name="cloud-arrow-up"></sl-icon> Sync Feed
+                        </sl-button>
+                      </div>
                     </div>
 
                     <div class="flex flex-col sm:flex-row items-start sm:items-center gap-6 p-4 rounded-xl bg-slate-50 border border-slate-200">
@@ -237,16 +260,17 @@ export async function renderClassesView(params, router, container) {
                       </div>
                       <div class="space-y-3 flex-1 min-w-0">
                         <div>
-                          <label class="text-xs font-semibold uppercase tracking-wider text-slate-500">Class Access Code</label>
+                          <label class="text-xs font-semibold uppercase tracking-wider text-slate-500">Class Access Code (8-char)</label>
                           <div class="flex items-center gap-2 mt-1">
                             <span class="text-2xl font-mono font-bold tracking-widest text-primary-700 bg-white px-3 py-1 rounded-md border border-slate-300" id="text-access-code">
-                              ${esc(activeCourse.access_code || '------')}
+                              ${esc(activeCourse.access_code ? formatAccessCode(activeCourse.access_code) : '---- ----')}
                             </span>
-                            <sl-tooltip content="Regenerate access code">
+                            <sl-tooltip content="Rotate class code (auto-forwards enrolled students)">
                               <sl-button size="small" variant="default" id="btn-regen-code" outline>
                                 <sl-icon name="arrow-clockwise"></sl-icon>
                               </sl-button>
                             </sl-tooltip>
+                            <span id="feed-sync-status-pill" class="text-[11px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-600">Checking sync...</span>
                           </div>
                         </div>
 
@@ -267,9 +291,9 @@ export async function renderClassesView(params, router, container) {
                     <div class="text-xs text-slate-500 space-y-1">
                       <p class="font-medium text-slate-700">How students join:</p>
                       <ul class="list-disc list-inside space-y-0.5 text-slate-600">
-                        <li>Direct link opens Student Mode with the class code automatically filled.</li>
-                        <li>Or students navigate to <strong>#/student</strong> and enter the 6-character code.</li>
-                        <li>All student enrollments and cryptographic keychains are stored client-side in their browser.</li>
+                        <li>Direct link or QR code opens Student Mode with the class code automatically filled.</li>
+                        <li>Or students navigate to <strong>#/student</strong> and enter the <strong>8-character code</strong> (e.g. <code>ABCD-EFGH</code>).</li>
+                        <li>Rotating the code publishes a secure forwarding stub so already-enrolled students automatically migrate.</li>
                       </ul>
                     </div>
                   </div>
@@ -277,28 +301,26 @@ export async function renderClassesView(params, router, container) {
 
                 <sl-tab-panel name="coteachers" class="py-4">
                   <div class="max-w-2xl bg-white rounded-xl border border-slate-200 p-6 space-y-5 shadow-xs">
-                    <div>
-                      <h3 class="text-sm font-semibold text-slate-900">Co-teachers &amp; Multi-Device Replication</h3>
-                      <p class="text-xs text-slate-500">KennisBoost uses zero-server peer replication. All course changes sync deterministically.</p>
+                    <div class="flex items-start justify-between gap-3">
+                      <div>
+                        <h3 class="text-sm font-semibold text-slate-900">Co-teachers &amp; Multi-Device Replication</h3>
+                        <p class="text-xs text-slate-500">End-to-end encrypted peer replication across your devices and co-teachers.</p>
+                      </div>
+                      <sl-button size="small" variant="primary" outline id="btn-coteacher-sync-now">
+                        <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Sync Now
+                      </sl-button>
                     </div>
 
-                    <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-                      <div class="flex items-center justify-between text-xs">
-                        <span class="font-medium text-slate-700">Local Storage Mode</span>
-                        <span class="px-2 py-0.5 rounded bg-emerald-100 text-emerald-800 font-medium">Encrypted IndexedDB &amp; OPFS</span>
-                      </div>
-                      <div class="flex items-center justify-between text-xs">
-                        <span class="font-medium text-slate-700">Replication Engine</span>
-                        <span class="text-slate-600 font-mono">Deterministic LWW + Outbox</span>
-                      </div>
+                    <div id="coteacher-live-mount" class="space-y-3">
+                      <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500">Loading replication status...</div>
                     </div>
 
-                    <div class="flex items-center gap-3 pt-2">
+                    <div class="flex flex-wrap items-center gap-3 pt-2 border-t border-slate-100">
                       <sl-button variant="default" size="small" id="btn-export-class-backup">
                         <sl-icon slot="prefix" name="download"></sl-icon> Export Class JSON
                       </sl-button>
                       <sl-button variant="default" size="small" id="btn-open-sync-settings">
-                        <sl-icon slot="prefix" name="hdd-network"></sl-icon> Sync Settings...
+                        <sl-icon slot="prefix" name="hdd-network"></sl-icon> Sync &amp; Pairing Settings...
                       </sl-button>
                     </div>
                   </div>
@@ -390,6 +412,12 @@ export async function renderClassesView(params, router, container) {
       render();
     });
 
+    container.querySelector('#btn-bulk-oneroster')?.addEventListener('click', () => {
+      RosterImportDialog.openOneRosterBulkImportDialog({
+        onComplete: () => render()
+      });
+    });
+
     const toggleArchivedBtn = container.querySelector('#btn-toggle-archived');
     toggleArchivedBtn?.addEventListener('click', () => {
       showArchived = !showArchived;
@@ -440,6 +468,8 @@ export async function renderClassesView(params, router, container) {
         mountRoster();
       } else if (activeTab === 'sharing') {
         mountSharing();
+      } else if (activeTab === 'coteachers') {
+        mountCoteachers();
       }
     });
 
@@ -498,10 +528,22 @@ export async function renderClassesView(params, router, container) {
     const mountSharing = async () => {
       const qrMount = container.querySelector('#enrollment-qr-mount');
       const joinInput = container.querySelector('#input-join-link');
+      const statusPill = container.querySelector('#feed-sync-status-pill');
       if (!qrMount) return;
 
-      const { buildStudentCourseJoinLinks, autoSyncCourseFeed } = await import('../../core/course-feed.js');
-      autoSyncCourseFeed(activeCourse.id).catch(() => {});
+      const { buildStudentCourseJoinLinks } = await import('../../core/course-feed.js');
+      const dirty = await isFeedDirty(activeCourse.id).catch(() => false);
+      if (statusPill) {
+        statusPill.textContent = dirty ? 'Changes pending sync' : 'Feed up to date';
+        statusPill.className = `text-[11px] font-medium px-2 py-0.5 rounded-full ${dirty ? 'bg-amber-100 text-amber-800' : 'bg-emerald-100 text-emerald-800'}`;
+      }
+
+      autoSyncCourseFeed(activeCourse.id).then((res) => {
+        if (res?.synced && statusPill) {
+          statusPill.textContent = 'Synced to relay';
+          statusPill.className = 'text-[11px] font-medium px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800';
+        }
+      }).catch(() => {});
 
       const joinInfo = await buildStudentCourseJoinLinks(activeCourse.id).catch(() => null);
       if (!joinInfo) return;
@@ -521,12 +563,123 @@ export async function renderClassesView(params, router, container) {
       } else {
         qrMount.innerHTML = '<span class="text-xs text-slate-400">No code</span>';
       }
+
+      // Projector Join Modal
+      const projectBtn = container.querySelector('#btn-project-join');
+      if (projectBtn) {
+        projectBtn.onclick = () => {
+          const dlg = document.createElement('sl-dialog');
+          dlg.label = `Join ${activeCourse.name}`;
+          dlg.style.setProperty('--width', '720px');
+          const bigQr = joinInfo.qrUrl ? QRCode.generateSVG(joinInfo.qrUrl, { size: 260, margin: 2 }) : '';
+          dlg.innerHTML = `
+            <div class="text-center space-y-6 py-4">
+              <div>
+                <p class="text-sm font-semibold uppercase tracking-wider text-slate-500">${esc(activeCourse.name)}${activeCourse.section ? ` · ${esc(activeCourse.section)}` : ''}</p>
+                <h2 class="text-2xl font-bold text-slate-900 mt-1">Join Class on Your Device</h2>
+              </div>
+              <div class="flex flex-col md:flex-row items-center justify-center gap-8">
+                <div class="p-4 bg-white rounded-2xl border-2 border-slate-200 shadow-sm">${bigQr}</div>
+                <div class="space-y-4 text-left max-w-xs">
+                  <div>
+                    <div class="text-xs font-bold uppercase tracking-wider text-slate-500">Class Code</div>
+                    <div class="text-4xl font-mono font-extrabold tracking-widest text-primary-700 bg-slate-50 px-4 py-3 rounded-xl border-2 border-primary-200 mt-1 text-center select-all">
+                      ${esc(formatAccessCode(joinInfo.accessCode || activeCourse.access_code || ''))}
+                    </div>
+                  </div>
+                  <ol class="text-sm text-slate-700 space-y-1.5 list-decimal list-inside">
+                    <li>Scan the QR code, or open <strong>#/student</strong></li>
+                    <li>Enter the 8-character class code above</li>
+                    <li>Enter your Student ID &amp; personal passcode</li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+            <sl-button slot="footer" variant="primary" id="btn-close-projector">Close</sl-button>
+          `;
+          document.body.appendChild(dlg);
+          dlg.show();
+          dlg.querySelector('#btn-close-projector')?.addEventListener('click', () => dlg.hide());
+          dlg.addEventListener('sl-after-hide', (e) => { if (e.target === dlg) dlg.remove(); });
+        };
+      }
+    };
+
+    const mountCoteachers = async () => {
+      const mount = container.querySelector('#coteacher-live-mount');
+      if (!mount) return;
+      try {
+        const st = replication.status();
+        const share = await replication.classShare(activeCourse.id).catch(() => null);
+        const devices = st.personalConfigured ? await replication.listDevices().catch(() => []) : [];
+        mount.innerHTML = `
+          <div class="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5 text-xs">
+            <div class="flex items-center justify-between">
+              <span class="font-medium text-slate-700">Personal Multi-Device Sync</span>
+              <span class="px-2 py-0.5 rounded font-medium ${st.personalConfigured ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-200 text-slate-700'}">
+                ${st.personalConfigured ? `Connected (${devices.length} device${devices.length === 1 ? '' : 's'})` : 'Not configured'}
+              </span>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="font-medium text-slate-700">Co-Teacher Class Share</span>
+              <span class="px-2 py-0.5 rounded font-medium ${share ? 'bg-indigo-100 text-indigo-800' : 'bg-slate-200 text-slate-700'}">
+                ${share ? (share.owner ? 'Sharing (Owner)' : 'Joined as Co-Teacher') : 'Not shared'}
+              </span>
+            </div>
+            ${st.lastSuccessAt ? `
+              <div class="flex items-center justify-between text-slate-500">
+                <span>Last synced</span>
+                <span class="font-mono">${esc(new Date(st.lastSuccessAt).toLocaleString())}</span>
+              </div>
+            ` : ''}
+          </div>
+          <div class="flex flex-wrap items-center gap-2">
+            ${!share ? `
+              <sl-button size="small" variant="primary" id="btn-start-coteacher-share">
+                <sl-icon slot="prefix" name="person-plus"></sl-icon> Share Class with Co-Teacher...
+              </sl-button>
+            ` : `
+              ${share.owner ? `
+                <sl-button size="small" variant="default" id="btn-invite-another-coteacher">
+                  <sl-icon slot="prefix" name="qr-code"></sl-icon> Create Co-Teacher Invite
+                </sl-button>
+              ` : ''}
+              <sl-button size="small" variant="danger" outline id="btn-stop-coteacher-share">
+                <sl-icon slot="prefix" name="x-circle"></sl-icon> Stop Sharing
+              </sl-button>
+            `}
+          </div>
+        `;
+
+        const openSyncModal = async () => {
+          const { openRelayConfigDialog } = await import('../../main.js');
+          openRelayConfigDialog();
+        };
+        mount.querySelector('#btn-start-coteacher-share')?.addEventListener('click', openSyncModal);
+        mount.querySelector('#btn-invite-another-coteacher')?.addEventListener('click', openSyncModal);
+        mount.querySelector('#btn-stop-coteacher-share')?.addEventListener('click', async () => {
+          const ok = await ConfirmDialog.show({
+            title: 'Stop Class Sharing?',
+            message: 'This disconnects the shared co-teacher workspace and rotates the class key for future assignments.',
+            confirmText: 'Stop Sharing',
+            confirmVariant: 'danger'
+          });
+          if (!ok) return;
+          await replication.stopSharing(activeCourse.id);
+          toast.success('Class sharing stopped.');
+          mountCoteachers();
+        });
+      } catch (_) {
+        mount.innerHTML = '<div class="p-4 rounded-xl bg-slate-50 border border-slate-200 text-xs text-slate-500">Replication status unavailable offline.</div>';
+      }
     };
 
     if (activeTab === 'roster') {
       mountRoster();
     } else if (activeTab === 'sharing') {
       mountSharing();
+    } else if (activeTab === 'coteachers') {
+      mountCoteachers();
     }
 
     // Settings Tab Handlers
@@ -566,18 +719,51 @@ export async function renderClassesView(params, router, container) {
     // Sharing Tab Handlers
     container.querySelector('#btn-regen-code')?.addEventListener('click', async () => {
       const confirmed = await ConfirmDialog.show({
-        title: 'Regenerate Access Code',
-        message: 'Regenerating the access code will require new students to use the new code. Existing enrolled students remain intact. Continue?',
-        confirmText: 'Regenerate',
+        title: 'Rotate Class Access Code',
+        message: 'Generates a new 8-character class code and publishes a forwarding stub so already-enrolled students automatically migrate. Continue?',
+        confirmText: 'Rotate Code',
         confirmVariant: 'primary'
       });
       if (!confirmed) return;
 
-      activeCourse.access_code = generateAccessCode();
-      activeCourse.updated_at = new Date().toISOString();
-      await storage.table('gradebook_courses').put(activeCourse);
-      toast.success(`New access code: ${activeCourse.access_code}`);
+      const res = await rotateClassAccessCode(activeCourse.id, { forwardOldCode: true });
+      activeCourse.access_code = res.newCode;
+      toast.success(`New class code: ${res.formattedCode}${res.forwarded ? ' (existing students auto-forwarded)' : ''}`);
       render();
+    });
+
+    container.querySelector('#btn-sync-feed-now')?.addEventListener('click', async () => {
+      const btn = container.querySelector('#btn-sync-feed-now');
+      if (btn) btn.loading = true;
+      const res = await autoSyncCourseFeed(activeCourse.id);
+      if (btn) btn.loading = false;
+      if (res?.synced) {
+        toast.success('Class feed synced to relay!');
+        mountSharing();
+      } else {
+        toast.warning('Relay not configured or offline. Feed will sync when online.');
+      }
+    });
+
+    container.querySelector('#btn-sharing-passcards')?.addEventListener('click', async () => {
+      const ctx = await loadRosterContext(activeCourse.id);
+      if (!ctx) return;
+      const { openStudentPasscardDialog } = await import('../../components/student-passcard-dialog.js');
+      openStudentPasscardDialog({ course: ctx.course, students: ctx.students });
+    });
+
+    container.querySelector('#btn-coteacher-sync-now')?.addEventListener('click', async () => {
+      const btn = container.querySelector('#btn-coteacher-sync-now');
+      if (btn) btn.loading = true;
+      try {
+        await replication.syncNow();
+        toast.success('Sync complete!');
+        mountCoteachers();
+      } catch (err) {
+        toast.error('Sync failed: ' + err.message);
+      } finally {
+        if (btn) btn.loading = false;
+      }
     });
 
     container.querySelector('#btn-copy-join-link')?.addEventListener('click', async () => {

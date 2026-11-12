@@ -107,6 +107,10 @@ export async function publishAssignment(assignment, roster, { handinEmail = '', 
   candidatePayload.publish_version = version;
 
   await storage.table('assignments').put(next);
+  const linkedCourseId = next.class_id || next.gradebook?.course_id;
+  if (linkedCourseId) {
+    import('../../core/course-feed.js').then(m => m.scheduleCourseFeedSync(linkedCourseId)).catch(() => {});
+  }
   return { assignment: next, payload: candidatePayload, keys };
 }
 

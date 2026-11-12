@@ -81,11 +81,21 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
       `)}
       ${sectionCard(`
         <h4 class="text-sm font-semibold text-slate-900">Grading mode</h4>
-        <sl-radio-group id="cs-mode" value="${draft.grading_scale === 'sbg' ? 'sbg' : 'traditional'}">
+        <sl-radio-group id="cs-mode" value="${esc(draft.grading_scale === 'sbg' ? 'sbg' : draft.grading_scale === 'hybrid' ? 'hybrid' : 'traditional')}">
           <sl-radio-button value="traditional">Points &amp; percentages</sl-radio-button>
           <sl-radio-button value="sbg">Standards-based</sl-radio-button>
+          <sl-radio-button value="hybrid">Hybrid (Points + Standards)</sl-radio-button>
         </sl-radio-group>
-        ${helper('Points mode averages weighted categories into a percentage. Standards-based mode reports mastery per standard and converts it to an overall grade on the Standards tab.')}
+        ${draft.grading_scale === 'hybrid' ? `
+          <div class="pt-2 space-y-1.5">
+            <label class="text-xs font-semibold text-slate-700 block">Standards Weight in Overall Grade (%)</label>
+            <div class="flex items-center gap-3">
+              <sl-input id="cs-hybrid-weight" type="number" min="0" max="100" step="5" size="small" class="w-28" value="${esc(draft.sbg_config?.hybrid_standards_weight_pct ?? 50)}"></sl-input>
+              <span class="text-xs text-slate-500">0% = Dual reporting (points grade + standards tracked separately); 50% = equal blend.</span>
+            </div>
+          </div>
+        ` : ''}
+        ${helper('Points mode averages weighted categories. Standards-based mode reports mastery per standard. Hybrid mode combines both or tracks standards alongside points.')}
       `)}
     </div>`;
 
@@ -432,7 +442,14 @@ export function openCourseSettingsDialog({ course, otherCourses = [], initialTab
     dialog.querySelector('#cs-name')?.addEventListener('sl-input', e => { draft.name = e.target.value; });
     dialog.querySelector('#cs-section')?.addEventListener('sl-input', e => { draft.section = e.target.value; });
     dialog.querySelector('#cs-year')?.addEventListener('sl-input', e => { draft.academic_year = e.target.value; });
-    dialog.querySelector('#cs-mode')?.addEventListener('sl-change', e => { draft.grading_scale = e.target.value; });
+    dialog.querySelector('#cs-mode')?.addEventListener('sl-change', e => {
+      draft.grading_scale = e.target.value;
+      render();
+    });
+    dialog.querySelector('#cs-hybrid-weight')?.addEventListener('sl-input', e => {
+      draft.sbg_config = draft.sbg_config || {};
+      draft.sbg_config.hybrid_standards_weight_pct = Math.min(100, Math.max(0, Number(e.target.value) || 0));
+    });
     dialog.querySelectorAll('.cs-term-name').forEach(inp => inp.addEventListener('sl-input', () => { draft.terms[Number(inp.dataset.i)].name = inp.value; }));
     dialog.querySelectorAll('.cs-del-term').forEach(b => b.addEventListener('click', () => { draft.terms.splice(Number(b.dataset.i), 1); render(); }));
     dialog.querySelector('#cs-add-term')?.addEventListener('click', () => { draft.terms.push({ id: generateUUID(), name: `Term ${draft.terms.length + 1}` }); render(); });

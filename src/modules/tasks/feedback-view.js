@@ -129,19 +129,27 @@ export async function renderTaskFeedbackView(params = {}, router = null, contain
         </section>
       ` : ''}
 
-      <!-- Overall Teacher Feedback -->
-      ${p.overall_feedback ? `
-        <section class="bg-indigo-50/70 rounded-2xl border border-indigo-200 p-5 space-y-2 shadow-2xs">
+      <!-- Overall Teacher Feedback & Voice Note -->
+      ${(p.overall_feedback || p.audio_note || p.grade?.audio_note) ? `
+        <section class="bg-indigo-50/70 rounded-2xl border border-indigo-200 p-5 space-y-3 shadow-2xs">
           <h2 class="text-xs font-bold uppercase tracking-wider text-indigo-900 flex items-center gap-1.5">
             <sl-icon name="chat-square-quote"></sl-icon> Teacher Feedback
           </h2>
-          <div class="text-sm text-indigo-950 font-sans leading-relaxed whitespace-pre-wrap">
-            ${Sanitizer.renderSTEMMarkdown(p.overall_feedback)}
-          </div>
+          ${p.overall_feedback ? `
+            <div class="text-sm text-indigo-950 font-sans leading-relaxed whitespace-pre-wrap">
+              ${Sanitizer.renderSTEMMarkdown(p.overall_feedback)}
+            </div>
+          ` : ''}
+          ${(p.audio_note || p.grade?.audio_note) ? `
+            <div class="pt-1">
+              <div class="text-[11px] font-semibold text-indigo-800 mb-1 flex items-center gap-1"><sl-icon name="mic-fill"></sl-icon> Voice Feedback</div>
+              <audio controls src="${esc(p.audio_note || p.grade?.audio_note)}" class="w-full h-9"></audio>
+            </div>
+          ` : ''}
         </section>
       ` : ''}
 
-      <!-- Rubric Evaluation Breakdown -->
+      <!-- Rubric Evaluation Breakdown (Visual Matrix) -->
       ${rubric ? `
         <section class="bg-white rounded-2xl border border-slate-200 p-5 space-y-4 shadow-2xs">
           <h2 class="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
@@ -156,17 +164,34 @@ export async function renderTaskFeedbackView(params = {}, router = null, contain
               const comment = rubric.comments?.[c.id];
 
               return `
-                <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
-                  <div class="flex items-center justify-between">
+                <div class="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-2.5">
+                  <div class="flex items-center justify-between gap-2">
                     <span class="text-sm font-semibold text-slate-900">${esc(c.name)}</span>
                     ${selectedTier ? `
-                      <span class="px-2.5 py-1 rounded-lg bg-indigo-100 text-indigo-800 text-xs font-bold">
+                      <span class="px-2.5 py-1 rounded-lg bg-indigo-600 text-white text-xs font-bold">
                         ${esc(selectedTier.label)} (${num(pts)} pts)
                       </span>
                     ` : '<span class="text-xs text-slate-400">Not graded</span>'}
                   </div>
-                  ${cell?.descriptor ? `<p class="text-xs text-slate-600 leading-snug">${esc(cell.descriptor)}</p>` : ''}
-                  ${comment ? `<p class="text-xs text-indigo-900 bg-white p-2 rounded-lg border border-indigo-100 italic">Teacher note: ${esc(comment)}</p>` : ''}
+                  ${(rubric.tiers || []).length ? `
+                    <div class="grid grid-cols-1 sm:grid-cols-${Math.min(4, rubric.tiers.length)} gap-1.5">
+                      ${(rubric.tiers || []).map(t => {
+                        const isPicked = t.id === selectedTierId;
+                        const tCell = c.cells?.[t.id];
+                        const tPts = tCell?.points ?? t.default_points ?? 0;
+                        return `
+                          <div class="p-2 rounded-lg border text-[11px] ${isPicked ? 'bg-indigo-50 border-indigo-400 ring-1 ring-indigo-300 text-indigo-950' : 'bg-white border-slate-200 text-slate-500'}">
+                            <div class="font-semibold flex items-center justify-between gap-1 ${isPicked ? 'text-indigo-800' : 'text-slate-600'}">
+                              <span>${esc(t.label)}</span>
+                              <span class="font-mono">${num(tPts)}</span>
+                            </div>
+                            ${tCell?.descriptor ? `<p class="mt-1 leading-snug">${esc(tCell.descriptor)}</p>` : ''}
+                          </div>
+                        `;
+                      }).join('')}
+                    </div>
+                  ` : ''}
+                  ${comment ? `<p class="text-xs text-indigo-900 bg-white p-2.5 rounded-lg border border-indigo-200 italic">Teacher note: ${esc(comment)}</p>` : ''}
                 </div>
               `;
             }).join('')}

@@ -502,6 +502,62 @@ export async function renderTaskTake(params = {}, router = null, container = nul
           </div>
         ` : ''}
 
+        <!-- Grading Rubric & Standards Preview -->
+        ${(payload.rubric || (payload.standards && payload.standards.length)) ? `
+          <details class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs group">
+            <summary class="flex items-center justify-between cursor-pointer list-none select-none">
+              <div class="flex items-center gap-2">
+                <sl-icon name="grid-3x3" class="text-indigo-600"></sl-icon>
+                <span class="text-sm font-semibold text-slate-900">
+                  ${payload.rubric ? `Grading Rubric: ${esc(payload.rubric.title)}` : 'Aligned Learning Standards'}
+                </span>
+              </div>
+              <span class="text-xs text-indigo-600 font-medium group-open:hidden">Show expectations</span>
+              <span class="text-xs text-slate-400 font-medium hidden group-open:inline">Hide</span>
+            </summary>
+            <div class="mt-4 pt-4 border-t border-slate-100 space-y-4">
+              ${(payload.standards && payload.standards.length) ? `
+                <div class="flex flex-wrap gap-2">
+                  ${payload.standards.map(s => `
+                    <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-900" title="${esc(s.description || '')}">
+                      <strong>${esc(s.code)}</strong>
+                      ${s.description ? `<span class="text-indigo-700 truncate max-w-xs">${esc(s.description)}</span>` : ''}
+                    </span>
+                  `).join('')}
+                </div>
+              ` : ''}
+              ${payload.rubric ? `
+                <div class="overflow-x-auto">
+                  <table class="w-full text-xs border-collapse">
+                    <thead>
+                      <tr class="bg-slate-50 text-slate-600">
+                        <th class="text-left p-2.5 border border-slate-200 font-semibold">Criterion</th>
+                        ${(payload.rubric.tiers || []).map(t => `
+                          <th class="text-left p-2.5 border border-slate-200 font-semibold">${esc(t.label)} <span class="font-normal text-slate-400">(${esc(t.default_points)} pts)</span></th>
+                        `).join('')}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      ${(payload.rubric.criteria || []).map(c => `
+                        <tr>
+                          <td class="p-2.5 border border-slate-200 font-semibold text-slate-800 align-top">
+                            ${esc(c.name)}
+                            ${c.weight && c.weight !== 1 ? `<div class="text-[10px] font-normal text-slate-400">Weight: ${esc(c.weight)}×</div>` : ''}
+                          </td>
+                          ${(payload.rubric.tiers || []).map(t => {
+                            const cell = c.cells?.[t.id];
+                            return `<td class="p-2.5 border border-slate-200 text-slate-600 align-top">${esc(cell?.descriptor || '—')}</td>`;
+                          }).join('')}
+                        </tr>
+                      `).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              ` : ''}
+            </div>
+          </details>
+        ` : ''}
+
         <!-- 1. Text Section -->
         ${hasText ? `
           <div class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-3">

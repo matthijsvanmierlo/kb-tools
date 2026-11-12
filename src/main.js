@@ -73,8 +73,13 @@ async function loadRubricRoute(params, router, container) {
       router.navigate(returnTo);
     }
   } else {
-    router.navigate('#/gradebook');
+    router.navigate('#/rubrics');
   }
+}
+
+async function loadRubricStudioModule(...args) {
+  const mod = await import('./modules/rubrics/index.js');
+  return mod.renderRubricStudio(...args);
 }
 
 async function loadStudentReportModule(...args) {
@@ -183,6 +188,7 @@ async function bootstrapApp() {
     router.register('#/video/edit', loadVideoModule);
     router.register('#/video/kiosk', loadVideoModule);
     router.register('#/gradebook', loadGradebookModule);
+    router.register('#/rubrics', loadRubricStudioModule);
     router.register('#/rubrics/new', loadRubricRoute);
     router.register('#/rubrics/edit', loadRubricRoute);
     router.register('#/classes', loadClassesModule);

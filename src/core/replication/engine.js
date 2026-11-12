@@ -157,14 +157,22 @@ export class ReplicationEngine {
   async _courseOf(table, record, scope) {
     const s = scope || scopeOf(table, record);
     if (!s) return null;
-    if (s.course_id !== undefined) return s.course_id;
+    if (s.course_id) return s.course_id;
     if (s.assignment_id) {
       if (!this._assignmentCourse) this._assignmentCourse = new Map();
       if (!this._assignmentCourse.has(s.assignment_id)) {
         const a = await this.store.getByChangeKey('assignments', s.assignment_id);
-        this._assignmentCourse.set(s.assignment_id, a?.class_id || null);
+        this._assignmentCourse.set(s.assignment_id, a?.class_id || a?.gradebook?.course_id || null);
       }
       return this._assignmentCourse.get(s.assignment_id);
+    }
+    if (s.task_id) {
+      if (!this._taskCourse) this._taskCourse = new Map();
+      if (!this._taskCourse.has(s.task_id)) {
+        const t = await this.store.getByChangeKey('tasks', s.task_id);
+        this._taskCourse.set(s.task_id, t?.class_id || t?.gradebook?.course_id || null);
+      }
+      return this._taskCourse.get(s.task_id);
     }
     return null;
   }
@@ -175,11 +183,28 @@ export class ReplicationEngine {
     if (!this.courseId) return true;
     let scope = op.scope;
     if (incoming) {
-      scope = op.op === 'put'
-        ? scopeOf(op.table, op.record)
-        : scopeOf(op.table, await this.store.getByChangeKey(op.table, op.key));
+      const localRec = op.op === 'put' ? op.record : await this.store.getByChangeKey(op.table, op.key);
+      scope = scopeOf(op.table, localRec) || op.scope || null;
+    }
+    if (op.table === 'gradebook_rubrics' && op.op === 'put' && op.record && !op.record.course_id) {
+      // Allow shared/global rubrics referenced by this course
+      if (await this._isRubricUsedInCourse(op.record.id)) return true;
     }
     return (await this._courseOf(op.table, op.record, scope)) === this.courseId;
+  }
+
+  async _isRubricUsedInCourse(rubricId) {
+    if (!rubricId || !this.courseId) return false;
+    const [gbAsgs, asgs, tasks] = await Promise.all([
+      this.store.table('gradebook_assignments').toArray().catch(() => []),
+      this.store.table('assignments').toArray().catch(() => []),
+      this.store.table('tasks').toArray().catch(() => [])
+    ]);
+    if (gbAsgs.some(a => a.course_id === this.courseId && a.rubric_id === rubricId)) return true;
+    if (asgs.some(a => (a.class_id || a.gradebook?.course_id) === this.courseId &&
+      (a.rubric_id === rubricId || (a.questions || []).some(q => q.rubric_id === rubricId)))) return true;
+    if (tasks.some(t => (t.class_id || t.gradebook?.course_id) === this.courseId && t.grading?.rubric_id === rubricId)) return true;
+    return false;
   }
 
   // ---------------------------------------------------------------------------
@@ -599,8 +624,43 @@ export class ReplicationEngine {
   async writeSnapshot({ extra = null } = {}) {
     const createdAt = new Date().toISOString();
     const tables = {};
+    let scopeCtx = null;
+
+    if (this.courseId) {
+      const [asgs, tasks, gbAsgs] = await Promise.all([
+        this.store.table('assignments').toArray().catch(() => []),
+        this.store.table('tasks').toArray().catch(() => []),
+        this.store.table('gradebook_assignments').toArray().catch(() => [])
+      ]);
+      const assignmentIds = new Set();
+      const taskIds = new Set();
+      const rubricIds = new Set();
+
+      for (const a of asgs) {
+        if ((a.class_id || a.gradebook?.course_id) === this.courseId) {
+          assignmentIds.add(a.id);
+          if (a.rubric_id) rubricIds.add(a.rubric_id);
+          for (const q of a.questions || []) {
+            if (q.rubric_id) rubricIds.add(q.rubric_id);
+          }
+        }
+      }
+      for (const t of tasks) {
+        if ((t.class_id || t.gradebook?.course_id) === this.courseId) {
+          taskIds.add(t.id);
+          if (t.grading?.rubric_id) rubricIds.add(t.grading.rubric_id);
+        }
+      }
+      for (const ga of gbAsgs) {
+        if (ga.course_id === this.courseId && ga.rubric_id) {
+          rubricIds.add(ga.rubric_id);
+        }
+      }
+      scopeCtx = { assignmentIds, taskIds, rubricIds };
+    }
+
     for (const t of SYNC_TABLES) {
-      const rows = (await this.store.table(t).toArray()).filter(r => this._inScopeSync(t, r));
+      const rows = (await this.store.table(t).toArray()).filter(r => this._inScopeSync(t, r, scopeCtx));
       if (rows.length) tables[t] = rows;
     }
 
@@ -641,8 +701,13 @@ export class ReplicationEngine {
       }
     }
 
-    // 2. Apply table records
-    for (const [t, rows] of Object.entries(data.tables || {})) {
+    // 2. Apply table records (parents before dependent tables so _inScope resolves references)
+    const tableOrder = Object.keys(data.tables || {}).sort((a, b) => {
+      const rank = (t) => (t === 'gradebook_rubrics' || t === 'assignment_submissions' || t === 'task_submissions') ? 1 : 0;
+      return rank(a) - rank(b);
+    });
+    for (const t of tableOrder) {
+      const rows = data.tables[t] || [];
       if (!SYNCED.has(t)) continue;
       for (const record of rows) {
         const key = t === 'gradebook_grades' ? [record.student_id, record.assignment_id] : record.id;
@@ -669,10 +734,17 @@ export class ReplicationEngine {
     return { applied };
   }
 
-  _inScopeSync(table, record) {
+  _inScopeSync(table, record, ctx = null) {
     if (!this.courseId) return true;
+    if (!record) return false;
     if (table === 'gradebook_courses') return record.id === this.courseId;
-    return (record.course_id || record.class_id || record.gradebook?.course_id) === this.courseId;
+    if ((record.course_id || record.class_id || record.gradebook?.course_id) === this.courseId) return true;
+    if (ctx) {
+      if (table === 'assignment_submissions' && record.assignment_id && ctx.assignmentIds?.has(record.assignment_id)) return true;
+      if (table === 'task_submissions' && record.task_id && ctx.taskIds?.has(record.task_id)) return true;
+      if (table === 'gradebook_rubrics' && !record.course_id && ctx.rubricIds?.has(record.id)) return true;
+    }
+    return false;
   }
 
   async pruneOwnChunks(throughSeq) {

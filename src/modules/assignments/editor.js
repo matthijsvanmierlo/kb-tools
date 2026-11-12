@@ -69,6 +69,10 @@ export async function renderEditor(assignment, router, container, params = {}) {
     const run = async () => {
       a.updated_at = new Date().toISOString();
       await storage.table('assignments').put(JSON.parse(JSON.stringify(a)));
+      const cid = resolveAssignmentCourseId(a);
+      if (cid && a.publish?.published_at) {
+        import('../../core/course-feed.js').then(m => m.scheduleCourseFeedSync(cid)).catch(() => {});
+      }
       setSaveState('Saved');
       updateSummary();
     };
@@ -397,6 +401,11 @@ export async function renderEditor(assignment, router, container, params = {}) {
           </div>
           <div data-type-body>${typeBody(q)}</div>
           ${q.type !== 'long_text' ? `<sl-input size="small" data-explanation label="Explanation (shown after answering, optional)" value="${esc(q.explanation || '')}"></sl-input>` : ''}
+          ${(linkedCourse()?.standards || []).length ? `
+            <sl-select size="small" multiple clearable data-q-standards label="Aligned Standards (optional)" placeholder="Tag standards..." value="${(q.standard_ids || []).map(esc).join(' ')}">
+              ${(linkedCourse().standards || []).map(s => `<sl-option value="${esc(s.id)}">${esc(s.code)} — ${esc(s.description || '')}</sl-option>`).join('')}
+            </sl-select>
+          ` : ''}
           ${issues.length ? `<p class="text-xs text-amber-700 flex items-center gap-1.5" data-issues><sl-icon name="exclamation-triangle"></sl-icon>${esc(issues.join(' '))}</p>` : '<p class="hidden" data-issues></p>'}
         </div>
       </article>`;
@@ -496,6 +505,11 @@ export async function renderEditor(assignment, router, container, params = {}) {
     const touch = () => { save(); refreshIssues(card, q); };
 
     card.querySelector('[data-points]').addEventListener('sl-input', (e) => { q.points = Math.max(0, Number(e.target.value) || 0); save(); });
+    card.querySelector('[data-q-standards]')?.addEventListener('sl-change', (e) => {
+      const val = e.target.value;
+      q.standard_ids = Array.isArray(val) ? val.filter(Boolean) : (val ? String(val).split(/\s+/).filter(Boolean) : []);
+      save();
+    });
 
     const prompt = card.querySelector('[data-prompt]');
     prompt.addEventListener('sl-input', () => {

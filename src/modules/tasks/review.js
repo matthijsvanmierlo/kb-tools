@@ -639,13 +639,24 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
         sub.review.rubric_eval[crit] = tier;
       }
 
-      // Re-calculate scaled score
+      // Re-calculate scaled score & auto-derive criterion-linked standard scores
       if (rubric) {
         const sc = RubricScorer.calculateScore(rubric, sub.review.rubric_eval);
-        if (sc.totalPossible > 0) {
-          const scaled = round1((sc.totalEarned / sc.totalPossible) * maxScore);
-          sub.review.points = scaled;
-          if (scoreInput) scoreInput.value = scaled;
+        if (sc.totalPossible > 0 && Object.keys(sub.review.rubric_eval).length > 0) {
+          if (isProficiency) {
+            const pct = (sc.totalEarned / sc.totalPossible) * 100;
+            const matched = sbgLevels.find(l => l.min_pct !== undefined && pct >= Number(l.min_pct)) ||
+              sbgLevels[Math.min(sbgLevels.length - 1, Math.max(0, Math.round((1 - pct / 100) * (sbgLevels.length - 1))))];
+            if (matched) sub.review.points = Number(matched.value);
+          } else {
+            const scaled = round1((sc.totalEarned / sc.totalPossible) * maxScore);
+            sub.review.points = scaled;
+            if (scoreInput) scoreInput.value = scaled;
+          }
+        }
+        const derivedStds = RubricScorer.deriveStandardScores(rubric, sub.review.rubric_eval, sbgLevels);
+        if (Object.keys(derivedStds).length > 0) {
+          sub.review.standard_scores = { ...(sub.review.standard_scores || {}), ...derivedStds };
         }
       }
 

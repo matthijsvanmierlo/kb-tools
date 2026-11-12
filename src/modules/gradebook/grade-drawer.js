@@ -158,10 +158,26 @@ export class GradeDetailsDrawer {
     };
 
     const applyRubricToScore = () => {
-      if (!rubric || isProficiency) return;
+      if (!rubric) return;
+      const hasEval = Object.keys(state.rubric_eval || {}).length > 0;
+      if (!hasEval) return;
+
       const score = RubricScorer.calculateScore(rubric, state.rubric_eval);
-      if (score.totalPossible > 0 && Object.keys(state.rubric_eval).length > 0) {
-        state.raw_score = round1((score.totalEarned / score.totalPossible) * maxScore);
+      if (score.totalPossible > 0) {
+        if (isProficiency) {
+          const pct = (score.totalEarned / score.totalPossible) * 100;
+          const sortedLvls = [...sbgLevels].sort((a, b) => Number(b.value) - Number(a.value));
+          const matched = sortedLvls.find(l => l.min_pct !== undefined && pct >= Number(l.min_pct)) ||
+            sortedLvls[Math.min(sortedLvls.length - 1, Math.max(0, Math.round((1 - pct / 100) * (sortedLvls.length - 1))))];
+          if (matched) state.raw_score = Number(matched.value);
+        } else {
+          state.raw_score = round1((score.totalEarned / score.totalPossible) * maxScore);
+        }
+      }
+
+      const derivedStds = RubricScorer.deriveStandardScores(rubric, state.rubric_eval, sbgLevels);
+      if (Object.keys(derivedStds).length > 0) {
+        state.standard_scores = { ...(state.standard_scores || {}), ...derivedStds };
       }
     };
 

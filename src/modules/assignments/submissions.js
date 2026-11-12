@@ -1044,13 +1044,15 @@ export async function renderSubmissions(assignment, router, container) {
     const eligible = list.filter(s => s.is_latest !== false && rosterById.has(String(s.student_id).toUpperCase()));
     if (!eligible.length) { toast.info('Nothing to sync.'); return; }
     try {
+      const questionStdIds = Array.from(new Set((a.questions || []).flatMap(q => q.standard_ids || [])));
       const column = await GradebookBridge.upsertLinkedColumn({
         courseId: course.id,
         source: { type: 'assignment', id: a.id },
         title: a.title,
         maxScore: totalPoints(a),
         categoryId: a.gradebook?.category_id || undefined,
-        dueDate: a.settings?.due_date || undefined
+        dueDate: a.settings?.due_date || undefined,
+        standardIds: questionStdIds.length ? questionStdIds : undefined
       });
       if (a.gradebook?.column_id !== column.id) {
         a.gradebook = { ...(a.gradebook || {}), course_id: course.id, column_id: column.id };
@@ -1058,6 +1060,7 @@ export async function renderSubmissions(assignment, router, container) {
       }
       const now = new Date().toISOString();
       let pending = 0;
+      const { computeQuestionStandardScores } = await import('../gradebook/bridge.js');
       for (const sub of eligible) {
         const student = rosterById.get(String(sub.student_id).toUpperCase());
         const s = finalScore(a, sub);
@@ -1069,6 +1072,7 @@ export async function renderSubmissions(assignment, router, container) {
           feedbackLinkUrl = fbRes?.url;
         } catch (_) {}
 
+        const autoStdScores = computeQuestionStandardScores(a, sub, course);
         await GradebookBridge.writeGrade({
           courseId: course.id,
           assignmentId: column.id,
@@ -1079,7 +1083,8 @@ export async function renderSubmissions(assignment, router, container) {
           extra: {
             days_late: sub.days_late || undefined,
             source_submission_id: sub.id,
-            feedback_link: feedbackLinkUrl
+            feedback_link: feedbackLinkUrl,
+            ...(Object.keys(autoStdScores).length ? { standard_scores: autoStdScores } : {})
           }
         });
         sub.synced_at = now;

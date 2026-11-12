@@ -120,6 +120,26 @@ export class RelayTransport extends SyncTransport {
     this.baseUrl = (config.baseUrl || '').replace(/\/+$/, '');
     this.token = config.token || '';
     this.teacherId = config.teacherId || '';
+    if (!config.deviceId && storage && !storage.deviceId && typeof storage.init === 'function') {
+      try { await storage.init(); } catch (_) {}
+    }
+    this.deviceId = config.deviceId || storage?.deviceId || '';
+    if (config.deviceToken) {
+      this.deviceToken = config.deviceToken;
+    } else {
+      try {
+        let tok = await storage.getMetadata('relay_device_token');
+        if (!tok) {
+          const bytes = new Uint8Array(32);
+          crypto.getRandomValues(bytes);
+          tok = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+          await storage.setMetadata('relay_device_token', tok);
+        }
+        this.deviceToken = tok;
+      } catch (_) {
+        this.deviceToken = '';
+      }
+    }
     return this;
   }
 

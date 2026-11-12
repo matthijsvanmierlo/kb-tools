@@ -1144,7 +1144,7 @@ export function createRelayFetchHandler(options = {}) {
         if (!DRAFT_ID_RE.test(draftId)) {
           return error(400, 'Invalid draft id');
         }
-        if (!draftLimiter.isAllowed(clientIp)) {
+        if (!draftLimiter.isAllowed(`${clientIp}:${dropId}:${draftId}`)) {
           return error(429, 'Rate limit exceeded. Please wait a minute.');
         }
         const drop = await db.drops.get(dropId);
@@ -1188,7 +1188,7 @@ export function createRelayFetchHandler(options = {}) {
         if (!cdnEnabled) {
           return error(501, 'Media CDN offloading is not configured on this relay server');
         }
-        if (!draftLimiter.isAllowed(clientIp)) {
+        if (!draftLimiter.isAllowed(`${clientIp}:${dropId}:media`)) {
           return error(429, 'Rate limit exceeded. Please wait a minute.');
         }
         const drop = await db.drops.get(dropId);

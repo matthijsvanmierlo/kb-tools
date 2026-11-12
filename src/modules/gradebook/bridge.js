@@ -7,6 +7,53 @@ import { generateUUID } from '../../utils/uuid.js';
  * The one place other modules (Assignments, Video receipts) write into the gradebook. Keeps the
  * column ↔ source link (`source: { type, id }`) so re-importing updates the same column.
  */
+/**
+ * Compute per-standard proficiency scores from per-question standard_ids on an assessment submission.
+ * Maps the percentage earned on questions tagged with each standard to the course's SBG proficiency levels.
+ * @param {object} assignment
+ * @param {object} submission
+ * @param {object} course
+ * @returns {Record<string, number>}
+ */
+export function computeQuestionStandardScores(assignment, submission, course) {
+  const out = {};
+  const questions = assignment?.questions || [];
+  if (!questions.length || !submission || !course) return out;
+
+  const byStd = new Map();
+  for (const q of questions) {
+    const stdIds = q.standard_ids || [];
+    if (!stdIds.length) continue;
+    const auto = submission.auto?.per_question?.[q.id] || { earned: 0, possible: Number(q.points) || 0 };
+    const manual = submission.manual?.[q.id];
+    const earned = (manual?.points !== undefined && manual?.points !== null) ? Number(manual.points) : Number(auto.earned || 0);
+    const possible = Number(auto.possible || q.points || 0);
+    for (const sid of stdIds) {
+      const acc = byStd.get(sid) || { earned: 0, possible: 0 };
+      acc.earned += earned;
+      acc.possible += possible;
+      byStd.set(sid, acc);
+    }
+  }
+
+  if (byStd.size === 0) return out;
+  const levels = [...(course.sbg_config?.levels || [
+    { value: 4, label: 'Exemplary', min_pct: 90 },
+    { value: 3, label: 'Proficient', min_pct: 75 },
+    { value: 2, label: 'Developing', min_pct: 55 },
+    { value: 1, label: 'Beginning', min_pct: 0 }
+  ])].sort((a, b) => Number(b.value) - Number(a.value));
+
+  for (const [sid, acc] of byStd.entries()) {
+    if (acc.possible <= 0) continue;
+    const pct = (acc.earned / acc.possible) * 100;
+    const matched = levels.find(l => l.min_pct !== undefined && pct >= Number(l.min_pct)) ||
+      levels[Math.min(levels.length - 1, Math.max(0, Math.round((1 - pct / 100) * (levels.length - 1))))];
+    if (matched) out[sid] = Number(matched.value);
+  }
+  return out;
+}
+
 export class GradebookBridge {
   /**
    * Find or create the gradebook column linked to an external source.
@@ -266,7 +313,7 @@ export async function reconcileCourseItemsForClass(courseId) {
   // Ensure course has access_code
   if (!course.access_code) {
     const { AccessCodes } = await import('../../core/access-codes.js');
-    course.access_code = AccessCodes.generateCode();
+    course.access_code = AccessCodes.generateClassCode();
     await storage.table('gradebook_courses').put(course);
   }
 

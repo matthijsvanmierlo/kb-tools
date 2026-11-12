@@ -12,7 +12,7 @@ import {
  * Per-student course summary used by the grid, the standards view, PDF reports and the
  * student's encrypted grade report, so every surface shows the same numbers.
  *
- * @returns {{ mode: 'traditional'|'sbg', score: number|null, letter: string, mastery: number|null, standards: Map|null }}
+ * @returns {{ mode: 'traditional'|'sbg'|'hybrid', score: number|null, letter: string, mastery: number|null, standards: Map|null }}
  */
 export function computeStudentSummary(student, course, assignments, gradesMap) {
   const records = new Map();
@@ -21,35 +21,76 @@ export function computeStudentSummary(student, course, assignments, gradesMap) {
     if (rec) records.set(a.id, rec);
   }
 
-  if (course.grading_scale === 'sbg') {
-    const standards = computeStudentStandards(student.student_id, course, assignments, gradesMap);
-    let mastery = computeOverallMastery(standards);
+  const hasStandards = getStandards(course).length > 0;
+  const mode = course.grading_scale === 'sbg'
+    ? 'sbg'
+    : course.grading_scale === 'hybrid'
+      ? 'hybrid'
+      : 'traditional';
 
-    // Classes without a standards list: use proficiency-scored work as general evidence
-    if (mastery === null && getStandards(course).length === 0) {
-      const ordered = [...assignments]
-        .filter(a => a.scoring === 'proficiency')
-        .sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
-      const scores = ordered
-        .map(a => records.get(a.id))
-        .filter(r => r && r.status !== 'exempt' && r.raw_score !== null && r.raw_score !== undefined)
-        .map(r => Number(r.raw_score));
-      mastery = computeStandardMastery(scores, course);
-    }
+  const standards = (mode === 'sbg' || mode === 'hybrid' || hasStandards)
+    ? computeStudentStandards(student.student_id, course, assignments, gradesMap)
+    : null;
 
-    if (mastery !== null) {
-      const grade = masteryToGrade(mastery, course);
-      return { mode: 'sbg', score: grade.percent, letter: grade.letter, mastery, standards };
-    }
+  let mastery = standards ? computeOverallMastery(standards) : null;
+  // Classes without a standards list: use proficiency-scored work as general evidence
+  if (mastery === null && (mode === 'sbg' || mode === 'hybrid') && !hasStandards) {
+    const ordered = [...assignments]
+      .filter(a => a.scoring === 'proficiency')
+      .sort((a, b) => (a.due_date || '').localeCompare(b.due_date || ''));
+    const scores = ordered
+      .map(a => records.get(a.id))
+      .filter(r => r && r.status !== 'exempt' && r.raw_score !== null && r.raw_score !== undefined)
+      .map(r => Number(r.raw_score));
+    mastery = computeStandardMastery(scores, course);
+  }
+
+  if (mode === 'sbg' && mastery !== null) {
+    const grade = masteryToGrade(mastery, course);
+    return { mode: 'sbg', score: grade.percent, letter: grade.letter, mastery, standards };
   }
 
   const pct = GradebookMathEngine.computeTraditionalWeighted(records, assignments, course.categories || []);
+
+  if (mode === 'hybrid') {
+    const stdWeight = Math.min(100, Math.max(0, Number(course.sbg_config?.hybrid_standards_weight_pct ?? 50)));
+    if (mastery !== null) {
+      const stdGrade = masteryToGrade(mastery, course);
+      let finalPct = pct;
+      if (stdWeight > 0) {
+        if (pct !== null && stdGrade.percent !== null) {
+          finalPct = Math.round(((pct * (100 - stdWeight) + stdGrade.percent * stdWeight) / 100) * 10) / 10;
+        } else if (stdGrade.percent !== null) {
+          finalPct = stdGrade.percent;
+        }
+      }
+      return {
+        mode: 'hybrid',
+        score: finalPct,
+        letter: letterForPercent(finalPct, course),
+        mastery,
+        standards,
+        points_score: pct,
+        standards_percent: stdGrade.percent
+      };
+    }
+    return {
+      mode: 'hybrid',
+      score: pct,
+      letter: letterForPercent(pct, course),
+      mastery: null,
+      standards,
+      points_score: pct,
+      standards_percent: null
+    };
+  }
+
   return {
-    mode: course.grading_scale === 'sbg' ? 'sbg' : 'traditional',
+    mode,
     score: pct,
     letter: letterForPercent(pct, course),
-    mastery: null,
-    standards: course.grading_scale === 'sbg' ? computeStudentStandards(student.student_id, course, assignments, gradesMap) : null
+    mastery,
+    standards
   };
 }
 
