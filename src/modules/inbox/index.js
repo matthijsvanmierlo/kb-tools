@@ -151,6 +151,9 @@ export async function renderInboxView(params, router, container) {
               <sl-button size="small" id="btn-check-server">
                 <sl-icon slot="prefix" name="cloud-download"></sl-icon> Check server
               </sl-button>
+              <sl-button size="small" variant="primary" outline id="btn-pull-auto-import">
+                <sl-icon slot="prefix" name="lightning-charge"></sl-icon> Pull &amp; Auto-Import
+              </sl-button>
             ` : ''}
             <sl-button size="small" id="btn-scan-qr">
               <sl-icon slot="prefix" name="qr-code-scan"></sl-icon> Scan QR codes
@@ -305,11 +308,33 @@ export async function renderInboxView(params, router, container) {
     const pasteBtn = container.querySelector('#btn-paste-codes');
     const verifyReceiptBtn = container.querySelector('#btn-verify-receipt');
     const checkServerBtn = container.querySelector('#btn-check-server');
+    const pullAutoImportBtn = container.querySelector('#btn-pull-auto-import');
     const clearBtn = container.querySelector('#btn-clear-staged');
     const importBtn = container.querySelector('#btn-import-all');
 
     verifyReceiptBtn?.addEventListener('click', () => {
       openVerifyReceiptDialog();
+    });
+
+    // Auto-stage any background-polled relay submissions waiting in metadata
+    storage.getMetadata('relay_staged_submissions').then(async (queued) => {
+      if (Array.isArray(queued) && queued.length > 0) {
+        await storage.setMetadata('relay_staged_submissions', []);
+        await classifyAndStage(queued);
+        if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('kb-relay-submissions-staged', { detail: { count: 0 } }));
+      }
+    }).catch(() => {});
+
+    pullAutoImportBtn?.addEventListener('click', async () => {
+      pullAutoImportBtn.loading = true;
+      try {
+        checkServerBtn?.click();
+        setTimeout(() => {
+          container.querySelector('#btn-import-all')?.click();
+        }, 600);
+      } finally {
+        pullAutoImportBtn.loading = false;
+      }
     });
 
     checkServerBtn?.addEventListener('click', async () => {

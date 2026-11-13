@@ -151,10 +151,20 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
         </div>
       ` : ''}
 
+      <!-- Mobile Pane Switcher (< 768px) -->
+      <div class="flex md:hidden border-b border-slate-200 bg-slate-100 p-1 gap-1 flex-shrink-0" id="review-mobile-pane-bar">
+        <button type="button" id="btn-mob-pane-work" class="flex-1 py-2 px-3 rounded-lg text-xs font-bold bg-white text-indigo-700 shadow-xs flex items-center justify-center gap-1.5 transition-all">
+          <sl-icon name="file-earmark-richtext"></sl-icon> Student Work
+        </button>
+        <button type="button" id="btn-mob-pane-grade" class="flex-1 py-2 px-3 rounded-lg text-xs font-bold text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5 transition-all">
+          <sl-icon name="check2-square"></sl-icon> Grade &amp; Feedback
+        </button>
+      </div>
+
       <!-- Main Dual Pane View -->
       <div class="flex-1 flex flex-col md:flex-row overflow-hidden">
         <!-- Left Pane: Student Submission Workspace -->
-        <div class="flex-1 flex flex-col bg-white border-r border-slate-200 overflow-hidden">
+        <div id="review-work-pane" class="flex-1 flex flex-col bg-white border-r border-slate-200 overflow-hidden">
           <!-- Submission Tabs -->
           <div class="flex items-center gap-1 px-4 pt-3 border-b border-slate-200 bg-slate-50 flex-shrink-0 overflow-x-auto" id="review-tabs">
             ${textResponse ? `
@@ -180,7 +190,7 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
           </div>
 
           <!-- Tab Panels Container -->
-          <div class="flex-1 overflow-y-auto p-6" id="review-panels">
+          <div class="flex-1 overflow-y-auto p-6 pb-24 md:pb-6" id="review-panels">
             <!-- 1. Written Response Panel -->
             ${textResponse ? `
               <div id="panel-tab-text" class="space-y-4">
@@ -240,8 +250,8 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
         </div>
 
         <!-- Right Pane: Grading & Feedback Drawer -->
-        <div class="w-full md:w-96 lg:w-[420px] bg-slate-50 border-t md:border-t-0 md:border-l border-slate-200 flex flex-col flex-shrink-0 overflow-hidden">
-          <div class="p-5 flex-1 overflow-y-auto space-y-6">
+        <div id="review-grade-pane" class="hidden md:flex w-full md:w-96 lg:w-[420px] bg-slate-50 border-t md:border-t-0 md:border-l border-slate-200 flex-col flex-shrink-0 overflow-hidden flex-1 md:flex-initial">
+          <div class="p-5 pb-24 md:pb-5 flex-1 overflow-y-auto space-y-6">
             <!-- 1. Submission Status -->
             <section class="space-y-2">
               <h3 class="text-xs font-bold text-slate-700 uppercase tracking-wider">Submission Status</h3>
@@ -795,6 +805,34 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
     });
   });
 
+  // Mobile Work / Grade pane toggle (< 768px)
+  const btnMobWork = container.querySelector('#btn-mob-pane-work');
+  const btnMobGrade = container.querySelector('#btn-mob-pane-grade');
+  const workPane = container.querySelector('#review-work-pane');
+  const gradePane = container.querySelector('#review-grade-pane');
+  const setMobilePane = (pane) => {
+    if (!workPane || !gradePane || !btnMobWork || !btnMobGrade) return;
+    const isGrade = pane === 'grade';
+    workPane.classList.toggle('hidden', isGrade);
+    workPane.classList.toggle('flex', !isGrade);
+    gradePane.classList.toggle('hidden', !isGrade);
+    gradePane.classList.toggle('flex', isGrade);
+
+    btnMobWork.classList.toggle('bg-white', !isGrade);
+    btnMobWork.classList.toggle('shadow-sm', !isGrade);
+    btnMobWork.classList.toggle('text-slate-900', !isGrade);
+    btnMobWork.classList.toggle('text-slate-500', isGrade);
+    btnMobWork.setAttribute('aria-selected', String(!isGrade));
+
+    btnMobGrade.classList.toggle('bg-white', isGrade);
+    btnMobGrade.classList.toggle('shadow-sm', isGrade);
+    btnMobGrade.classList.toggle('text-slate-900', isGrade);
+    btnMobGrade.classList.toggle('text-slate-500', !isGrade);
+    btnMobGrade.setAttribute('aria-selected', String(isGrade));
+  };
+  btnMobWork?.addEventListener('click', () => setMobilePane('work'));
+  btnMobGrade?.addEventListener('click', () => setMobilePane('grade'));
+
   // ---------------------------------------------------------------------------
   // Save & Navigation Actions
   // ---------------------------------------------------------------------------
@@ -845,6 +883,7 @@ export async function renderTaskReview(task, activeSub, allSubmissions = [], rou
     sub.identity = 'no_code_on_file';
     await storage.table('task_submissions').put(sub);
     toast.success(`Added ${newStudent.full_name} to class roster!`);
+    import('../../core/course-feed.js').then(({ scheduleCourseFeedSync }) => scheduleCourseFeedSync(courseId)).catch(() => {});
     await renderTaskReview(task, sub, allSubmissions, router, container);
   });
 

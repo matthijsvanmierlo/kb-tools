@@ -545,6 +545,9 @@ export class RosterImportDialog {
 
         importedCounts = { added: add.length, updated: update.length };
         toast.success(`Import complete: ${add.length} added, ${update.length} updated.`);
+        import('../core/course-feed.js').then(({ scheduleCourseFeedSync }) => {
+          scheduleCourseFeedSync(course.id);
+        }).catch(() => {});
         step = 4;
         render();
         if (onDone) onDone();

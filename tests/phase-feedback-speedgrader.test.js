@@ -107,9 +107,10 @@ describe('Phase 3: Blind Dead-Drop Feedback Mailbox & Offline Class Capsules', (
       expect(resultA.feedback.points).toBe(98);
 
       // Verify student ledger was updated for Student A
-      const ledgerA = await storage.table('student_ledger').get(`fb-${assignmentId}-STU_A`);
+      const ledgerRows = await storage.table('student_ledger').where('assignment_id').equals(assignmentId).toArray();
+      const ledgerA = ledgerRows[0];
       expect(ledgerA).toBeDefined();
-      expect(ledgerA.points).toBe(98);
+      expect(ledgerA.score.earned).toBe(98);
 
       // Student B unpacks with code B
       const resultB = await FeedbackCapsule.unpackClassCapsule(classPack, 'CODE-STUDENT-BBB');

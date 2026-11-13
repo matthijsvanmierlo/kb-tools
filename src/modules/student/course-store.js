@@ -20,13 +20,14 @@ export async function mergeCourseFeed(feedEnvelope, { accessCode, etag, relayUrl
     throw new Error('Invalid course feed structure');
   }
 
-  const { course, units = [], items = [], revision } = feed;
+  const { course, units = [], items = [], roster_cards = null, revision } = feed;
 
   // 1. Upsert course record into student_courses
   const coursesTable = storage.table('student_courses');
   const existingCourse = await coursesTable.get(course.id).catch(() => null);
   const effectiveRelayUrl = relayUrl || course.relay_url || existingCourse?.relay_url || null;
   const effectiveEtag = etag || feedEnvelope?.etag || revision || existingCourse?.etag || 'rev-0';
+  const effectiveRosterCards = roster_cards || existingCourse?.roster_cards || null;
 
   const courseRecord = {
     ...(existingCourse || {}),
@@ -41,6 +42,7 @@ export async function mergeCourseFeed(feedEnvelope, { accessCode, etag, relayUrl
     revision: revision || existingCourse?.revision || 'rev-0',
     etag: effectiveEtag,
     ...(effectiveRelayUrl ? { relay_url: effectiveRelayUrl } : {}),
+    ...(effectiveRosterCards ? { roster_cards: effectiveRosterCards } : {}),
     units: units,
     updated_at: new Date().toISOString()
   };

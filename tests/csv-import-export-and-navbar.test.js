@@ -26,10 +26,10 @@ describe('Part 1: MacBook Air Navigation Bar & Backup Button Refinement', () => 
     expect(html).toContain('title="Backup &amp; storage"');
   });
 
-  it('defines responsive navbar breakpoint covering MacBook Air resolution (up to 1535.98px)', () => {
-    // MacBook Air default is 1440px or 1366px. The breakpoint must cover up to 1535.98px
-    // so inactive labels collapse to icons with active label showing, avoiding any overflow.
-    expect(css).toMatch(/@media\s*\(min-width:\s*768px\)\s*and\s*\(max-width:\s*1535\.98px\)/);
+  it('defines responsive navbar breakpoint covering tablet-to-laptop resolution (>= 1150px shows all labels)', () => {
+    // Tablets and narrow windows (768px - 1149.98px) collapse inactive labels to icons with tooltips,
+    // while >= 1150px (including MacBook Air 1280px/1440px) displays full text labels.
+    expect(css).toContain('@media (min-width: 1150px)');
     expect(css).toContain('.kb-nav-link.kb-nav-active span { display: inline; }');
   });
 

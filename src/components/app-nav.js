@@ -71,19 +71,23 @@ export function renderAppNav(container, role = RoleMode.get()) {
   // Primary links
   for (const item of config.primary) {
     html += `
-      <a href="${item.route}" data-route-link="${item.route}" class="kb-nav-link" title="${esc(item.label)}">
-        <sl-icon name="${item.icon}" aria-hidden="true"></sl-icon>
-        <span>${esc(item.label)}</span>
-      </a>`;
+      <sl-tooltip content="${esc(item.label)}" placement="bottom" hoist>
+        <a href="${item.route}" data-route-link="${item.route}" class="kb-nav-link" aria-label="${esc(item.label)}">
+          <sl-icon name="${item.icon}" aria-hidden="true"></sl-icon>
+          <span>${esc(item.label)}</span>
+        </a>
+      </sl-tooltip>`;
   }
 
   // Secondary links on desktop
   for (const item of config.secondary) {
     html += `
-      <a href="${item.route}" data-route-link="${item.route}" id="${item.id}" class="kb-nav-link relative" title="${esc(item.label)}">
-        <sl-icon name="${item.icon}" aria-hidden="true"></sl-icon>
-        <span>${esc(item.shortLabel || item.label)}</span>
-      </a>`;
+      <sl-tooltip content="${esc(item.label)}" placement="bottom" hoist>
+        <a href="${item.route}" data-route-link="${item.route}" id="${item.id}" class="kb-nav-link relative" aria-label="${esc(item.label)}">
+          <sl-icon name="${item.icon}" aria-hidden="true"></sl-icon>
+          <span>${esc(item.shortLabel || item.label)}</span>
+        </a>
+      </sl-tooltip>`;
   }
 
   // Dropdown menu (Create ▾ or Study ▾)
@@ -164,7 +168,7 @@ export function renderAppNav(container, role = RoleMode.get()) {
   updateActiveNav(currentActiveRoute || window.location.hash || '#/');
 }
 
-function ensureMoreDrawer(role) {
+export function ensureMoreDrawer(role) {
   let overlays = document.getElementById('kb-nav-overlays');
   if (!overlays) {
     overlays = document.createElement('div');
@@ -189,8 +193,8 @@ function ensureMoreDrawer(role) {
     itemsHtml += `<div class="space-y-1">
       <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Management</div>
       ${config.secondary.map(it => `
-        <a href="${it.route}" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
-          <sl-icon name="${it.icon}" class="text-xl text-blue-600"></sl-icon>
+        <a href="${it.route}" data-drawer-route="${it.route}" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
+          <sl-icon name="${it.icon}" class="text-xl text-blue-600" aria-hidden="true"></sl-icon>
           <span>${esc(it.label)}</span>
         </a>
       `).join('')}
@@ -202,35 +206,68 @@ function ensureMoreDrawer(role) {
     itemsHtml += `<div class="space-y-1 pt-2 border-t border-slate-100">
       <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">${esc(config.dropdown.label)} Tools</div>
       ${config.dropdown.items.map(it => `
-        <a href="${it.route}" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
-          <sl-icon name="${it.icon}" class="text-xl text-indigo-600"></sl-icon>
+        <a href="${it.route}" data-drawer-route="${it.route}" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
+          <sl-icon name="${it.icon}" class="text-xl text-indigo-600" aria-hidden="true"></sl-icon>
           <span>${esc(it.label)}</span>
         </a>
       `).join('')}
       ${config.dropdown.extraItems ? config.dropdown.extraItems.map(it => `
         <button type="button" data-action="${it.action}" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-btn text-left cursor-pointer">
-          <sl-icon name="${it.icon}" class="text-xl text-blue-600"></sl-icon>
+          <sl-icon name="${it.icon}" class="text-xl text-blue-600" aria-hidden="true"></sl-icon>
           <span>${esc(it.label)}</span>
         </button>
       `).join('') : ''}
     </div>`;
   }
 
-  // Preferences & Quick Access on mobile
+  // Preferences & Quick Access on mobile (role-scoped)
   itemsHtml += `<div class="space-y-1 pt-2 border-t border-slate-100">
     <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Preferences &amp; Help</div>
-    <a href="#/settings" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
-      <sl-icon name="gear" class="text-xl text-slate-600"></sl-icon>
+    ${role === 'teacher' ? `
+      <a href="#/settings?section=relay" data-drawer-route="#/settings" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
+        <sl-icon name="cloud-arrow-up" class="text-xl text-blue-600" aria-hidden="true"></sl-icon>
+        <span>School Sync Server</span>
+      </a>
+      <button type="button" data-action="data-safety" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-btn text-left cursor-pointer">
+        <sl-icon name="shield-check" class="text-xl text-emerald-600" aria-hidden="true"></sl-icon>
+        <span>Data Safety Checkup</span>
+      </button>
+    ` : `
+      <button type="button" data-action="student-passcard" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-btn text-left cursor-pointer">
+        <sl-icon name="person-badge" class="text-xl text-blue-600" aria-hidden="true"></sl-icon>
+        <span>My Student Passcard</span>
+      </button>
+    `}
+    <a href="#/settings" data-drawer-route="#/settings" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
+      <sl-icon name="gear" class="text-xl text-slate-600" aria-hidden="true"></sl-icon>
       <span>Settings</span>
     </a>
-    <button type="button" data-action="data-safety" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-btn text-left cursor-pointer">
-      <sl-icon name="shield-check" class="text-xl text-emerald-600"></sl-icon>
-      <span>Data Safety Checkup</span>
-    </button>
-    <a href="#/guide" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
-      <sl-icon name="book" class="text-xl text-blue-600"></sl-icon>
-      <span>User Guide</span>
+    <a href="#/guide" data-drawer-route="#/guide" class="flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-link">
+      <sl-icon name="book" class="text-xl text-blue-600" aria-hidden="true"></sl-icon>
+      <span>${role === 'student' ? 'Help & Guide' : 'Teacher Guide'}</span>
     </a>
+    <button type="button" data-action="toggle-role" class="w-full flex items-center gap-3 p-3 rounded-xl hover:bg-slate-100 transition-colors text-slate-800 font-medium kb-drawer-btn text-left cursor-pointer">
+      <sl-icon name="arrow-repeat" class="text-xl text-indigo-600" aria-hidden="true"></sl-icon>
+      <span>Switch to ${role === 'student' ? 'Teacher' : 'Student'} View</span>
+    </button>
+  </div>`;
+
+  // Theme switcher row inside drawer
+  itemsHtml += `<div class="pt-2 border-t border-slate-100">
+    <div class="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2">Appearance</div>
+    <div class="grid grid-cols-4 gap-1.5">
+      ${[
+        { val: 'light', label: 'Light', icon: 'sun' },
+        { val: 'dark', label: 'Dark', icon: 'moon-stars' },
+        { val: 'system', label: 'Auto', icon: 'circle-half' },
+        { val: 'projector', label: 'High', icon: 'projector' }
+      ].map(t => `
+        <button type="button" data-theme-choice="${t.val}" class="kb-drawer-theme-btn flex flex-col items-center justify-center gap-1 p-2 rounded-xl border border-slate-200 text-xs font-medium text-slate-700 hover:bg-slate-100 cursor-pointer">
+          <sl-icon name="${t.icon}" aria-hidden="true"></sl-icon>
+          <span>${t.label}</span>
+        </button>
+      `).join('')}
+    </div>
   </div>`;
 
   itemsHtml += `</div>`;
@@ -255,7 +292,24 @@ function ensureMoreDrawer(role) {
       } else if (action === 'data-safety') {
         const { openDataSafetyDialog } = await import('./data-safety.js');
         openDataSafetyDialog();
+      } else if (action === 'student-passcard') {
+        const { StudentPasscardDialog } = await import('./student-passcard-dialog.js');
+        StudentPasscardDialog.open();
+      } else if (action === 'toggle-role') {
+        document.getElementById('btn-toggle-role-mode')?.click();
       }
+    });
+  });
+
+  // Theme buttons inside drawer
+  drawer.querySelectorAll('.kb-drawer-theme-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const choice = btn.dataset.themeChoice;
+      const menuItem = document.querySelector(`#kb-theme-menu sl-menu-item[value="${choice}"]`);
+      if (menuItem) {
+        menuItem.click();
+      }
+      drawer.hide();
     });
   });
 }
@@ -325,6 +379,36 @@ export function updateActiveNav(rawHash = window.location.hash || '#/') {
       dropdownBtn.classList.remove('kb-nav-active');
       dropdownBtn.removeAttribute('aria-current');
     }
+  }
+
+  // Mobile More button active state when current route lives inside the More drawer
+  const moreBtn = document.getElementById('btn-kb-nav-more');
+  const drawer = document.getElementById('kb-nav-more-drawer');
+  const role = RoleMode.get();
+  const config = NAV_CONFIG[role] || NAV_CONFIG.teacher;
+  const drawerRoutes = [
+    ...(config.secondary || []).map(i => i.route),
+    ...(config.dropdown?.items || []).map(i => i.route),
+    '#/settings',
+    '#/guide'
+  ];
+  const isInDrawer = drawerRoutes.some(r => cleanHash === r || cleanHash.startsWith(r + '/') || cleanHash.startsWith(r + '?'));
+  if (moreBtn) {
+    if (isInDrawer && !bestMatch?.closest('.kb-nav-mobile-items')) {
+      moreBtn.classList.add('kb-nav-active');
+      moreBtn.setAttribute('aria-current', 'page');
+    } else {
+      moreBtn.classList.remove('kb-nav-active');
+      moreBtn.removeAttribute('aria-current');
+    }
+  }
+  if (drawer) {
+    drawer.querySelectorAll('.kb-drawer-link').forEach(link => {
+      const r = link.getAttribute('data-drawer-route') || link.getAttribute('href');
+      const active = r && (cleanHash === r || cleanHash.startsWith(r + '/') || cleanHash.startsWith(r + '?'));
+      link.classList.toggle('bg-blue-50', !!active);
+      link.classList.toggle('text-blue-700', !!active);
+    });
   }
 }
 

@@ -349,6 +349,10 @@ export async function autoSyncCourseFeed(courseId) {
     const freshCourse = await storage.table('gradebook_courses').get(courseId);
     if (!freshCourse) return null;
 
+    // Ensure published assignments/tasks/assessments carry up-to-date roster_checks & roster_cards
+    const { syncPublishedItemsRosterForCourse } = await import('./publish-core.js');
+    await syncPublishedItemsRosterForCourse(courseId).catch(() => {});
+
     const feedResult = await buildCourseFeed(courseId, { relayUrl: transport.baseUrl });
     const codeToUse = feedResult.accessCode || freshCourse.access_code;
     const feedId = await deriveCourseFeedId(codeToUse || courseId);

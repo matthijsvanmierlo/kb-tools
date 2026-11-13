@@ -139,6 +139,21 @@ export class RemoteFeedbackPoller {
         }
       }
 
+      if (newFeedbackCount > 0 && typeof window !== 'undefined') {
+        try {
+          const { toast } = await import('../../utils/toast.js');
+          if (typeof toast.action === 'function') {
+            toast.action(
+              `Received ${newFeedbackCount} new graded item${newFeedbackCount === 1 ? '' : 's'}!`,
+              'View Grades',
+              () => { window.location.hash = '#/student/gradebook'; }
+            );
+          } else {
+            toast.success(`Received ${newFeedbackCount} new graded item${newFeedbackCount === 1 ? '' : 's'}!`);
+          }
+        } catch (_) {}
+      }
+
       return newFeedbackCount;
     } finally {
       this._running = false;

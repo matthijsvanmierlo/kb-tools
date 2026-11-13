@@ -94,3 +94,79 @@ export async function pullDrop({ transport, dropId, dropHistory = [], onItem }) 
     failures
   };
 }
+
+/**
+ * Poll all active assignment/task/assessment relay drop boxes in one pass.
+ * Stages newly fetched submissions into `relay_staged_submissions` metadata
+ * and dispatches `kb-relay-submissions-staged` so the Inbox badge and view
+ * update immediately.
+ *
+ * @param {object} [opts]
+ * @param {boolean} [opts.autoStage=true]
+ * @returns {Promise<{ count: number, staged: number, failures: Array, items: Array<{ source: string, text: string, itemId: string }> }>}
+ */
+export async function pollAllActiveDrops({ autoStage = true } = {}) {
+  const { getTransport } = await import('./transport.js');
+  const transport = await getTransport();
+  if (!transport || !transport.capabilities?.collectSubmissions) {
+    return { count: 0, staged: 0, failures: [], items: [] };
+  }
+
+  const [assignments, tasks, videos] = await Promise.all([
+    storage.table('assignments').toArray().catch(() => []),
+    storage.table('tasks').toArray().catch(() => []),
+    storage.table('video_assessments').toArray().catch(() => [])
+  ]);
+
+  const dropOwners = [
+    ...assignments.filter(a => a.publish?.relay?.drop_id || a.relay?.drop_id),
+    ...tasks.filter(t => t.publish?.relay?.drop_id || t.relay?.drop_id),
+    ...videos.filter(v => v.publish?.relay?.drop_id || v.relay?.drop_id)
+  ];
+
+  if (!dropOwners.length) {
+    return { count: 0, staged: 0, failures: [], items: [] };
+  }
+
+  const newItems = [];
+  let totalCount = 0;
+  const allFailures = [];
+
+  for (const owner of dropOwners) {
+    const dropId = owner.publish?.relay?.drop_id || owner.relay?.drop_id;
+    if (!dropId) continue;
+    const pullRes = await pullDrop({
+      transport,
+      dropId,
+      dropHistory: owner.publish?.relay_history || [],
+      onItem: async (item) => {
+        const rawText = typeof item === 'string' ? item : (item.text || item.payload || '');
+        if (!rawText) return { duplicate: true };
+        newItems.push({
+          source: `Server: ${owner.title || dropId}`,
+          text: rawText,
+          itemId: owner.id
+        });
+        return { ok: true };
+      }
+    });
+    totalCount += pullRes.count;
+    if (pullRes.failures?.length) allFailures.push(...pullRes.failures);
+  }
+
+  if (autoStage && newItems.length > 0) {
+    const existing = (await storage.getMetadata('relay_staged_submissions').catch(() => [])) || [];
+    const merged = [...existing, ...newItems];
+    await storage.setMetadata('relay_staged_submissions', merged);
+    if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new CustomEvent('kb-relay-submissions-staged', { detail: { count: newItems.length } }));
+    }
+  }
+
+  return {
+    count: totalCount,
+    staged: newItems.length,
+    failures: allFailures,
+    items: newItems
+  };
+}

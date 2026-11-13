@@ -61,51 +61,13 @@ export async function renderClassesView(params, router, container) {
       activeCourseId = activeCourse.id;
     }
 
-    container.innerHTML = `
-      <div class="h-full flex flex-col md:flex-row bg-slate-50 min-h-[calc(100dvh-4rem)]">
-        <!-- Master Pane: Class List -->
-        <aside class="w-full md:w-80 lg:w-96 flex-shrink-0 bg-white border-r border-slate-200 flex flex-col h-auto md:h-full">
-          <!-- Master Header -->
-          <div class="p-4 border-b border-slate-200 space-y-3">
-            <div class="flex items-center justify-between gap-2">
-              <div class="min-w-0">
-                <h1 class="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <sl-icon name="collection" class="text-primary-600"></sl-icon> Classes &amp; Rosters
-                </h1>
-                <p class="text-xs text-slate-500">Manage courses, student enrollments, and settings</p>
-              </div>
-              <div class="flex items-center gap-1.5 flex-shrink-0">
-                <sl-tooltip content="Bulk Import Classes (OneRoster ZIP)">
-                  <sl-button variant="default" size="small" id="btn-bulk-oneroster">
-                    <sl-icon name="file-earmark-zip"></sl-icon>
-                  </sl-button>
-                </sl-tooltip>
-                <sl-button variant="primary" size="small" id="btn-create-class">
-                  <sl-icon slot="prefix" name="plus-lg"></sl-icon> New Class
-                </sl-button>
-              </div>
-            </div>
-            <div class="flex items-center gap-2">
-              <sl-input size="small" id="input-search-classes" placeholder="Search classes..." value="${esc(searchQuery)}" clearable class="flex-1">
-                <sl-icon slot="prefix" name="search"></sl-icon>
-              </sl-input>
-              <sl-tooltip content="Toggle archived classes">
-                <sl-button size="small" variant="${showArchived ? 'primary' : 'default'}" id="btn-toggle-archived" outline>
-                  <sl-icon name="archive"></sl-icon>
-                </sl-button>
-              </sl-tooltip>
-            </div>
-          </div>
-
-          <!-- Master Class List -->
-          <div class="flex-1 overflow-y-auto p-2 space-y-1.5" id="classes-list-mount">
-            ${filteredCourses.length === 0 ? `
+    const renderClassListItems = () => filteredCourses.length === 0 ? `
               <div class="text-center py-12 px-4 text-slate-400">
                 <sl-icon name="mortarboard" class="text-4xl text-slate-300 mb-2"></sl-icon>
                 <p class="text-sm font-medium text-slate-600">No classes found</p>
                 <p class="text-xs text-slate-400 mt-1">${searchQuery ? 'Try a different search query' : 'Create your first class to get started'}</p>
                 ${!searchQuery ? `
-                  <sl-button variant="primary" size="small" class="mt-4" id="btn-create-first-class">
+                  <sl-button variant="primary" size="small" class="mt-4 btn-create-first-class-trigger" id="btn-create-first-class">
                     <sl-icon slot="prefix" name="plus-lg"></sl-icon> Create Class
                   </sl-button>
                 ` : ''}
@@ -113,7 +75,6 @@ export async function renderClassesView(params, router, container) {
             ` : filteredCourses.map(c => {
               const isSelected = activeCourse && c.id === activeCourse.id;
               const studentCount = allStudents.filter(s => s.course_id === c.id).length;
-              const assignmentCount = allAssignments.filter(a => a.course_id === c.id).length;
               const isArchived = Boolean(c.archived_at);
               const color = Sanitizer.safeColor(c.color, '#2563eb');
 
@@ -138,16 +99,71 @@ export async function renderClassesView(params, router, container) {
                   </div>
                   <div class="flex items-center gap-1">
                     <sl-tooltip content="Open in Gradebook">
-                      <sl-button size="small" variant="text" class="btn-goto-gradebook text-slate-400 hover:text-primary-600" data-id="${esc(c.id)}">
+                      <sl-button size="small" variant="text" class="btn-goto-gradebook text-slate-400 hover:text-primary-600" data-id="${esc(c.id)}" aria-label="Open ${esc(c.name)} in Gradebook">
                         <sl-icon name="journal-bookmark"></sl-icon>
                       </sl-button>
                     </sl-tooltip>
                   </div>
                 </div>
               `;
-            }).join('')}
+            }).join('');
+
+    container.innerHTML = `
+      <div class="h-full flex flex-col md:flex-row bg-slate-50 min-h-[calc(100dvh-4rem)]">
+        <!-- Master Pane: Class List (visible inline on desktop/tablet, or on mobile when no class is selected) -->
+        <aside class="w-full md:w-80 lg:w-96 flex-shrink-0 bg-white border-r border-slate-200 ${activeCourse ? 'hidden md:flex' : 'flex'} flex-col h-auto md:h-full">
+          <!-- Master Header -->
+          <div class="p-4 border-b border-slate-200 space-y-3">
+            <div class="flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <h1 class="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <sl-icon name="collection" class="text-primary-600"></sl-icon> Classes &amp; Rosters
+                </h1>
+                <p class="text-xs text-slate-500">Manage courses, student enrollments, and settings</p>
+              </div>
+              <div class="flex items-center gap-1.5 flex-shrink-0">
+                <sl-tooltip content="Bulk Import Classes (OneRoster ZIP)">
+                  <sl-button variant="default" size="small" id="btn-bulk-oneroster" aria-label="Bulk import classes">
+                    <sl-icon name="file-earmark-zip"></sl-icon>
+                  </sl-button>
+                </sl-tooltip>
+                <sl-button variant="primary" size="small" id="btn-create-class">
+                  <sl-icon slot="prefix" name="plus-lg"></sl-icon> New Class
+                </sl-button>
+              </div>
+            </div>
+            <div class="flex items-center gap-2">
+              <sl-input size="small" id="input-search-classes" placeholder="Search classes..." value="${esc(searchQuery)}" clearable class="flex-1">
+                <sl-icon slot="prefix" name="search"></sl-icon>
+              </sl-input>
+              <sl-tooltip content="Toggle archived classes">
+                <sl-button size="small" variant="${showArchived ? 'primary' : 'default'}" id="btn-toggle-archived" outline aria-label="Toggle archived classes">
+                  <sl-icon name="archive"></sl-icon>
+                </sl-button>
+              </sl-tooltip>
+            </div>
+          </div>
+
+          <!-- Master Class List -->
+          <div class="flex-1 overflow-y-auto p-2 space-y-1.5" id="classes-list-mount">
+            ${renderClassListItems()}
           </div>
         </aside>
+
+        <!-- Mobile Class Switcher Drawer (< 768px) -->
+        <sl-drawer id="mobile-classes-drawer" label="Classes & Rosters (${filteredCourses.length})" placement="start" class="md:hidden">
+          <div class="space-y-3">
+            <div class="flex items-center gap-2">
+              <sl-button variant="primary" size="small" id="btn-mobile-create-class" class="flex-1">
+                <sl-icon slot="prefix" name="plus-lg"></sl-icon> New Class
+              </sl-button>
+              <sl-button variant="default" size="small" id="btn-mobile-bulk-oneroster" aria-label="Bulk import OneRoster">
+                <sl-icon name="file-earmark-zip"></sl-icon>
+              </sl-button>
+            </div>
+            <div class="space-y-1.5">${renderClassListItems()}</div>
+          </div>
+        </sl-drawer>
 
         <!-- Detail Pane: Selected Class -->
         <main class="flex-1 flex flex-col min-w-0 bg-slate-50 overflow-hidden" id="classes-detail-mount">
@@ -176,6 +192,9 @@ export async function renderClassesView(params, router, container) {
 
               <!-- Quick action buttons -->
               <div class="flex items-center gap-2 flex-wrap">
+                <sl-button size="small" variant="default" class="md:hidden" id="btn-open-mobile-classes">
+                  <sl-icon slot="prefix" name="collection"></sl-icon> Switch Class (${filteredCourses.length})
+                </sl-button>
                 <sl-button size="small" variant="default" id="btn-detail-course-page">
                   <sl-icon slot="prefix" name="card-heading"></sl-icon> Course Page
                 </sl-button>
@@ -379,8 +398,8 @@ export async function renderClassesView(params, router, container) {
       </div>
     `;
 
-    // Bind Master Pane Events
-    container.querySelector('#btn-create-class')?.addEventListener('click', () => {
+    // Bind Master Pane & Mobile Drawer Events
+    const openNewClassWizard = () => {
       ClassSetupWizard.open({
         onDone: async (newId) => {
           const resolvedId = typeof newId === 'object' ? newId?.id : newId;
@@ -391,6 +410,18 @@ export async function renderClassesView(params, router, container) {
           await render();
         }
       });
+    };
+    container.querySelector('#btn-create-class')?.addEventListener('click', openNewClassWizard);
+    container.querySelector('#btn-mobile-create-class')?.addEventListener('click', () => {
+      container.querySelector('#mobile-classes-drawer')?.hide();
+      openNewClassWizard();
+    });
+    container.querySelector('#btn-open-mobile-classes')?.addEventListener('click', () => {
+      container.querySelector('#mobile-classes-drawer')?.show();
+    });
+    container.querySelector('#btn-mobile-bulk-oneroster')?.addEventListener('click', () => {
+      container.querySelector('#mobile-classes-drawer')?.hide();
+      RosterImportDialog.openOneRosterBulkImportDialog({ onComplete: () => render() });
     });
 
     container.querySelector('#btn-create-first-class')?.addEventListener('click', () => {

@@ -255,37 +255,33 @@ export class FeedbackCapsule {
    */
   static async saveFeedbackToStudentStorage(feedback) {
     try {
-      const studentId = String(feedback.student_id || '').toUpperCase();
       const asgId = feedback.assignment_id || feedback.task_id;
       if (!asgId) return;
 
-      const ledgerId = `fb-${asgId}-${studentId || 'me'}`;
-      const existingLedger = await storage.table('student_ledger').get(ledgerId).catch(() => null);
-
-      const ledgerEntry = {
-        id: ledgerId,
-        student_id: studentId,
-        assignment_id: asgId,
-        points: feedback.points ?? feedback.score ?? null,
-        status: feedback.status || 'graded',
-        feedback: feedback.feedback || '',
+      const { StudentLedger } = await import('../modules/student/ledger.js');
+      await StudentLedger.applyFeedback({
+        itemId: asgId,
+        courseId: feedback.course?.id || feedback.course_id || null,
+        title: feedback.title,
+        score: feedback.points ?? feedback.score ?? null,
+        maxScore: feedback.max_points ?? feedback.total_points ?? null,
+        feedback: feedback.feedback || feedback.overall_feedback || '',
         rubric_eval: feedback.rubric_eval || null,
         standard_scores: feedback.standard_scores || null,
         audio_note: feedback.audio_note || null,
         drawing_annotations: feedback.drawing_annotations || null,
-        reviewed_at: feedback.reviewed_at || new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-
-      await storage.table('student_ledger').put(ledgerEntry);
+        questions: feedback.questions || null,
+        released_at: feedback.reviewed_at || feedback.released_at || new Date().toISOString(),
+        source: 'relay_drop'
+      });
 
       // Update student_items status if existing
       const existingItem = await storage.table('student_items').get(asgId).catch(() => null);
       if (existingItem) {
         existingItem.status = 'reviewed';
         existingItem.grade = feedback.points ?? feedback.score;
-        existingItem.teacher_feedback = feedback.feedback;
-        existingItem.reviewed_at = ledgerEntry.reviewed_at;
+        existingItem.teacher_feedback = feedback.feedback || feedback.overall_feedback || '';
+        existingItem.reviewed_at = feedback.reviewed_at || new Date().toISOString();
         await storage.table('student_items').put(existingItem);
       }
 
@@ -312,6 +308,7 @@ export class FeedbackCapsule {
     let failed = 0;
 
     const base = relayUrl.replace(/\/+$/, '');
+    const apiBase = base.endsWith('/api/v1') ? base : `${base}/api/v1`;
 
     for (const item of items) {
       try {
@@ -323,7 +320,7 @@ export class FeedbackCapsule {
         const blindDropId = await this.deriveBlindDropId(assignmentId, item.studentAccessCode);
         const { token } = await this.createFeedbackEnvelope(item.feedback, item.studentAccessCode);
 
-        const res = await fetch(`${base}/api/feedback/${blindDropId}`, {
+        const res = await fetch(`${apiBase}/feedback/${blindDropId}`, {
           method: 'PUT',
           headers: {
             'Content-Type': 'application/json',
@@ -359,8 +356,9 @@ export class FeedbackCapsule {
 
     const blindDropId = await this.deriveBlindDropId(assignmentId, normCode);
     const base = relayUrl.replace(/\/+$/, '');
+    const apiBase = base.endsWith('/api/v1') ? base : `${base}/api/v1`;
 
-    const res = await fetch(`${base}/api/feedback/${blindDropId}`);
+    const res = await fetch(`${apiBase}/feedback/${blindDropId}`);
     if (!res.ok) return null;
 
     const data = await res.json();

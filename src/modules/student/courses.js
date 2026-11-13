@@ -375,6 +375,7 @@ function openClaimSeatDialog(course, onDone) {
       <sl-input id="claim-student-code" label="Personal Student Access Code (optional)" placeholder="e.g. K7M2-QX9P">
         <sl-icon slot="prefix" name="key"></sl-icon>
       </sl-input>
+      <div id="claim-roster-status" class="hidden text-xs px-2.5 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 font-medium"></div>
       <sl-input id="claim-student-name" label="Your Full Name" placeholder="e.g. Alex Rivera" required></sl-input>
       <sl-input id="claim-student-id" label="Student ID / SIS ID" placeholder="e.g. S1042" required></sl-input>
     </div>
@@ -385,6 +386,35 @@ function openClaimSeatDialog(course, onDone) {
   `;
   document.body.appendChild(dialog);
   dialog.show();
+
+  const codeInput = dialog.querySelector('#claim-student-code');
+  const nameInput = dialog.querySelector('#claim-student-name');
+  const sidInput = dialog.querySelector('#claim-student-id');
+  const statusEl = dialog.querySelector('#claim-roster-status');
+
+  codeInput?.addEventListener('sl-input', async () => {
+    const rawCode = codeInput.value?.trim() || '';
+    if (!course.roster_cards || rawCode.replace(/[^a-zA-Z0-9]/g, '').length < 6) {
+      statusEl?.classList.add('hidden');
+      return;
+    }
+    try {
+      const { SubmissionCrypto } = await import('../../core/submission-crypto.js');
+      const unlocked = await SubmissionCrypto.unlockRosterCard(course.id, course.roster_cards, rawCode);
+      if (unlocked && unlocked.sid) {
+        if (nameInput && unlocked.name) nameInput.value = unlocked.name;
+        if (sidInput) sidInput.value = unlocked.sid;
+        if (statusEl) {
+          statusEl.textContent = `Verified roster match: ${unlocked.name || unlocked.sid} (${unlocked.sid})`;
+          statusEl.classList.remove('hidden');
+        }
+      } else {
+        statusEl?.classList.add('hidden');
+      }
+    } catch (_) {
+      statusEl?.classList.add('hidden');
+    }
+  });
 
   dialog.querySelector('#btn-claim-skip')?.addEventListener('click', () => {
     dialog.hide();

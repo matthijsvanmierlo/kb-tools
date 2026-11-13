@@ -395,10 +395,11 @@ async function bootstrapApp() {
           updateInboxBadge(unseen);
           return;
         }
-        const [subRows, taskRows, asgRows] = await Promise.all([
+        const [subRows, taskRows, asgRows, stagedRelay] = await Promise.all([
           storage.table('assignment_submissions').toArray().catch(() => []),
           storage.table('task_submissions').toArray().catch(() => []),
-          storage.table('assignments').toArray().catch(() => [])
+          storage.table('assignments').toArray().catch(() => []),
+          storage.getMetadata('relay_staged_submissions').catch(() => [])
         ]);
         const asgById = new Map(asgRows.map(a => [a.id, a]));
         const pendingSubs = subRows.filter(s => {
@@ -409,7 +410,8 @@ async function bootstrapApp() {
           return hasManual && !s.reviewed_at && (!s.manual || Object.keys(s.manual).length === 0);
         }).length;
         const pendingTasks = taskRows.filter(t => t.is_latest !== false && (!t.review || !t.review.reviewed_at)).length;
-        updateInboxBadge(pendingSubs + pendingTasks);
+        const stagedCount = Array.isArray(stagedRelay) ? stagedRelay.length : 0;
+        updateInboxBadge(pendingSubs + pendingTasks + stagedCount);
       } catch (_) {}
     };
     syncInboxBadge();
@@ -419,11 +421,29 @@ async function bootstrapApp() {
     window.addEventListener('kb-submissions-changed', syncInboxBadge);
     window.addEventListener('kb-student-ledger-updated', syncInboxBadge);
     window.addEventListener('kb-feedback-imported', syncInboxBadge);
+    window.addEventListener('kb-relay-submissions-staged', syncInboxBadge);
 
-    // 10. Start remote feedback poller
+    // 10. Start remote feedback poller & periodic teacher relay drop polling
     import('./modules/student/feedback-poller.js').then(({ feedbackPoller }) => {
       feedbackPoller.start();
     }).catch(() => {});
+
+    const runTeacherDropPoll = () => {
+      if (RoleMode.get() !== 'teacher') return;
+      import('./core/drop-pull.js').then(({ pollAllActiveDrops }) => {
+        pollAllActiveDrops({ autoStage: true }).then((res) => {
+          if (res?.staged > 0) {
+            toast.action(
+              `${res.staged} new student submission${res.staged === 1 ? '' : 's'} arrived on server`,
+              'Open Inbox',
+              () => { window.location.hash = '#/inbox'; }
+            );
+          }
+        }).catch(() => {});
+      }).catch(() => {});
+    };
+    setTimeout(runTeacherDropPoll, 2500);
+    setInterval(runTeacherDropPoll, 90000);
 
   } catch (err) {
     console.error('Fatal initialization error:', err);
@@ -888,20 +908,28 @@ export async function openRelayConfigDialog(defaultTab = 'connect') {
   });
 }
 
-export async function updateRelayStatusIndicator() {
+export async function updateRelayStatusIndicator(statusDetail = null) {
   if (typeof document === 'undefined') return;
   const indicator = document.getElementById('sync-status-indicator');
   if (!indicator) return;
   try {
     const transport = await getTransport();
     if (transport && transport.capabilities.hostPayload) {
-      indicator.innerHTML = `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-medium border border-emerald-200" title="Connected to school relay server"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>Server: connected</span>`;
+      const pending = statusDetail?.pending || 0;
+      const label = pending > 0 ? `Server: syncing (${pending})` : 'Server: connected';
+      indicator.innerHTML = `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-medium border border-emerald-200" title="Connected to school relay server"><span class="w-1.5 h-1.5 rounded-full ${pending > 0 ? 'bg-amber-500 animate-pulse' : 'bg-emerald-500'}"></span>${label}</span>`;
       return;
     }
   } catch {}
   if (indicator.textContent.includes('Server:')) {
     indicator.innerHTML = '';
   }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('kb-replication-status', (e) => {
+    updateRelayStatusIndicator(e.detail || null);
+  });
 }
 
 function bindHelpControls() {

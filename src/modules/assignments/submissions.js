@@ -440,16 +440,16 @@ export async function renderSubmissions(assignment, router, container) {
     }
 
     container.innerHTML = `
-      <div class="space-y-6 max-w-7xl mx-auto">
-        <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-5 rounded-2xl border border-slate-200 shadow-xs">
-          <div class="flex items-center gap-3 min-w-0">
+      <div class="space-y-6 max-w-7xl mx-auto pb-24 md:pb-6">
+        <div class="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 bg-white p-4 sm:p-5 rounded-2xl border border-slate-200 shadow-xs">
+          <div class="flex items-center gap-3 min-w-0 w-full lg:w-auto">
             <sl-button size="small" id="sub-back"><sl-icon slot="prefix" name="arrow-left"></sl-icon> Editor</sl-button>
-            <div class="min-w-0">
-              <h1 class="font-bold text-slate-900 text-lg truncate">Submissions · ${esc(a.title)}</h1>
+            <div class="min-w-0 flex-1">
+              <h1 class="font-bold text-slate-900 text-base sm:text-lg truncate">Submissions · ${esc(a.title)}</h1>
               <p class="text-xs text-slate-500">${course ? `${esc(course.name)} · ` : 'No class linked · '}${maxPts} pts${a.settings?.due_date ? ` · due ${esc(new Date(`${a.settings.due_date}T12:00:00`).toLocaleDateString())}` : ''}</p>
             </div>
           </div>
-          <div class="flex items-center gap-2 flex-wrap">
+          <div class="flex items-center gap-2 flex-wrap w-full lg:w-auto">
             ${a.publish?.relay?.drop_id ? `
               <sl-button size="small" variant="primary" id="sub-pull-relay"><sl-icon slot="prefix" name="cloud-arrow-down"></sl-icon> Pull from Server</sl-button>
             ` : ''}
@@ -849,7 +849,8 @@ export async function renderSubmissions(assignment, router, container) {
           toast.warning('Student does not have an access code on roster to encrypt feedback.');
           return;
         }
-        const syncConfig = (await storage.getMetadata('sync_config')) || {};
+        const { getTransportConfig } = await import('../../core/transport.js');
+        const syncConfig = await getTransportConfig();
         const relayUrl = a.publish?.relay?.relay_url || a.publish?.relay?.base_url || syncConfig.baseUrl;
         const teacherToken = syncConfig.token || '';
         if (!relayUrl || !teacherToken) {
@@ -869,10 +870,12 @@ export async function renderSubmissions(assignment, router, container) {
               assignment_id: a.id,
               student_id: sub.student_id,
               title: a.title,
+              course: course ? { id: course.id, name: course.name } : undefined,
               score: score.earned,
               max_points: score.possible,
               feedback: draft.feedback,
               manual: draft.manual,
+              questions: sub.questions || undefined,
               reviewed_at: new Date().toISOString()
             }
           }]
@@ -1133,6 +1136,72 @@ export async function renderSubmissions(assignment, router, container) {
 
     const presets = [
       {
+        id: 'relay_feedback_push',
+        label: 'Return Feedback via School Server (Batch Push)',
+        description: 'Encrypts and pushes graded feedback for all submitted students with access codes directly to the configured school server.',
+        customAction: {
+          label: 'Push to Server',
+          icon: 'cloud-upload',
+          run: async () => {
+            const { getTransportConfig } = await import('../../core/transport.js');
+            const syncConfig = await getTransportConfig();
+            const relayUrl = a.publish?.relay?.relay_url || a.publish?.relay?.base_url || syncConfig.baseUrl;
+            const teacherToken = syncConfig.token || '';
+            if (!relayUrl || !teacherToken) {
+              toast.warning('No school server connection or token found in settings. Go to Settings > Connect to a school server.');
+              return;
+            }
+            const items = [];
+            const pushedSubs = [];
+            for (const sub of latest) {
+              const student = roster.find(r => String(r.student_id).toUpperCase() === String(sub.student_id).toUpperCase());
+              const accessCode = student?.access_code || sub.access_code;
+              if (!accessCode) continue;
+              const score = finalScore(a, sub);
+              items.push({
+                studentAccessCode: accessCode,
+                feedback: {
+                  assignment_id: a.id,
+                  student_id: sub.student_id,
+                  title: a.title,
+                  course: course ? { id: course.id, name: course.name } : undefined,
+                  score: score.earned,
+                  max_points: score.possible,
+                  feedback: sub.feedback || '',
+                  manual: sub.manual || {},
+                  questions: sub.questions || undefined,
+                  reviewed_at: sub.updated_at || new Date().toISOString()
+                }
+              });
+              pushedSubs.push(sub);
+            }
+            if (!items.length) {
+              toast.warning('No submitted students with access codes found.');
+              return;
+            }
+            toast.info(`Publishing ${items.length} feedback drop(s) to server...`);
+            const { FeedbackCapsule } = await import('../../core/feedback-capsule.js');
+            const res = await FeedbackCapsule.publishBatchToRelay({
+              relayUrl,
+              teacherToken,
+              assignmentId: a.id,
+              items
+            });
+            if (res.published > 0) {
+              const now = new Date().toISOString();
+              for (const s of pushedSubs) {
+                s.returned_at = now;
+                await storage.table('assignment_submissions').put(s);
+              }
+              if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('kb-submissions-changed'));
+              render();
+            }
+            toast.success(`Published ${res.published} feedback drop(s) to server! (${res.failed} failed)`);
+          }
+        },
+        build: async () => ({ headers: [], rows: [], filename: 'relay_push.txt' })
+      },
+      {
         id: 'mail_merge',
         label: 'Mail-merge CSV (with encrypted feedback links)',
         description: 'One row per student on the roster. Includes individual encrypted feedback links for submitted work and assignment links for reminders.',
@@ -1310,6 +1379,9 @@ export async function renderSubmissions(assignment, router, container) {
           }
         }
         toast.success(`Enrolled ${count} student${count === 1 ? '' : 's'} into roster!`);
+        if (count > 0) {
+          import('../../core/course-feed.js').then(({ scheduleCourseFeedSync }) => scheduleCourseFeedSync(course.id)).catch(() => {});
+        }
         await load();
         render();
       } catch (err) {

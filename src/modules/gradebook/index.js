@@ -174,7 +174,7 @@ export async function renderGradebookView(params, router, container) {
   const courseColor = Sanitizer.safeColor(activeCourse.color, '#2563eb');
 
   container.innerHTML = `
-    <div class="space-y-4 max-w-7xl mx-auto">
+    <div class="space-y-4 max-w-7xl mx-auto pb-24 md:pb-6">
       <!-- Class header: identity + primary actions, then a toolbar row -->
       <div class="bg-white rounded-xl border border-slate-200 shadow-xs">
         <div class="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 p-4">

@@ -771,12 +771,16 @@ export class Router {
         '#/classes': 'Classes & Rosters',
         '#/calendar': 'Interactive Calendar',
         '#/course': 'Course Syllabus & Units',
+        '#/student': 'Student Hub',
         '#/student/courses': 'My Enrolled Courses',
         '#/student/course': 'Course Details',
+        '#/student/gradebook': 'My Grades',
+        '#/settings': 'Settings',
+        '#/connect': 'Connect to School Server',
         '#/guide': 'Teacher Guide and Recommended Workflows',
         '#/share': 'Shared Lesson Decryption'
       };
-      announcer.textContent = `Navigated to ${titles[path] || path}`;
+      announcer.textContent = `Navigated to ${titles[path] || ROUTE_TITLES[path] || path}`;
     }
   }
 

@@ -125,7 +125,7 @@ export class ContextBar {
           <!-- Divider -->
           <div class="h-4 w-px bg-slate-200 hidden sm:block flex-shrink-0"></div>
 
-          <!-- Breadcrumbs Trail -->
+          <!-- Breadcrumbs Trail (Desktop/Tablet) -->
           <nav aria-label="Breadcrumbs" class="hidden sm:flex items-center gap-1.5 min-w-0 text-slate-500 overflow-x-auto whitespace-nowrap">
             ${breadcrumbs.map((b, i) => {
               const isLast = i === breadcrumbs.length - 1;
@@ -138,6 +138,19 @@ export class ContextBar {
               `;
             }).join('')}
           </nav>
+
+          <!-- Compact Mobile Breadcrumb & Back Pill (< 640px) -->
+          ${breadcrumbs.length > 1 ? `
+            <div class="flex sm:hidden items-center gap-1.5 min-w-0 flex-1 justify-end text-slate-600">
+              ${breadcrumbs.length > 2 ? `
+                <a href="${esc(breadcrumbs[breadcrumbs.length - 2].route)}" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium flex-shrink-0" aria-label="Back to ${esc(breadcrumbs[breadcrumbs.length - 2].label)}">
+                  <sl-icon name="arrow-left" class="text-[10px]" aria-hidden="true"></sl-icon>
+                  <span class="truncate max-w-[80px]">${esc(breadcrumbs[breadcrumbs.length - 2].label)}</span>
+                </a>
+              ` : ''}
+              <span class="font-semibold text-slate-800 truncate">${esc(breadcrumbs[breadcrumbs.length - 1].label)}</span>
+            </div>
+          ` : ''}
         </div>
 
         <!-- Right: Context Summary & Class Management -->

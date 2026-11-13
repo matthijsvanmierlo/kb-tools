@@ -130,3 +130,39 @@ export async function computeContentHash(payload) {
     .join('')
     .slice(0, 16);
 }
+
+/**
+ * Refresh roster_checks and roster_cards on all published assignments, tasks, and
+ * video assessments linked to a course whenever the class roster changes.
+ * @param {string} courseId
+ * @returns {Promise<{ updatedCount: number, rosterHash: string }>}
+ */
+export async function syncPublishedItemsRosterForCourse(courseId) {
+  if (!courseId) return { updatedCount: 0, rosterHash: '' };
+  const roster = await getRosterStatus({ class_id: courseId });
+  const rosterHash = await computeRosterHash(roster.students);
+  let updatedCount = 0;
+
+  for (const tableName of ['assignments', 'tasks', 'video_assessments']) {
+    const rows = await storage.table(tableName).toArray().catch(() => []);
+    for (const item of rows) {
+      const itemCourseId = item.class_id || item.course_id || item.gradebook?.course_id;
+      if (itemCourseId !== courseId || !item.publish?.payload) continue;
+      if (item.publish.roster_hash === rosterHash) continue;
+
+      const scopeId = item.publish.payload.assignment_id || item.publish.payload.task_id || item.id;
+      const requireAccessCode = Boolean(item.publish.payload.roster_checks || item.settings?.require_access_code);
+      const { rosterChecks, rosterCards } = await buildRosterChecksAndCards(scopeId, roster, requireAccessCode);
+
+      item.publish.roster_hash = rosterHash;
+      item.publish.payload.roster_checks = rosterChecks;
+      item.publish.payload.roster_cards = rosterCards;
+      item.updated_at = new Date().toISOString();
+
+      await storage.table(tableName).put(item);
+      updatedCount++;
+    }
+  }
+
+  return { updatedCount, rosterHash };
+}

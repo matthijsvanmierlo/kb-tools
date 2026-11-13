@@ -3,7 +3,7 @@ import { Sanitizer } from '../../core/sanitizer.js';
 import { toast } from '../../utils/toast.js';
 import { GradebookBridge } from '../gradebook/bridge.js';
 import { SubmissionCrypto } from '../../core/submission-crypto.js';
-import { RelayTransport, getTransport } from '../../core/transport.js';
+import { RelayTransport, getTransport, getTransportConfig } from '../../core/transport.js';
 import { pullDrop } from '../../core/drop-pull.js';
 import { evaluateTaskSubmission, IDENTITY_LABELS } from './pipeline.js';
 import { renderTaskReview } from './review.js';
@@ -630,8 +630,7 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
 
   // Push Feedback to Blind Relay
   container.querySelector('#action-push-relay-feedback')?.addEventListener('click', async () => {
-    const syncConfig = (await storage.getMetadata('sync_config')) || {};
-    const transport = await getTransport();
+    const syncConfig = await getTransportConfig();
     const relayUrl = task.publish?.relay?.relay_url || task.publish?.relay?.base_url || syncConfig.baseUrl;
     const teacherToken = syncConfig.token || '';
     if (!relayUrl || !teacherToken) {
@@ -652,8 +651,11 @@ export async function renderTaskSubmissions(params = {}, router = null, containe
           feedback: {
             task_id: task.id,
             assignment_id: task.id,
+            title: task.title,
+            course: course ? { id: course.id, name: course.name } : undefined,
             student_id: s.student_id,
             points: s.review.points,
+            max_points: task.points ?? 100,
             status: s.review.status,
             rubric_eval: s.review.rubric_eval,
             standard_scores: s.review.standard_scores,

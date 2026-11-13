@@ -205,16 +205,76 @@ export async function renderRosterView({
           </div>
         ` : ''}
 
-        <!-- Table View -->
-        <div class="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
+        <!-- Mobile Card View (< 640px) -->
+        <div class="sm:hidden space-y-2.5 pb-20">
+          ${sorted.length === 0 ? `
+            <div class="bg-white rounded-xl border border-slate-200 p-8 text-center text-slate-400 text-xs">
+              <sl-icon name="people" class="text-3xl mb-2 text-slate-300"></sl-icon>
+              <p>${searchQuery ? 'No students match your search.' : 'No students in this class yet.'}</p>
+            </div>
+          ` : sorted.map(s => {
+            const stats = studentStats.get(s.student_id) || {};
+            const isRevealed = revealedCodes.has(s.student_id);
+            const isChecked = selectedStudentIds.has(s.student_id);
+            const safeName = Sanitizer.escapeHTML(s.full_name || '');
+            const safeId = Sanitizer.escapeHTML(s.student_id || '');
+            const gradeStr = stats.gradePercent !== null ? `${Sanitizer.escapeHTML(stats.gradePercent)}%` : '—';
+            const letterStr = stats.gradeLetter && stats.gradeLetter !== '—' ? `(${Sanitizer.escapeHTML(stats.gradeLetter)})` : '';
+            return `
+              <div class="bg-white rounded-xl border border-slate-200 p-3.5 shadow-xs space-y-2.5 ${isChecked ? 'ring-2 ring-blue-400 bg-blue-50/30' : ''}">
+                <div class="flex items-start justify-between gap-2">
+                  <div class="flex items-start gap-2.5 min-w-0">
+                    <input type="checkbox" class="roster-chk-row mt-1 w-4 h-4 rounded border-slate-300 cursor-pointer" data-id="${safeId}" aria-label="Select ${safeName}" ${isChecked ? 'checked' : ''}>
+                    <div class="min-w-0">
+                      <button type="button" class="btn-open-student text-left text-sm font-semibold text-blue-600 hover:underline cursor-pointer truncate block max-w-full" data-id="${safeId}">
+                        ${safeName}
+                      </button>
+                      <p class="text-[11px] font-mono text-slate-500">${safeId}</p>
+                    </div>
+                  </div>
+                  <div class="text-right shrink-0">
+                    <div class="text-sm font-bold text-slate-800 tabular-nums">${gradeStr} <span class="text-xs font-medium text-slate-500">${letterStr}</span></div>
+                    <div class="text-[11px] text-slate-500">${Sanitizer.escapeHTML(stats.handinCount)} hand-ins</div>
+                  </div>
+                </div>
+                <div class="flex items-center justify-between gap-2 pt-2 border-t border-slate-100">
+                  ${s.access_code ? `
+                    <div class="flex items-center gap-1 font-mono text-xs text-slate-700">
+                      <span>${isRevealed ? Sanitizer.escapeHTML(s.access_code) : '••••-••••'}</span>
+                      <button type="button" class="btn-toggle-code inline-flex items-center justify-center w-9 h-9 rounded-lg text-slate-500 hover:bg-slate-100 cursor-pointer" data-id="${safeId}" aria-label="${isRevealed ? 'Hide access code' : 'Show access code'}">
+                        <sl-icon name="${isRevealed ? 'eye-slash' : 'eye'}"></sl-icon>
+                      </button>
+                      <button type="button" class="btn-copy-code inline-flex items-center justify-center w-9 h-9 rounded-lg text-slate-500 hover:bg-slate-100 cursor-pointer" data-code="${Sanitizer.escapeHTML(s.access_code)}" aria-label="Copy access code">
+                        <sl-icon name="clipboard"></sl-icon>
+                      </button>
+                      <button type="button" class="btn-copy-student-pass inline-flex items-center justify-center gap-1 px-2.5 h-9 rounded-lg bg-blue-50 text-blue-700 text-xs font-semibold hover:bg-blue-100 cursor-pointer" data-id="${safeId}" data-code="${Sanitizer.escapeHTML(s.access_code)}" data-name="${safeName}" aria-label="Copy 1-Click Invite Pass">
+                        <sl-icon name="link-45deg"></sl-icon> Invite Pass
+                      </button>
+                    </div>
+                  ` : `
+                    <button type="button" class="btn-gen-code px-3 py-1.5 rounded-lg bg-amber-100 text-amber-800 text-xs font-semibold hover:bg-amber-200 cursor-pointer" data-id="${safeId}">
+                      + Generate Code
+                    </button>
+                  `}
+                  <button type="button" class="btn-open-student inline-flex items-center justify-center px-2.5 h-9 rounded-lg border border-slate-200 text-xs font-medium text-slate-700 hover:bg-slate-50 cursor-pointer" data-id="${safeId}">
+                    Profile
+                  </button>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+
+        <!-- Table View (>= 640px) -->
+        <div class="hidden sm:block bg-white rounded-xl border border-slate-200 overflow-hidden shadow-xs">
           <div class="overflow-x-auto">
             <table class="w-full text-left text-xs border-collapse">
               <thead class="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200 select-none">
                 <tr>
                   <th class="p-3 w-10 text-center">
-                    <input type="checkbox" id="roster-select-all" ${allSelected ? 'checked' : ''} class="rounded border-slate-300 cursor-pointer">
+                    <input type="checkbox" id="roster-select-all" ${allSelected ? 'checked' : ''} class="rounded border-slate-300 cursor-pointer" aria-label="Select all students">
                   </th>
-                  <th class="p-3 cursor-pointer hover:bg-slate-100 transition-colors" data-sort="name">
+                  <th class="p-3 sticky left-0 z-10 bg-slate-50 cursor-pointer hover:bg-slate-100 transition-colors shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]" data-sort="name">
                     <span class="inline-flex items-center gap-1">
                       Student Name
                       ${sortField === 'name' ? (sortDirection === 'asc' ? '▲' : '▼') : ''}
@@ -268,7 +328,7 @@ export async function renderRosterView({
                       <td class="p-3 text-center">
                         <input type="checkbox" class="roster-chk-row rounded border-slate-300 cursor-pointer" data-id="${safeId}" ${isChecked ? 'checked' : ''}>
                       </td>
-                      <td class="p-3">
+                      <td class="p-3 sticky left-0 z-10 bg-white shadow-[2px_0_4px_-2px_rgba(0,0,0,0.06)]">
                         <button type="button" class="btn-open-student text-left font-semibold text-blue-600 hover:text-blue-800 hover:underline cursor-pointer" data-id="${safeId}">
                           ${safeName}
                         </button>
@@ -279,17 +339,17 @@ export async function renderRosterView({
                         ${s.access_code ? `
                           <div class="inline-flex items-center gap-1 font-mono text-slate-700">
                             <span>${isRevealed ? Sanitizer.escapeHTML(s.access_code) : '••••-••••'}</span>
-                            <button type="button" class="btn-toggle-code text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer" data-id="${safeId}" title="${isRevealed ? 'Hide code' : 'Show code'}">
+                            <button type="button" class="btn-toggle-code text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer" data-id="${safeId}" title="${isRevealed ? 'Hide code' : 'Show code'}" aria-label="${isRevealed ? 'Hide code' : 'Show code'}">
                               <sl-icon name="${isRevealed ? 'eye-slash' : 'eye'}"></sl-icon>
                             </button>
-                            <button type="button" class="btn-copy-code text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer" data-code="${Sanitizer.escapeHTML(s.access_code)}" title="Copy code">
+                            <button type="button" class="btn-copy-code text-slate-400 hover:text-slate-600 p-0.5 rounded cursor-pointer" data-code="${Sanitizer.escapeHTML(s.access_code)}" title="Copy code" aria-label="Copy code">
                               <sl-icon name="clipboard"></sl-icon>
                             </button>
-                            <button type="button" class="btn-copy-student-pass text-blue-500 hover:text-blue-700 p-0.5 rounded cursor-pointer" data-id="${safeId}" data-code="${Sanitizer.escapeHTML(s.access_code)}" data-name="${safeName}" title="Copy Student Invite Pass (1-Click Join)">
+                            <button type="button" class="btn-copy-student-pass text-blue-500 hover:text-blue-700 p-0.5 rounded cursor-pointer" data-id="${safeId}" data-code="${Sanitizer.escapeHTML(s.access_code)}" data-name="${safeName}" title="Copy Student Invite Pass (1-Click Join)" aria-label="Copy Student Invite Pass">
                               <sl-icon name="link-45deg"></sl-icon>
                             </button>
                             ${(Array.isArray(s.previous_access_codes) && s.previous_access_codes.length > 0) ? `
-                              <button type="button" class="btn-code-history text-amber-600 hover:text-amber-800 p-0.5 rounded cursor-pointer" data-id="${safeId}" title="Access Code History (${s.previous_access_codes.length} past codes)">
+                              <button type="button" class="btn-code-history text-amber-600 hover:text-amber-800 p-0.5 rounded cursor-pointer" data-id="${safeId}" title="Access Code History (${s.previous_access_codes.length} past codes)" aria-label="Access Code History">
                                 <sl-icon name="clock-history"></sl-icon>
                               </button>
                             ` : ''}
@@ -463,6 +523,7 @@ export async function renderRosterView({
         }
       }
       toast.success(`Generated codes for ${count} students.`);
+      import('../../core/course-feed.js').then(({ scheduleCourseFeedSync }) => scheduleCourseFeedSync(course.id)).catch(() => {});
       selectedStudentIds.clear();
       onRefresh();
     });
@@ -492,6 +553,7 @@ export async function renderRosterView({
       }
 
       toast.success(`Removed ${count} students.`);
+      import('../../core/course-feed.js').then(({ scheduleCourseFeedSync }) => scheduleCourseFeedSync(course.id)).catch(() => {});
       selectedStudentIds.clear();
       onRefresh();
     });
@@ -529,11 +591,14 @@ export async function renderRosterView({
         const studentId = btn.dataset.id;
         const studentName = btn.dataset.name;
         const base = window.location.origin + window.location.pathname;
+        const { getStudentRelayUrl } = await import('../../core/transport.js');
+        const relayUrl = getStudentRelayUrl({ relay_url: course.relay_url }) || '';
         const params = new URLSearchParams();
         params.set('code', course.access_code || studentCode);
         params.set('cid', course.id);
         if (course.name) params.set('cname', course.name);
         if (course.section) params.set('csec', course.section);
+        if (relayUrl) params.set('relay', relayUrl);
         params.set('sid', studentId);
         params.set('sname', studentName);
         params.set('scode', studentCode);
@@ -568,6 +633,7 @@ export async function renderRosterView({
           await AccessCodes.regenerate(student);
           revealedCodes.add(student.student_id);
           toast.success(`Access code generated for ${student.full_name}.`);
+          import('../../core/course-feed.js').then(({ scheduleCourseFeedSync }) => scheduleCourseFeedSync(course.id)).catch(() => {});
           onRefresh();
         }
       });
@@ -635,6 +701,7 @@ export async function renderRosterView({
       await gradesTable.bulkDelete(gradeKeys);
     }
     toast.success(`Student ${student.full_name} removed.`);
+    import('../../core/course-feed.js').then(({ scheduleCourseFeedSync }) => scheduleCourseFeedSync(course.id)).catch(() => {});
   }
 
   function promptShareLink(student, linkData) {

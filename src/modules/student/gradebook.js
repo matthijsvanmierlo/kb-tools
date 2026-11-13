@@ -52,6 +52,9 @@ export async function renderStudentGradebookView(params, router, container) {
             </div>
           </div>
           <div class="flex flex-wrap items-center gap-2">
+            <sl-button size="small" id="btn-check-relay-feedback">
+              <sl-icon slot="prefix" name="arrow-repeat"></sl-icon> Check Server
+            </sl-button>
             <sl-button size="small" id="btn-import-feedback">
               <sl-icon slot="prefix" name="cloud-download"></sl-icon> Add Feedback Link/File
             </sl-button>
@@ -199,6 +202,25 @@ export async function renderStudentGradebookView(params, router, container) {
     const openImport = () => openFeedbackImportDialog();
     container.querySelector('#btn-import-feedback')?.addEventListener('click', openImport);
     container.querySelector('#btn-empty-import')?.addEventListener('click', openImport);
+
+    container.querySelector('#btn-check-relay-feedback')?.addEventListener('click', async () => {
+      const btn = container.querySelector('#btn-check-relay-feedback');
+      if (btn) btn.loading = true;
+      try {
+        const { feedbackPoller } = await import('./feedback-poller.js');
+        const count = await feedbackPoller.pollOnce();
+        if (count > 0) {
+          allEntries = await StudentLedger.getAll();
+          render();
+        } else {
+          toast.info('No new feedback found on the school server.');
+        }
+      } catch (err) {
+        toast.warning('Could not check server for feedback: ' + (err?.message || String(err)));
+      } finally {
+        if (btn) btn.loading = false;
+      }
+    });
 
     container.querySelector('#btn-export-grades')?.addEventListener('click', () => {
       const rows = filteredEntries.map(e => {
